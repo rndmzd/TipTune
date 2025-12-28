@@ -1,0 +1,88 @@
+[Components]
+# Enable/disable various features
+chat_auto_dj = true
+vip_audio = true
+command_parser = true
+custom_actions = true
+spray_bottle = false
+couch_buzzer = true
+obs_integration = true
+event_audio = true
+sleevebot = false
+
+[Logging]
+# Logging configuration
+log_file = logs/debug.log
+log_file_db = logs/db.log
+log_file_app = logs/app.log
+log_max_size_mb = 10
+log_backup_count = 10
+# Enable/disable Elasticsearch logging
+elasticsearch_enabled = true
+
+[Elasticsearch]
+# Elasticsearch configuration
+host = localhost
+port = 9200
+index_prefix = mongobate
+use_ssl = false
+# API key authentication (preferred over username/password)
+api_key = your-api-key-here
+
+[Events API]
+# Events API configuration
+url = https://eventsapi.example.com/events/yourusername/your-token/
+max_requests_per_minute = 1000
+
+[OpenAI]
+# OpenAI API configuration for song extraction
+api_key = your-openai-api-key
+
+[Spotify]
+# Spotify API credentials
+client_id = your-spotify-client-id
+client_secret = your-spotify-client-secret
+redirect_url = http://localhost:8888/callback
+
+[General]
+# General application settings
+song_cost = 27
+skip_song_cost = 51
+command_symbol = !!$
+spray_bottle_cost = 207
+vip_refresh_interval = 300
+admin_refresh_interval = 300
+vip_audio_cooldown_hours = 24
+vip_audio_directory = audio
+commands_file = commands.yaml
+request_overlay_duration = 10
+
+# Hardware integration endpoints (if enabled)
+spray_bottle_url = http://your-spray-bottle-ip:8080/spray
+couch_buzzer_url = http://your-couch-buzzer-ip:8080/alert
+couch_buzzer_username = your-buzzer-username
+couch_buzzer_password = your-buzzer-password
+sleevebot_enabled = false
+sleevebot_url = http://your-sleevebot-ip:8080
+sleevebot_motor_speeds={"linear": {"100": "slow", "200": "medium", "300": "fast"}, "vibration": {"50": "on"}}
+
+[MongoDB]
+# MongoDB connection settings
+username = your-mongodb-username
+password = your-mongodb-password
+host = localhost
+port = 27017
+replica_set = rs0
+db = mongobate
+event_collection = events
+user_collection = users
+song_cache_collection = song_cache
+# Optional AWS credentials for MongoDB authentication
+aws_key = 
+aws_secret = 
+
+[OBS]
+# OBS WebSocket configuration
+host = localhost
+port = 4455
+password = your-obs-password 
