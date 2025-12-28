@@ -1,0 +1,174 @@
+import asyncio
+from typing import List, Optional
+
+from chatdj.chatdj import SongRequest
+from utils.structured_logging import get_structured_logger
+
+logger = get_structured_logger('mongobate.helpers.actions')
+
+class Actions:
+    def __init__(self,
+                 chatdj: bool = False,
+                 obs_integration: bool = False):
+
+        from . import config
+        self.config = config
+
+        self.chatdj_enabled = chatdj
+        self.obs_integration_enabled = obs_integration
+        self.request_overlay_duration = 10
+
+        logger.info("actions.init",
+                   message="Initializing actions",
+                   data={
+                       "chatdj": chatdj,
+                       "obs_integration": obs_integration
+                   })
+
+        # Initialize components based on flags
+        if self.chatdj_enabled:
+            logger.debug("actions.chatdj.init", message="Initializing ChatDJ")
+            from chatdj import AutoDJ, SongExtractor
+            from . import spotify_client
+
+            google_api_key = config.get("Search", "google_api_key", fallback=None) if config.has_section("Search") else None
+            google_cx = config.get("Search", "google_cx", fallback=None) if config.has_section("Search") else None
+
+            self.song_extractor = SongExtractor(
+                config.get("OpenAI", "api_key"),
+                spotify_client=spotify_client,
+                google_api_key=google_api_key,
+                google_cx=google_cx,
+                model=config.get("OpenAI", "model", fallback="gpt-5")
+            )
+            self.auto_dj = AutoDJ(spotify_client)
+
+        if self.obs_integration_enabled:
+            logger.debug("actions.obs.init", message="Initializing OBS integration")
+            from handlers.obshandler import OBSHandler
+            self.obs = OBSHandler(
+                host=config.get("OBS", "host"),
+                port=config.getint("OBS", "port"),
+                password=config.get("OBS", "password")
+            )
+            # Not connecting yet
+            logger.info("actions.obs.init.complete", message="OBS handler initialized")
+
+            if self.chatdj_enabled:
+                self.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
+
+    async def extract_song_titles(self, message: str, song_count: int) -> List[SongRequest]:
+        """Extract song titles from a message using SongExtractor (running in executor)."""
+        if not self.chatdj_enabled:
+            logger.warning("chatdj.disabled", message="ChatDJ not enabled")
+            return []
+
+        loop = asyncio.get_running_loop()
+        # Run blocking extraction in executor to avoid blocking the event loop
+        return await loop.run_in_executor(None, self.song_extractor.extract_songs, message, song_count)
+
+    async def find_song_spotify(self, song_info: SongRequest) -> Optional[str]:
+        """Return the spotify_uri provided in the song_info."""
+        if not self.chatdj_enabled:
+            return None
+
+        logger.debug("spotify.search.start",
+                    message="Starting Spotify song search",
+                    data={
+                        "song": song_info.song,
+                        "artist": song_info.artist
+                    })
+
+        # Wrapping potential blocking call
+        loop = asyncio.get_running_loop()
+        search_result = await loop.run_in_executor(None, self.auto_dj.search_track_uri, song_info.song, song_info.artist)
+
+        if search_result:
+            logger.debug("spotify.search.success",
+                        message="Found Spotify track",
+                        data={"uri": search_result})
+            return search_result
+        else:
+            logger.warning("spotify.search.notfound",
+                         message="No Spotify URI found for song")
+            return None
+
+    async def available_in_market(self, song_uri: str) -> bool:
+        """Check if a song is available in the user's market."""
+        if not self.chatdj_enabled:
+            return False
+
+        try:
+            logger.debug("spotify.market.check.start", message="Checking market availability", data={"uri": song_uri})
+
+            loop = asyncio.get_running_loop()
+            user_market = await loop.run_in_executor(None, self.auto_dj.get_user_market)
+            song_markets = await loop.run_in_executor(None, self.auto_dj.get_song_markets, song_uri)
+
+            is_available = (user_market in song_markets) or song_markets == []
+            logger.debug("spotify.market.check.complete",
+                        data={"is_available": is_available})
+            return is_available
+
+        except Exception as exc:
+            logger.exception("spotify.market.error", message="Failed to check market availability", exc=exc)
+            return False
+
+    async def add_song_to_queue(self, uri: str, requester_name: str, song_details: str) -> bool:
+        """Add a song to the playback queue and trigger the song requester overlay."""
+        if not self.chatdj_enabled:
+            return False
+
+        logger.debug("spotify.queue.add.start",
+                    message="Adding song to queue",
+                    data={"uri": uri, "requester": requester_name, "song": song_details})
+
+        try:
+            loop = asyncio.get_running_loop()
+            queue_result = await loop.run_in_executor(None, self.auto_dj.add_song_to_queue, uri)
+
+            if queue_result:
+                logger.debug("spotify.queue.add.success", message="Successfully added song to queue")
+
+                # Should be async call now
+                await self.trigger_song_requester_overlay(
+                    requester_name,
+                    song_details,
+                    self.request_overlay_duration if self.request_overlay_duration else 10
+                )
+                return True
+
+            logger.error("spotify.queue.add.failed", message="Failed to add song to queue")
+            return False
+
+        except Exception as exc:
+            logger.exception("spotify.queue.error", message="Failed to add song to queue", exc=exc)
+            return False
+
+    async def skip_song(self) -> bool:
+        """Skip the currently playing song."""
+        if not self.chatdj_enabled:
+            return False
+
+        logger.debug("spotify.playback.skip.start", message="Attempting to skip current song")
+        try:
+            loop = asyncio.get_running_loop()
+            skip_result = await loop.run_in_executor(None, self.auto_dj.skip_song)
+
+            if skip_result:
+                logger.info("spotify.playback.skip.success", message="Successfully skipped current song")
+            return skip_result
+
+        except Exception as exc:
+            logger.exception("spotify.playback.error", message="Failed to skip song", exc=exc)
+            return False
+
+    async def trigger_song_requester_overlay(self, requester: str, song: str, duration: int) -> None:
+        if not self.obs_integration_enabled:
+            return
+        await self.obs.trigger_song_requester_overlay(requester, song, duration)
+
+    async def trigger_warning_overlay(self, username: str, message: str, duration: int) -> None:
+        if not self.obs_integration_enabled:
+            return
+        await self.obs.trigger_warning_overlay(username, message, duration)
