@@ -1,0 +1,41 @@
+# OBS Scene Definitions
+scenes:
+  # Main broadcast scene
+  main:
+    name: "Live"
+    description: "Main broadcast scene shown when stream is active"
+    sources: []  # Placeholder for future source configurations
+
+  # Offline/BRB scene
+  offline:
+    name: "Offline"
+    description: "Scene shown when broadcast is stopped or during breaks"
+    sources: []  # Placeholder for future source configurations
+
+  # Starting soon scene
+  starting:
+    name: "Live Soon"
+    description: "Scene shown before broadcast starts"
+    sources: []  # Placeholder for future source configurations
+
+  # Technical difficulties scene
+  technical:
+    name: "Technical"
+    description: "Scene shown during technical issues"
+    sources: []  # Placeholder for future source configurations
+
+  # BRB scene
+  brb:
+    name: "BRB"
+    description: "Scene shown during short breaks while broadcast remains active"
+    sources: []  # Placeholder for future source configurations
+
+# Source definitions can be added later for each scene
+# Example structure for future use:
+#   sources:
+#     - name: "WebcamSource"
+#       type: "video_capture_device"
+#       enabled: true
+#     - name: "OverlaySource"
+#       type: "browser_source"
+#       enabled: true 
