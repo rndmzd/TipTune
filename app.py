@@ -511,7 +511,7 @@ class WebUI:
       const chatMessage = get(ev, ['object', 'message', 'message'], null);
       const message = (typeof tipMessage === 'string' && tipMessage.trim() !== '') ? tipMessage : chatMessage;
       const time = toLocalTimeLabel(toEventTimestamp(item));
-      return { method, subject, broadcaster, id, tokens, username, message, ev };
+      return { method, subject, broadcaster, id, tokens, username, message, time, ev };
     }
     function makeCard(item) {
       const s = summarize(item);
