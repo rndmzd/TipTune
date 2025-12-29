@@ -430,11 +430,22 @@ class WebUI:
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
     a { color: #8ab4ff; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #0e1530; border: 1px solid #2a3a66; padding: 12px; border-radius: 8px; max-height: 70vh; overflow: auto; }
+    .out { max-height: 70vh; overflow: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
     .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
     button:hover { background: #23366f; }
     .muted { opacity: 0.8; font-size: 12px; }
+    .card { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
+    .cardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+    .cardTitle { font-weight: 650; font-size: 13px; }
+    .cardMeta { opacity: 0.85; font-size: 12px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: rgba(35, 54, 111, 0.35); font-size: 12px; }
+    .pillStrong { border-color: #4b69c8; background: rgba(74, 105, 200, 0.22); }
+    .cardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .message { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; user-select: none; opacity: 0.9; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #0b1020; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; overflow: auto; }
   </style>
 </head>
 <body>
@@ -446,27 +457,175 @@ class WebUI:
     <button id=\"clearBtn\" type=\"button\">Clear</button>
     <span class=\"muted\">Streaming Events API payloads via SSE.</span>
   </div>
-  <pre id=\"out\">(connecting)</pre>
+  <div id=\"out\" class=\"out\"></div>
   <script>
     function q(id) { return document.getElementById(id); }
-    function append(line) {
+    function safeParseJSON(s) {
+      try { return JSON.parse(s); } catch (_) { return null; }
+    }
+    function get(obj, path, fallback) {
+      try {
+        let cur = obj;
+        for (const key of path) {
+          if (!cur || typeof cur !== 'object' || !(key in cur)) return fallback;
+          cur = cur[key];
+        }
+        return cur == null ? fallback : cur;
+      } catch (_) {
+        return fallback;
+      }
+    }
+    function toLocalTimeLabel(v) {
+      try {
+        const d = (v instanceof Date) ? v : new Date(v);
+        if (isNaN(d.getTime())) return null;
+        return d.toLocaleString();
+      } catch (_) {
+        return null;
+      }
+    }
+    function toEventTimestamp(item) {
+      const ev = item && typeof item === 'object' ? (item.event || item) : null;
+      const schemaDate = get(ev, ['timestamp', '$date'], null);
+      if (schemaDate) return schemaDate;
+
+      const ts = get(ev, ['timestamp'], null);
+      if (typeof ts === 'string' || typeof ts === 'number') return ts;
+
+      if (item && typeof item.ts === 'number') return item.ts * 1000;
+      return null;
+    }
+    function summarize(item) {
+      const ev = item && typeof item === 'object' ? (item.event || item) : null;
+      const method = get(ev, ['method'], 'event');
+      const subject = get(ev, ['object', 'subject'], null);
+      const broadcaster = get(ev, ['object', 'broadcaster'], null);
+      const id = get(ev, ['id'], get(ev, ['_id', '$oid'], null));
+      const tokensRaw = get(ev, ['object', 'tip', 'tokens'], null);
+      const tokens = (typeof tokensRaw === 'number') ? tokensRaw : (Number.isFinite(Number(tokensRaw)) ? Number(tokensRaw) : null);
+      const isAnon = get(ev, ['object', 'tip', 'isAnon'], false);
+      const userFromUserObj = get(ev, ['object', 'user', 'username'], null);
+      const userFromMessage = get(ev, ['object', 'message', 'fromUser'], null);
+      const username = isAnon ? 'Anonymous' : (userFromUserObj || userFromMessage || 'Unknown');
+      const tipMessage = get(ev, ['object', 'tip', 'message'], null);
+      const chatMessage = get(ev, ['object', 'message', 'message'], null);
+      const message = (typeof tipMessage === 'string' && tipMessage.trim() !== '') ? tipMessage : chatMessage;
+      const time = toLocalTimeLabel(toEventTimestamp(item));
+      return { method, subject, broadcaster, id, tokens, username, message, ev };
+    }
+    function makeCard(item) {
+      const s = summarize(item);
+      const root = document.createElement('div');
+      root.className = 'card';
+
+      const header = document.createElement('div');
+      header.className = 'cardHeader';
+
+      const left = document.createElement('div');
+      left.className = 'cardTitle';
+      left.textContent = `${s.method}${s.subject ? ' · ' + s.subject : ''}`;
+
+      const right = document.createElement('div');
+      right.className = 'cardMeta';
+
+      const userPill = document.createElement('span');
+      userPill.className = 'pill';
+      userPill.textContent = s.username;
+      right.appendChild(userPill);
+
+      if (typeof s.broadcaster === 'string' && s.broadcaster.trim() !== '') {
+        const b = document.createElement('span');
+        b.className = 'pill';
+        b.style.marginLeft = '8px';
+        b.textContent = s.broadcaster;
+        right.appendChild(b);
+      }
+
+      if (typeof s.tokens === 'number') {
+        const tok = document.createElement('span');
+        tok.className = 'pill pillStrong';
+        tok.style.marginLeft = '8px';
+        tok.textContent = `${s.tokens} tokens`;
+        right.appendChild(tok);
+      }
+      if (s.time) {
+        const t = document.createElement('span');
+        t.style.marginLeft = '10px';
+        t.textContent = s.time;
+        right.appendChild(t);
+      }
+
+      if (typeof s.id === 'string' && s.id.trim() !== '') {
+        const idPill = document.createElement('span');
+        idPill.className = 'pill';
+        idPill.style.marginLeft = '8px';
+        const shortId = s.id.length > 12 ? (s.id.slice(0, 8) + '…') : s.id;
+        idPill.textContent = `id: ${shortId}`;
+        right.appendChild(idPill);
+      }
+
+      header.appendChild(left);
+      header.appendChild(right);
+      root.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'cardBody';
+
+      if (typeof s.message === 'string' && s.message.trim() !== '') {
+        const msg = document.createElement('div');
+        msg.className = 'message';
+        msg.textContent = s.message;
+        body.appendChild(msg);
+      }
+
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = 'Details';
+      details.appendChild(summary);
+      const pre = document.createElement('pre');
+      try {
+        pre.textContent = JSON.stringify(item, null, 2);
+      } catch (_) {
+        pre.textContent = String(item);
+      }
+      details.appendChild(pre);
+      body.appendChild(details);
+
+      root.appendChild(body);
+      return root;
+    }
+    function appendItem(item) {
       const out = q('out');
-      if (out.textContent === '(connecting)') out.textContent = '';
-      out.textContent += line + '\\\\n';
+      out.appendChild(makeCard(item));
+      while (out.children.length > 300) out.removeChild(out.firstChild);
       out.scrollTop = out.scrollHeight;
     }
+    function appendTextLine(line) {
+      const out = q('out');
+      const root = document.createElement('div');
+      root.className = 'card';
+      const pre = document.createElement('pre');
+      pre.textContent = line;
+      root.appendChild(pre);
+      out.appendChild(root);
+      while (out.children.length > 300) out.removeChild(out.firstChild);
+      out.scrollTop = out.scrollHeight;
+    }
+
     q('clearBtn').addEventListener('click', () => { q('out').textContent = ''; });
 
     fetch('/api/events/recent?limit=50').then(r => r.json()).then(j => {
-      for (const ev of (j.events || [])) append(JSON.stringify(ev));
+      for (const ev of (j.events || [])) appendItem(ev);
     }).catch(() => {});
 
     const es = new EventSource('/api/events/sse');
     es.onmessage = (e) => {
-      append(e.data);
+      const parsed = safeParseJSON(e.data);
+      if (parsed && typeof parsed === 'object') return appendItem(parsed);
+      appendTextLine(e.data);
     };
     es.onerror = () => {
-      append('--- connection error ---');
+      appendTextLine('--- connection error ---');
     };
   </script>
 </body>
