@@ -2,7 +2,7 @@ import json
 import re
 import time
 import threading
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import openai
 from openai import OpenAI
@@ -347,10 +347,35 @@ class AutoDJ:
     """AutoDJ class using Spotify APIs.
     The search_track_uri method applies filtering to only return tracks available in the US market,
     avoids live versions, and returns the most popular match for an exact artist match."""
-    def __init__(self, spotify: Spotify):
+    def __init__(self, spotify: Spotify, playback_device_id: Optional[str] = None):
         self.spotify = spotify
-        logger.debug("Prompting user for playback device selection.")
-        self.playback_device = self._select_playback_device()
+        self.playback_device: Optional[str] = None
+        self.playback_device_name: Optional[str] = None
+
+        if playback_device_id:
+            try:
+                self.set_playback_device(playback_device_id, silent=True)
+            except Exception:
+                pass
+
+        if not self.playback_device:
+            try:
+                device = self._auto_select_playback_device()
+                if device and isinstance(device, dict):
+                    self.playback_device = device.get('id')
+                    self.playback_device_name = device.get('name')
+                    if self.playback_device:
+                        logger.info(
+                            "spotify.device.selected",
+                            message="Device auto-selected",
+                            data={
+                                "name": self.playback_device_name,
+                                "id": self.playback_device,
+                                "auto": True
+                            }
+                        )
+            except Exception:
+                pass
 
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
@@ -361,6 +386,57 @@ class AutoDJ:
         self.queued_tracks = []
         self.clear_playback_context()
         self._print_variables()
+
+    def get_available_devices(self) -> List[Dict[str, Any]]:
+        try:
+            payload = self.spotify.devices()
+            devices = payload.get('devices', []) if isinstance(payload, dict) else []
+            if isinstance(devices, list):
+                return devices
+            return []
+        except Exception as exc:
+            logger.exception("spotify.devices.error", message="Failed to list Spotify devices", exc=exc)
+            return []
+
+    def _auto_select_playback_device(self) -> Optional[Dict[str, Any]]:
+        devices = self.get_available_devices()
+        if not devices:
+            return None
+        active = [d for d in devices if isinstance(d, dict) and d.get('is_active')]
+        if active:
+            return active[0]
+        return devices[0] if isinstance(devices[0], dict) else None
+
+    def set_playback_device(self, device_id: str, force_play: bool = False, silent: bool = False) -> bool:
+        try:
+            if not device_id:
+                return False
+
+            self.spotify.transfer_playback(device_id=device_id, force_play=force_play)
+            self.playback_device = device_id
+
+            try:
+                for d in self.get_available_devices():
+                    if isinstance(d, dict) and d.get('id') == device_id:
+                        self.playback_device_name = d.get('name')
+                        break
+            except Exception:
+                pass
+
+            if not silent:
+                logger.info(
+                    "spotify.device.selected",
+                    message="Device selected",
+                    data={
+                        "name": self.playback_device_name,
+                        "id": self.playback_device,
+                        "auto": False
+                    }
+                )
+            return True
+        except Exception as exc:
+            logger.exception("spotify.device.error", message="Failed to set playback device", exc=exc)
+            return False
 
     def _print_variables(self, return_value=None):
         """Stub function for logging internal state."""
