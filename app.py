@@ -1,6 +1,7 @@
 import asyncio
 import configparser
 import logging
+import os
 import signal
 import sys
 from typing import Any, Dict, Optional
@@ -77,6 +78,7 @@ class SongRequestService:
         self._tasks.append(asyncio.create_task(self._events_loop()))
         self._tasks.append(asyncio.create_task(self._tip_processor_loop()))
         self._tasks.append(asyncio.create_task(self._queue_watchdog()))
+        self._tasks.append(asyncio.create_task(self._local_control_loop()))
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -105,6 +107,88 @@ class SongRequestService:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=5)
             except asyncio.TimeoutError:
                 pass
+
+    async def _local_control_loop(self) -> None:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return
+        if not hasattr(self.actions, 'auto_dj'):
+            return
+
+        logger.info(
+            "local.control.ready",
+            message="Local controls enabled. Type 'pause' or 'resume' in this console to pause/unpause the queue.",
+        )
+
+        buf = ""
+        loop = asyncio.get_running_loop()
+        is_windows = (os.name == 'nt')
+
+        if is_windows:
+            try:
+                import msvcrt  # type: ignore
+            except Exception:
+                is_windows = False
+
+        while not self._stop_event.is_set():
+            try:
+                if is_windows:
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getwch()
+                        if ch in ('\r', '\n'):
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            cmd = buf.strip().lower()
+                            buf = ""
+                            await self._handle_local_command(cmd, loop)
+                        elif ch == '\x03':
+                            shutdown_event.set()
+                            break
+                        elif ch == '\b':
+                            buf = buf[:-1]
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                        else:
+                            buf += ch
+                            sys.stdout.write(ch)
+                            sys.stdout.flush()
+                    else:
+                        await asyncio.sleep(0.1)
+                    continue
+
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                if line == "":
+                    await asyncio.sleep(0.25)
+                    continue
+                cmd = line.strip().lower()
+                await self._handle_local_command(cmd, loop)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.exception("local.control.error", exc=exc, message="Local control loop error")
+                await asyncio.sleep(1)
+
+    async def _handle_local_command(self, cmd: str, loop: asyncio.AbstractEventLoop) -> None:
+        if cmd in ("pause", "p"):
+            await loop.run_in_executor(None, self.actions.auto_dj.pause_queue)
+            return
+        if cmd in ("resume", "unpause", "r"):
+            await loop.run_in_executor(None, self.actions.auto_dj.unpause_queue)
+            return
+        if cmd in ("status", "s"):
+            paused = await loop.run_in_executor(None, self.actions.auto_dj.queue_paused)
+            queued = len(getattr(self.actions.auto_dj, 'queued_tracks', []))
+            logger.info(
+                "local.control.status",
+                message="Queue status.",
+                data={"paused": paused, "queued_tracks": queued}
+            )
+            return
+        if cmd in ("help", "?"):
+            logger.info(
+                "local.control.help",
+                message="Local commands: pause | resume | status | help"
+            )
+            return
 
     async def _events_loop(self) -> None:
         events_api_url = config.get("Events API", "url")
