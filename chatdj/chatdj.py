@@ -377,6 +377,18 @@ class AutoDJ:
             except Exception:
                 pass
 
+        if not self.playback_device:
+            selected_device_id = self._select_playback_device()
+            self.playback_device = selected_device_id
+            try:
+                for d in self.get_available_devices():
+                    if isinstance(d, dict) and d.get('id') == selected_device_id:
+                        self.playback_device_name = d.get('name')
+                        break
+            except Exception:
+                pass
+            self.set_playback_device(selected_device_id, silent=True)
+
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
 
@@ -456,6 +468,7 @@ class AutoDJ:
                 try:
                     selection = int(input("\nChoose playback device number: "))
                     device = devices[selection - 1]
+                    self.playback_device_name = device.get('name')
                     logger.info("spotify.device.selected",
                               message="Device selected",
                               data={
