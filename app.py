@@ -735,6 +735,7 @@ class WebUI:
                     await resp.write(f'data: {data}\n\n'.encode('utf-8'))
                 except (ConnectionResetError, BrokenPipeError):
                     break
+            return resp
         except asyncio.CancelledError:
             return resp
         except Exception:
