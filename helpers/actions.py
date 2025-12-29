@@ -34,6 +34,8 @@ class Actions:
             google_api_key = config.get("Search", "google_api_key", fallback=None) if config.has_section("Search") else None
             google_cx = config.get("Search", "google_cx", fallback=None) if config.has_section("Search") else None
 
+            playback_device_id = config.get("Spotify", "playback_device_id", fallback=None) if config.has_section("Spotify") else None
+
             self.song_extractor = SongExtractor(
                 config.get("OpenAI", "api_key"),
                 spotify_client=spotify_client,
@@ -41,7 +43,7 @@ class Actions:
                 google_cx=google_cx,
                 model=config.get("OpenAI", "model", fallback="gpt-5")
             )
-            self.auto_dj = AutoDJ(spotify_client)
+            self.auto_dj = AutoDJ(spotify_client, playback_device_id=playback_device_id)
 
         if self.obs_integration_enabled:
             logger.debug("actions.obs.init", message="Initializing OBS integration")
