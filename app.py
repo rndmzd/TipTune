@@ -178,6 +178,7 @@ class WebUI:
   <title>TipTune</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
+    *, *::before, *::after { box-sizing: border-box; }
     a { color: #8ab4ff; }
     .row { display: flex; gap: 16px; flex-wrap: wrap; }
     .card { background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }
@@ -191,6 +192,7 @@ class WebUI:
     pre { white-space: pre-wrap; word-break: break-word; background: #0e1530; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; max-height: 240px; overflow: auto; }
     .muted { opacity: 0.8; font-size: 12px; }
     .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+    .actions + .muted { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -706,22 +708,43 @@ class WebUI:
         q_events = self._service.register_events_subscriber()
 
         try:
-            await resp.write(b': connected\n\n')
+            try:
+                await resp.write(b': connected\n\n')
+            except (ConnectionResetError, BrokenPipeError):
+                return resp
+
             while True:
                 try:
                     item = await asyncio.wait_for(q_events.get(), timeout=15)
                 except asyncio.TimeoutError:
-                    await resp.write(b': ping\n\n')
+                    transport = request.transport
+                    if transport is None or transport.is_closing():
+                        break
+                    try:
+                        await resp.write(b': ping\n\n')
+                    except (ConnectionResetError, BrokenPipeError):
+                        break
                     continue
 
+                transport = request.transport
+                if transport is None or transport.is_closing():
+                    break
+
                 data = json.dumps(item, default=str)
-                await resp.write(f'data: {data}\n\n'.encode('utf-8'))
-        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
-            raise
+                try:
+                    await resp.write(f'data: {data}\n\n'.encode('utf-8'))
+                except (ConnectionResetError, BrokenPipeError):
+                    break
+        except asyncio.CancelledError:
+            return resp
         except Exception:
             return resp
         finally:
             self._service.unregister_events_subscriber(q_events)
+            try:
+                await resp.write_eof()
+            except (ConnectionResetError, BrokenPipeError):
+                pass
 
 
 def handle_exception(_loop, context):
