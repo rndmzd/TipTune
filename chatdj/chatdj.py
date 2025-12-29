@@ -1,6 +1,7 @@
 import json
 import re
 import time
+import threading
 from typing import List, Optional, Tuple
 
 import openai
@@ -354,6 +355,9 @@ class AutoDJ:
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
 
+        self._queue_unpaused = threading.Event()
+        self._queue_unpaused.set()
+
         self.queued_tracks = []
         self.clear_playback_context()
         self._print_variables()
@@ -699,6 +703,38 @@ class AutoDJ:
         return None
 
 
+    def queue_paused(self) -> bool:
+        return not self._queue_unpaused.is_set()
+
+    def pause_queue(self, silent: bool = False) -> bool:
+        try:
+            self._queue_unpaused.clear()
+            if not silent:
+                logger.info(
+                    "queue.pause",
+                    message="Queue paused. Current song will be allowed to finish; next songs will wait until resumed.",
+                    data={"queued_tracks": len(self.queued_tracks)}
+                )
+            return True
+        except Exception as exc:
+            logger.exception("queue.pause.error", message="Failed to pause queue", exc=exc)
+            return False
+
+    def unpause_queue(self, silent: bool = False) -> bool:
+        try:
+            self._queue_unpaused.set()
+            if not silent:
+                logger.info(
+                    "queue.unpause",
+                    message="Queue resumed.",
+                    data={"queued_tracks": len(self.queued_tracks)}
+                )
+            return True
+        except Exception as exc:
+            logger.exception("queue.unpause.error", message="Failed to resume queue", exc=exc)
+            return False
+
+
     def add_song_to_queue(self, track_uri: str, silent=False) -> bool:
         try:
             if not silent:
@@ -724,6 +760,15 @@ class AutoDJ:
     def check_queue_status(self, silent=False) -> bool:
         try:
             if not self.playback_active():
+                if self.queue_paused() and len(self.queued_tracks) > 0:
+                    if not silent:
+                        logger.info(
+                            "queue.check.paused",
+                            message="Queue is paused. Waiting to resume before starting the next song.",
+                            data={"queued_tracks": len(self.queued_tracks)}
+                        )
+                    self._print_variables(False)
+                    return False
                 if len(self.queued_tracks) > 0:
                     logger.info("queue.check.start",
                                 message="Queue populated but playback is not active. Starting playback.")
