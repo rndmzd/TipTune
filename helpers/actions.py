@@ -14,8 +14,8 @@ class Actions:
         from . import config
         self.config = config
 
-        self.chatdj_enabled = chatdj
-        self.obs_integration_enabled = obs_integration
+        self.chatdj_enabled = bool(chatdj)
+        self.obs_integration_enabled = bool(obs_integration)
         self.request_overlay_duration = 10
 
         logger.info("actions.init",
@@ -28,36 +28,74 @@ class Actions:
         # Initialize components based on flags
         if self.chatdj_enabled:
             logger.debug("actions.chatdj.init", message="Initializing ChatDJ")
-            from chatdj import AutoDJ, SongExtractor
-            from . import spotify_client
+            try:
+                from chatdj import AutoDJ, SongExtractor
+                from . import spotify_client
+            except Exception as exc:
+                logger.exception("actions.chatdj.init.error", message="Failed to import ChatDJ components", exc=exc)
+                self.chatdj_enabled = False
+            else:
+                openai_api_key = config.get("OpenAI", "api_key", fallback="").strip()
+                if openai_api_key in ("", "your-openai-api-key"):
+                    logger.warning("actions.chatdj.disabled", message="OpenAI API key not configured")
+                    self.chatdj_enabled = False
+                elif spotify_client is None:
+                    logger.warning("actions.chatdj.disabled", message="Spotify client not configured")
+                    self.chatdj_enabled = False
+                else:
+                    google_api_key_raw = config.get("Search", "google_api_key", fallback="").strip()
+                    google_cx_raw = config.get("Search", "google_cx", fallback="").strip()
+                    google_api_key = google_api_key_raw if google_api_key_raw else None
+                    google_cx = google_cx_raw if google_cx_raw else None
 
-            google_api_key = config.get("Search", "google_api_key", fallback=None) if config.has_section("Search") else None
-            google_cx = config.get("Search", "google_cx", fallback=None) if config.has_section("Search") else None
+                    playback_device_id_raw = config.get("Spotify", "playback_device_id", fallback="").strip()
+                    playback_device_id = playback_device_id_raw if playback_device_id_raw else None
 
-            playback_device_id = config.get("Spotify", "playback_device_id", fallback=None) if config.has_section("Spotify") else None
+                    model = config.get("OpenAI", "model", fallback="gpt-5").strip() or "gpt-5"
 
-            self.song_extractor = SongExtractor(
-                config.get("OpenAI", "api_key"),
-                spotify_client=spotify_client,
-                google_api_key=google_api_key,
-                google_cx=google_cx,
-                model=config.get("OpenAI", "model", fallback="gpt-5")
-            )
-            self.auto_dj = AutoDJ(spotify_client, playback_device_id=playback_device_id)
+                    try:
+                        self.song_extractor = SongExtractor(
+                            openai_api_key,
+                            spotify_client=spotify_client,
+                            google_api_key=google_api_key,
+                            google_cx=google_cx,
+                            model=model
+                        )
+                        self.auto_dj = AutoDJ(spotify_client, playback_device_id=playback_device_id)
+                    except Exception as exc:
+                        logger.exception("actions.chatdj.init.error", message="Failed to initialize ChatDJ", exc=exc)
+                        self.chatdj_enabled = False
 
         if self.obs_integration_enabled:
             logger.debug("actions.obs.init", message="Initializing OBS integration")
-            from handlers.obshandler import OBSHandler
-            self.obs = OBSHandler(
-                host=config.get("OBS", "host"),
-                port=config.getint("OBS", "port"),
-                password=config.get("OBS", "password")
-            )
-            # Not connecting yet
-            logger.info("actions.obs.init.complete", message="OBS handler initialized")
+            try:
+                from handlers.obshandler import OBSHandler
 
-            if self.chatdj_enabled:
-                self.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
+                host = config.get("OBS", "host", fallback="localhost").strip() or "localhost"
+                try:
+                    port = config.getint("OBS", "port", fallback=4455)
+                except Exception:
+                    port = 4455
+                if not isinstance(port, int) or port <= 0:
+                    port = 4455
+
+                password = config.get("OBS", "password", fallback=None)
+                if isinstance(password, str) and password.strip() == "":
+                    password = None
+
+                self.obs = OBSHandler(
+                    host=host,
+                    port=port,
+                    password=password
+                )
+                # Not connecting yet
+                logger.info("actions.obs.init.complete", message="OBS handler initialized")
+
+                if self.chatdj_enabled:
+                    self.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
+            except Exception as exc:
+                logger.exception("actions.obs.init.error", message="Failed to initialize OBS integration", exc=exc)
+                self.obs_integration_enabled = False
 
     async def extract_song_titles(self, message: str, song_count: int) -> List[SongRequest]:
         """Extract song titles from a message using SongExtractor (running in executor)."""

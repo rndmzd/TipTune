@@ -14,14 +14,40 @@ config_path = Path(__file__).parent.parent / 'config.ini'
 config = configparser.ConfigParser()
 
 _read_files = config.read(config_path)
-if not _read_files:
-    raise SystemExit("config.ini not found. Copy config.ini.example to config.ini and fill in your credentials.")
 
-sp_oauth = SpotifyOAuth(
-    client_id=config.get("Spotify", "client_id"),
-    client_secret=config.get("Spotify", "client_secret"),
-    redirect_uri=config.get("Spotify", "redirect_url"),
-    scope="user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private",
-    open_browser=False
-)
-spotify_client = Spotify(auth_manager=sp_oauth)
+sp_oauth = None
+spotify_client = None
+
+
+def refresh_spotify_client() -> None:
+    global sp_oauth, spotify_client
+
+    sp_oauth = None
+    spotify_client = None
+
+    try:
+        if not config.has_section("Spotify"):
+            return
+
+        client_id = config.get("Spotify", "client_id", fallback="").strip()
+        client_secret = config.get("Spotify", "client_secret", fallback="").strip()
+        redirect_url = config.get("Spotify", "redirect_url", fallback="").strip()
+
+        if not client_id or not client_secret or not redirect_url:
+            return
+
+        sp_oauth = SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_url,
+            scope="user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private",
+            open_browser=False
+        )
+        spotify_client = Spotify(auth_manager=sp_oauth)
+    except Exception as exc:
+        logger.exception("spotify.init.error", message="Failed to initialize Spotify client", exc=exc)
+        sp_oauth = None
+        spotify_client = None
+
+
+refresh_spotify_client()
