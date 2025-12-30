@@ -25,9 +25,7 @@ except Exception:
 config_path = Path(__file__).resolve().parent / 'config.ini'
 
 config = configparser.ConfigParser()
-_read_files = config.read(config_path)
-if not _read_files:
-    raise SystemExit("config.ini not found. Copy config.ini.example to config.ini and fill in your credentials.")
+config.read(config_path)
 
 logger = get_structured_logger('mongobate.app')
 shutdown_event: asyncio.Event = asyncio.Event()
@@ -61,9 +59,25 @@ def _is_secret_field(section: str, key: str) -> bool:
     return False
 
 
+def _is_setup_complete() -> bool:
+    try:
+        if not config.has_section("General"):
+            return False
+        return config.getboolean("General", "setup_complete", fallback=False)
+    except Exception:
+        return False
+
+
 def _update_ini_file(path: Path, updates: Dict[str, Dict[str, str]]) -> None:
     if not path.exists():
-        raise FileNotFoundError(str(path))
+        example_path = path.with_name(path.name + '.example')
+        try:
+            if example_path.exists():
+                path.write_text(example_path.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
+            else:
+                path.write_text('', encoding='utf-8')
+        except Exception:
+            path.write_text('', encoding='utf-8')
 
     lines = path.read_text(encoding='utf-8', errors='replace').splitlines(keepends=True)
 
@@ -145,6 +159,7 @@ class WebUI:
 
         self._app.add_routes([
             web.get('/', self._page_dashboard),
+            web.get('/setup', self._page_setup),
             web.get('/events', self._page_events),
             web.get('/api/queue', self._api_queue),
             web.post('/api/queue/pause', self._api_pause),
@@ -169,7 +184,11 @@ class WebUI:
         self._runner = None
         self._site = None
 
-    async def _page_dashboard(self, _request: web.Request) -> web.Response:
+    async def _page_dashboard(self, request: web.Request) -> web.Response:
+        force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
+        if not force_dashboard and not _is_setup_complete():
+            raise web.HTTPFound('/setup')
+
         html = """<!doctype html>
 <html lang=\"en\">
 <head>
@@ -198,7 +217,10 @@ class WebUI:
 <body>
   <div class=\"actions\" style=\"justify-content: space-between\"> 
     <h1>TipTune</h1>
-    <div class=\"muted\"><a href=\"/events\">Events</a></div>
+    <div style=\"display:flex; gap:10px; align-items:center;\">
+      <button id=\"setupBtn\" type=\"button\">Setup Wizard</button>
+      <div class=\"muted\"><a href=\"/events\">Events</a></div>
+    </div>
   </div>
 
   <div class=\"row\">
@@ -339,6 +361,7 @@ class WebUI:
     }
 
     q('refreshQueueBtn').addEventListener('click', () => refreshQueue().catch(err => console.error(err)));
+    q('setupBtn').addEventListener('click', () => { window.location.href = '/setup?rerun=1'; });
     q('pauseBtn').addEventListener('click', async () => { await apiJson('/api/queue/pause', { method: 'POST' }); await refreshQueue(); });
     q('resumeBtn').addEventListener('click', async () => { await apiJson('/api/queue/resume', { method: 'POST' }); await refreshQueue(); });
 
@@ -417,6 +440,92 @@ class WebUI:
       ]);
       setInterval(() => refreshQueue().catch(() => {}), 2000);
     })();
+  </script>
+</body>
+</html>"""
+        return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
+
+    async def _page_setup(self, request: web.Request) -> web.Response:
+        rerun = _as_bool(request.query.get('rerun'), default=False)
+        is_complete = _is_setup_complete()
+        status_text = "complete" if is_complete else "incomplete"
+        title_suffix = " (rerun)" if rerun else ""
+        html = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+  <title>TipTune Setup</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }}
+    *, *::before, *::after {{ box-sizing: border-box; }}
+    a {{ color: #8ab4ff; }}
+    .row {{ display: flex; gap: 16px; flex-wrap: wrap; }}
+    .card {{ background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }}
+    h1 {{ margin: 0 0 12px 0; font-size: 22px; }}
+    h2 {{ margin: 0 0 12px 0; font-size: 16px; }}
+    button {{ padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }}
+    button:hover {{ background: #23366f; }}
+    .muted {{ opacity: 0.8; font-size: 12px; }}
+    .actions {{ display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }}
+    .pill {{ display: inline-block; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: #0e1530; font-size: 12px; }}
+  </style>
+</head>
+<body>
+  <div class=\"actions\" style=\"justify-content: space-between\">
+    <h1>Setup Wizard{title_suffix}</h1>
+    <div class=\"muted\"><a href=\"/?dashboard=1\">Dashboard</a></div>
+  </div>
+
+  <div class=\"card\">
+    <h2>Setup status: <span class=\"pill\">{status_text}</span></h2>
+    <div class=\"muted\">Use the dashboard to enter your settings (for now). When you're done, mark setup as complete.</div>
+    <div class=\"actions\">
+      <button id=\"openDashboardBtn\" type=\"button\">Open Dashboard Settings</button>
+      <button id=\"finishBtn\" type=\"button\">Mark Setup Complete</button>
+    </div>
+    <div id=\"status\" class=\"muted\"></div>
+  </div>
+
+  <script>
+    function q(id) {{ return document.getElementById(id); }}
+
+    async function apiJson(path, opts, timeoutMs) {{
+      const ctrl = new AbortController();
+      const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 8000;
+      const tmr = setTimeout(() => ctrl.abort(), ms);
+      try {{
+        const o = opts || {{}};
+        const r = await fetch(path, {{ ...o, signal: ctrl.signal }});
+        const t = await r.text();
+        let j;
+        try {{ j = JSON.parse(t); }} catch {{ j = {{ ok: false, error: t }}; }}
+        if (!r.ok) {{ throw new Error(j.error || ('HTTP ' + r.status)); }}
+        if (j && j.ok === false) {{ throw new Error(j.error || 'Request failed'); }}
+        return j;
+      }} finally {{
+        clearTimeout(tmr);
+      }}
+    }}
+
+    q('openDashboardBtn').addEventListener('click', () => {{
+      window.location.href = '/?dashboard=1';
+    }});
+
+    q('finishBtn').addEventListener('click', async () => {{
+      q('status').textContent = 'Saving...';
+      try {{
+        await apiJson('/api/config', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ 'General': {{ setup_complete: 'true' }} }})
+        }});
+        q('status').textContent = 'Setup marked complete.';
+        window.location.href = '/';
+      }} catch (e) {{
+        q('status').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+      }}
+    }});
   </script>
 </body>
 </html>"""
@@ -839,6 +948,10 @@ class SongRequestService:
             pass
 
     async def _queue_watchdog(self) -> None:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return
+        if not hasattr(self.actions, 'auto_dj'):
+            return
         while not self._stop_event.is_set():
             try:
                 loop = asyncio.get_running_loop()
@@ -934,12 +1047,34 @@ class SongRequestService:
             return
 
     async def _events_loop(self) -> None:
-        events_api_url = config.get("Events API", "url")
-        max_rpm = config.getint("Events API", "max_requests_per_minute", fallback=1000)
-        api = EventsAPIClient(events_api_url, max_requests_per_minute=max_rpm)
+        api: Optional[EventsAPIClient] = None
+        api_url: Optional[str] = None
+        api_rpm: Optional[int] = None
 
         async with httpx.AsyncClient() as client:
             while not self._stop_event.is_set():
+                try:
+                    events_api_url = config.get("Events API", "url", fallback="").strip()
+                    max_rpm = config.getint("Events API", "max_requests_per_minute", fallback=1000)
+                except Exception:
+                    events_api_url = ""
+                    max_rpm = 1000
+
+                if not events_api_url:
+                    api = None
+                    api_url = None
+                    api_rpm = None
+                    try:
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+
+                if api is None or api_url != events_api_url or api_rpm != max_rpm:
+                    api = EventsAPIClient(events_api_url, max_requests_per_minute=max_rpm)
+                    api_url = events_api_url
+                    api_rpm = max_rpm
+
                 try:
                     events = await api.poll(client)
                     for event in events:
@@ -1191,7 +1326,7 @@ class SongRequestService:
             "OpenAI": {"api_key", "model"},
             "Spotify": {"client_id", "client_secret", "redirect_url", "playback_device_id"},
             "Search": {"google_api_key", "google_cx"},
-            "General": {"song_cost", "skip_song_cost", "request_overlay_duration"},
+            "General": {"song_cost", "skip_song_cost", "request_overlay_duration", "setup_complete"},
             "OBS": {"enabled", "host", "port", "password"},
             "Web": {"host", "port"},
         }
@@ -1229,7 +1364,9 @@ class SongRequestService:
 
         try:
             from helpers import config as helpers_config
+            from helpers import refresh_spotify_client
             helpers_config.read(config_path)
+            refresh_spotify_client()
         except Exception:
             pass
 
@@ -1246,13 +1383,15 @@ class SongRequestService:
                 google_api_key = config.get("Search", "google_api_key", fallback=None) if config.has_section("Search") else None
                 google_cx = config.get("Search", "google_cx", fallback=None) if config.has_section("Search") else None
 
-                self.actions.song_extractor = SongExtractor(
-                    config.get("OpenAI", "api_key"),
-                    spotify_client=spotify_client,
-                    google_api_key=google_api_key,
-                    google_cx=google_cx,
-                    model=config.get("OpenAI", "model", fallback="gpt-5")
-                )
+                openai_api_key = config.get("OpenAI", "api_key", fallback="").strip()
+                if openai_api_key:
+                    self.actions.song_extractor = SongExtractor(
+                        openai_api_key,
+                        spotify_client=spotify_client,
+                        google_api_key=google_api_key,
+                        google_cx=google_cx,
+                        model=config.get("OpenAI", "model", fallback="gpt-5")
+                    )
                 self.actions.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
         except Exception:
             pass
