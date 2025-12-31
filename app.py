@@ -159,6 +159,7 @@ class WebUI:
 
         self._app.add_routes([
             web.get('/', self._page_dashboard),
+            web.get('/settings', self._page_settings),
             web.get('/setup', self._page_setup),
             web.get('/events', self._page_events),
             web.get('/api/queue', self._api_queue),
@@ -231,6 +232,7 @@ class WebUI:
     <h1>TipTune</h1>
     <div style=\"display:flex; gap:10px; align-items:center;\">
       <button id=\"setupBtn\" type=\"button\">Setup Wizard</button>
+      <button id=\"settingsBtn\" type=\"button\">Settings</button>
       <div class=\"muted\"><a href=\"/events\">Events</a></div>
     </div>
   </div>
@@ -247,64 +249,6 @@ class WebUI:
       <label>Queued tracks</label>
       <div id=\"queueList\" class=\"queueOut\">(loading)</div>
       <div class=\"muted\">Queue is the in-memory AutoDJ queue (URIs). Current song plays to completion when paused.</div>
-    </div>
-
-    <div class=\"card\">
-      <h2>Playback Device</h2>
-      <div class=\"muted\" id=\"currentDevice\">Loading...</div>
-      <label for=\"deviceSelect\">Available devices</label>
-      <select id=\"deviceSelect\"></select>
-      <div class=\"actions\">
-        <button id=\"refreshDevicesBtn\" type=\"button\">Refresh</button>
-        <button id=\"applyDeviceBtn\" type=\"button\">Apply + Save</button>
-      </div>
-      <div class=\"muted\">Applies Spotify transfer playback and saves the chosen device id to config.ini.</div>
-    </div>
-  </div>
-
-  <div class=\"card\" style=\"margin-top: 16px\">
-    <h2>Settings</h2>
-    <div class=\"muted\">Secret fields are not shown. Leave secret fields blank to keep the existing value.</div>
-    <div class=\"row\" style=\"margin-top: 8px\">
-      <div style=\"flex: 1; min-width: 320px\">
-        <label>Events API URL (secret)</label>
-        <input id=\"cfg_events_url\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>Events API max_requests_per_minute</label>
-        <input id=\"cfg_events_rpm\" type=\"text\" />
-        <label>OpenAI API key (secret)</label>
-        <input id=\"cfg_openai_key\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>OpenAI model</label>
-        <input id=\"cfg_openai_model\" type=\"text\" />
-      </div>
-      <div style=\"flex: 1; min-width: 320px\">
-        <label>Spotify client_id</label>
-        <input id=\"cfg_spotify_client_id\" type=\"text\" />
-        <label>Spotify client_secret (secret)</label>
-        <input id=\"cfg_spotify_client_secret\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>Spotify redirect_url</label>
-        <input id=\"cfg_spotify_redirect_url\" type=\"text\" />
-        <label>OBS enabled</label>
-        <select id=\"cfg_obs_enabled\">
-          <option value=\"true\">true</option>
-          <option value=\"false\">false</option>
-        </select>
-      </div>
-      <div style=\"flex: 1; min-width: 320px\">
-        <label>Search google_api_key (secret)</label>
-        <input id=\"cfg_google_key\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>Search google_cx</label>
-        <input id=\"cfg_google_cx\" type=\"text\" />
-        <label>General song_cost</label>
-        <input id=\"cfg_song_cost\" type=\"text\" />
-        <label>General skip_song_cost</label>
-        <input id=\"cfg_skip_cost\" type=\"text\" />
-        <label>General request_overlay_duration</label>
-        <input id=\"cfg_overlay_dur\" type=\"text\" />
-      </div>
-    </div>
-    <div class=\"actions\">
-      <button id=\"saveConfigBtn\" type=\"button\">Save Settings</button>
-      <span id=\"saveConfigStatus\" class=\"muted\"></span>
     </div>
   </div>
 
@@ -510,6 +454,159 @@ class WebUI:
       const paused = !!st.paused;
       q('queueStatus').textContent = paused ? 'Paused' : 'Running';
       renderQueue((st.queued_items && st.queued_items.length) ? st.queued_items : st.queued_tracks);
+    }
+
+    q('refreshQueueBtn').addEventListener('click', () => refreshQueue().catch(err => console.error(err)));
+    q('setupBtn').addEventListener('click', () => { window.location.href = '/setup?rerun=1'; });
+    q('settingsBtn').addEventListener('click', () => {
+      const isForced = (new URLSearchParams(window.location.search).get('dashboard') === '1');
+      window.location.href = isForced ? '/settings?dashboard=1' : '/settings';
+    });
+    q('pauseBtn').addEventListener('click', async () => { await apiJson('/api/queue/pause', { method: 'POST' }); await refreshQueue(); });
+    q('resumeBtn').addEventListener('click', async () => { await apiJson('/api/queue/resume', { method: 'POST' }); await refreshQueue(); });
+
+    async function safeCall(fn, onErr) {
+      try {
+        await fn();
+      } catch (e) {
+        console.error(e);
+        if (onErr) onErr(e);
+      }
+    }
+
+    (async () => {
+      await safeCall(refreshQueue, (e) => {
+        q('queueStatus').textContent = 'Error';
+        q('queueList').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+      });
+      setInterval(() => refreshQueue().catch(() => {}), 2000);
+    })();
+  </script>
+</body>
+</html>"""
+        return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
+
+    async def _page_settings(self, request: web.Request) -> web.Response:
+        force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
+        if not force_dashboard and not _is_setup_complete():
+            raise web.HTTPFound('/setup')
+
+        html = """<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+  <title>TipTune Settings</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
+    *, *::before, *::after { box-sizing: border-box; }
+    a { color: #8ab4ff; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }
+    h1 { margin: 0 0 12px 0; font-size: 22px; }
+    h2 { margin: 0 0 12px 0; font-size: 16px; }
+    label { display: block; font-size: 12px; opacity: 0.9; margin-top: 10px; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
+    button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
+    button:hover { background: #23366f; }
+    .muted { opacity: 0.8; font-size: 12px; }
+    .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class=\"actions\" style=\"justify-content: space-between\"> 
+    <h1>Settings</h1>
+    <div style=\"display:flex; gap:10px; align-items:center;\">
+      <button id=\"dashboardBtn\" type=\"button\">Dashboard</button>
+      <button id=\"setupBtn\" type=\"button\">Setup Wizard</button>
+      <div class=\"muted\"><a href=\"/events\">Events</a></div>
+    </div>
+  </div>
+
+  <div class=\"row\">
+    <div class=\"card\">
+      <h2>Playback Device</h2>
+      <div class=\"muted\" id=\"currentDevice\">Loading...</div>
+      <label for=\"deviceSelect\">Available devices</label>
+      <select id=\"deviceSelect\"></select>
+      <div class=\"actions\">
+        <button id=\"refreshDevicesBtn\" type=\"button\">Refresh</button>
+        <button id=\"applyDeviceBtn\" type=\"button\">Apply + Save</button>
+      </div>
+      <div class=\"muted\">Applies Spotify transfer playback and saves the chosen device id to config.ini.</div>
+    </div>
+  </div>
+
+  <div class=\"card\" style=\"margin-top: 16px\">
+    <h2>Settings</h2>
+    <div class=\"muted\">Secret fields are not shown. Leave secret fields blank to keep the existing value.</div>
+    <div class=\"row\" style=\"margin-top: 8px\">
+      <div style=\"flex: 1; min-width: 320px\">
+        <label>Events API URL (secret)</label>
+        <input id=\"cfg_events_url\" type=\"password\" placeholder=\"(leave blank to keep)\" />
+        <label>Events API max_requests_per_minute</label>
+        <input id=\"cfg_events_rpm\" type=\"text\" />
+        <label>OpenAI API key (secret)</label>
+        <input id=\"cfg_openai_key\" type=\"password\" placeholder=\"(leave blank to keep)\" />
+        <label>OpenAI model</label>
+        <input id=\"cfg_openai_model\" type=\"text\" />
+      </div>
+      <div style=\"flex: 1; min-width: 320px\">
+        <label>Spotify client_id</label>
+        <input id=\"cfg_spotify_client_id\" type=\"text\" />
+        <label>Spotify client_secret (secret)</label>
+        <input id=\"cfg_spotify_client_secret\" type=\"password\" placeholder=\"(leave blank to keep)\" />
+        <label>Spotify redirect_url</label>
+        <input id=\"cfg_spotify_redirect_url\" type=\"text\" />
+        <label>OBS enabled</label>
+        <select id=\"cfg_obs_enabled\">
+          <option value=\"true\">true</option>
+          <option value=\"false\">false</option>
+        </select>
+      </div>
+      <div style=\"flex: 1; min-width: 320px\">
+        <label>Search google_api_key (secret)</label>
+        <input id=\"cfg_google_key\" type=\"password\" placeholder=\"(leave blank to keep)\" />
+        <label>Search google_cx</label>
+        <input id=\"cfg_google_cx\" type=\"text\" />
+        <label>General song_cost</label>
+        <input id=\"cfg_song_cost\" type=\"text\" />
+        <label>General skip_song_cost</label>
+        <input id=\"cfg_skip_cost\" type=\"text\" />
+        <label>General request_overlay_duration</label>
+        <input id=\"cfg_overlay_dur\" type=\"text\" />
+      </div>
+    </div>
+    <div class=\"actions\">
+      <button id=\"saveConfigBtn\" type=\"button\">Save Settings</button>
+      <span id=\"saveConfigStatus\" class=\"muted\"></span>
+    </div>
+  </div>
+
+  <script>
+    function q(id) { return document.getElementById(id); }
+
+    async function apiJson(path, opts, timeoutMs) {
+      const ctrl = new AbortController();
+      const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 5000;
+      const tmr = setTimeout(() => ctrl.abort(), ms);
+      try {
+        const o = opts || {};
+        const r = await fetch(path, { ...o, signal: ctrl.signal });
+        const t = await r.text();
+        let j;
+        try { j = JSON.parse(t); } catch { j = { ok: false, error: t }; }
+        if (!r.ok) { throw new Error(j.error || ('HTTP ' + r.status)); }
+        if (j && j.ok === false) { throw new Error(j.error || 'Request failed'); }
+        return j;
+      } finally {
+        clearTimeout(tmr);
+      }
+    }
+
+    async function refreshCurrentDevice() {
+      const data = await apiJson('/api/queue');
+      const st = data.queue || {};
       const devName = st.playback_device_name || '';
       const devId = st.playback_device_id || '';
       q('currentDevice').textContent = devId ? ('Current: ' + (devName ? (devName + ' ') : '') + '(' + devId + ')') : 'Current: (none)';
@@ -547,16 +644,17 @@ class WebUI:
       q('cfg_obs_enabled').value = (((cfg['OBS'] || {}).enabled) || 'true').toLowerCase();
     }
 
-    q('refreshQueueBtn').addEventListener('click', () => refreshQueue().catch(err => console.error(err)));
+    q('dashboardBtn').addEventListener('click', () => {
+      const isForced = (new URLSearchParams(window.location.search).get('dashboard') === '1');
+      window.location.href = isForced ? '/?dashboard=1' : '/';
+    });
     q('setupBtn').addEventListener('click', () => { window.location.href = '/setup?rerun=1'; });
-    q('pauseBtn').addEventListener('click', async () => { await apiJson('/api/queue/pause', { method: 'POST' }); await refreshQueue(); });
-    q('resumeBtn').addEventListener('click', async () => { await apiJson('/api/queue/resume', { method: 'POST' }); await refreshQueue(); });
 
     q('refreshDevicesBtn').addEventListener('click', () => refreshDevices().catch(err => console.error(err)));
     q('applyDeviceBtn').addEventListener('click', async () => {
       const deviceId = q('deviceSelect').value;
       await apiJson('/api/spotify/device', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: deviceId, persist: true }) });
-      await refreshQueue();
+      await refreshCurrentDevice();
       await refreshDevices();
     });
 
@@ -613,9 +711,7 @@ class WebUI:
 
     (async () => {
       await Promise.all([
-        safeCall(refreshQueue, (e) => {
-          q('queueStatus').textContent = 'Error';
-          q('queueList').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+        safeCall(refreshCurrentDevice, (e) => {
           q('currentDevice').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
         }),
         safeCall(refreshDevices, (e) => {
@@ -625,7 +721,6 @@ class WebUI:
           q('saveConfigStatus').textContent = 'Error loading config: ' + (e && e.message ? e.message : String(e));
         })
       ]);
-      setInterval(() => refreshQueue().catch(() => {}), 2000);
     })();
   </script>
 </body>
@@ -666,9 +761,9 @@ class WebUI:
 
   <div class=\"card\">
     <h2>Setup status: <span class=\"pill\">{status_text}</span></h2>
-    <div class=\"muted\">Use the dashboard to enter your settings (for now). When you're done, mark setup as complete.</div>
+    <div class=\"muted\">Use the settings page to enter your settings. When you're done, mark setup as complete.</div>
     <div class=\"actions\">
-      <button id=\"openDashboardBtn\" type=\"button\">Open Dashboard Settings</button>
+      <button id=\"openDashboardBtn\" type=\"button\">Open Settings</button>
       <button id=\"finishBtn\" type=\"button\">Mark Setup Complete</button>
     </div>
     <div id=\"status\" class=\"muted\"></div>
@@ -696,7 +791,7 @@ class WebUI:
     }}
 
     q('openDashboardBtn').addEventListener('click', () => {{
-      window.location.href = '/?dashboard=1';
+      window.location.href = '/settings?dashboard=1';
     }});
 
     q('finishBtn').addEventListener('click', async () => {{
