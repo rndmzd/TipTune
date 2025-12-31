@@ -8,8 +8,23 @@ class Checks:
 
         self.config = config
 
-        self.song_cost = self.config.getint("General", "song_cost")
-        self.skip_song_cost = self.config.getint("General", "skip_song_cost")
+        self.song_cost = 27
+        self.skip_song_cost = 51
+
+        try:
+            self.song_cost = self.config.getint("General", "song_cost", fallback=self.song_cost)
+        except Exception:
+            pass
+
+        try:
+            self.skip_song_cost = self.config.getint("General", "skip_song_cost", fallback=self.skip_song_cost)
+        except Exception:
+            pass
+
+        if not isinstance(self.song_cost, int) or self.song_cost <= 0:
+            self.song_cost = 27
+        if not isinstance(self.skip_song_cost, int) or self.skip_song_cost <= 0:
+            self.skip_song_cost = 51
 
         logger.debug("checks.init",
                     message="Initialized checks",
