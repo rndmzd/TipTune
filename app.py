@@ -217,6 +217,7 @@ class WebUI:
     .actions + .muted { margin-top: 8px; }
     .queueOut { margin-top: 10px; max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
     .queueCard { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
+    .queueCardNowPlaying { border-color: #8ab4ff; box-shadow: 0 0 0 1px rgba(138,180,255,0.35); }
     .queueCardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
     .queueCardHeaderLeft { display: flex; gap: 10px; align-items: baseline; }
     .queueCardTitle { font-weight: 650; font-size: 13px; }
@@ -255,9 +256,10 @@ class WebUI:
         <button id=\"resumeBtn\" type=\"button\">Resume</button>
         <button id=\"refreshQueueBtn\" type=\"button\">Refresh</button>
       </div>
-      <label>Queued tracks</label>
+      <label>Now playing</label>
+      <div id=\"nowPlaying\" class=\"queueOut\">(loading)</div>
+      <label>Up next</label>
       <div id=\"queueList\" class=\"queueOut\">(loading)</div>
-      <div class=\"muted\">Queue is the in-memory AutoDJ queue (URIs). Current song plays to completion when paused.</div>
     </div>
   </div>
 
@@ -283,6 +285,7 @@ class WebUI:
     }
 
     let lastQueueKey = null;
+    let lastNowPlayingKey = null;
     let currentQueue = [];
     let dragInProgress = false;
     let queueOpInFlight = false;
@@ -325,7 +328,12 @@ class WebUI:
       }
     }
 
-    function makeQueueCard(item, idx) {
+    function makeQueueCard(item, idx, opts) {
+      const o = (opts && typeof opts === 'object') ? opts : {};
+      const allowDrag = (o.allowDrag !== false);
+      const allowDelete = (o.allowDelete !== false);
+      const indexLabel = (typeof o.indexLabel === 'string' && o.indexLabel.trim() !== '') ? o.indexLabel : `#${idx + 1}`;
+      const extraClass = (typeof o.extraClass === 'string' && o.extraClass.trim() !== '') ? o.extraClass : null;
       const isObj = item && typeof item === 'object' && !Array.isArray(item);
       const uri = isObj ? String(item.uri || '') : String(item || '');
       const trackId = isObj ? (item.track_id ? String(item.track_id) : null) : parseSpotifyTrackId(uri);
@@ -340,7 +348,7 @@ class WebUI:
       const artUrl = isObj && typeof item.album_image_url === 'string' && item.album_image_url.trim() !== '' ? item.album_image_url : null;
 
       const root = document.createElement('div');
-      root.className = 'queueCard';
+      root.className = extraClass ? ('queueCard ' + extraClass) : 'queueCard';
       root.dataset.index = String(idx);
 
       const header = document.createElement('div');
@@ -352,11 +360,15 @@ class WebUI:
       const dragHandle = document.createElement('div');
       dragHandle.className = 'queueDragHandle';
       dragHandle.textContent = '⠿';
-      dragHandle.setAttribute('draggable', 'true');
+      dragHandle.setAttribute('draggable', allowDrag ? 'true' : 'false');
+      if (!allowDrag) {
+        dragHandle.style.opacity = '0.55';
+        dragHandle.style.cursor = 'default';
+      }
 
       const left = document.createElement('div');
       left.className = 'queueCardTitle';
-      left.textContent = `#${idx + 1}`;
+      left.textContent = indexLabel;
       left.dataset.role = 'queueIndexLabel';
 
       leftWrap.appendChild(dragHandle);
@@ -365,21 +377,23 @@ class WebUI:
       const right = document.createElement('div');
       right.className = 'queueCardMeta';
 
-      const delBtn = document.createElement('button');
-      delBtn.className = 'queueIconBtn';
-      delBtn.type = 'button';
-      delBtn.title = 'Remove from queue';
-      delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 6v-2.5c0-.8.7-1.5 1.5-1.5h5C15.8 2 16.5 2.7 16.5 3.5V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 6l1 16.5c.1.9.8 1.5 1.7 1.5h5.6c.9 0 1.6-.6 1.7-1.5l1-16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
-      delBtn.addEventListener('click', async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const label = name ? name : (trackId ? `spotify:track:${trackId}` : (uri || '(unknown)'));
-        if (!confirm('Remove from queue?\\n\\n' + label)) return;
-        const idxNow = getIndexFromCard(root);
-        if (idxNow === null) return;
-        await safeCall(() => deleteQueueIndex(idxNow));
-      });
-      right.appendChild(delBtn);
+      if (allowDelete) {
+        const delBtn = document.createElement('button');
+        delBtn.className = 'queueIconBtn';
+        delBtn.type = 'button';
+        delBtn.title = 'Remove from queue';
+        delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 6v-2.5c0-.8.7-1.5 1.5-1.5h5C15.8 2 16.5 2.7 16.5 3.5V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 6l1 16.5c.1.9.8 1.5 1.7 1.5h5.6c.9 0 1.6-.6 1.7-1.5l1-16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+        delBtn.addEventListener('click', async (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const label = name ? name : (trackId ? `spotify:track:${trackId}` : (uri || '(unknown)'));
+          if (!confirm('Remove from queue?\\n\\n' + label)) return;
+          const idxNow = getIndexFromCard(root);
+          if (idxNow === null) return;
+          await safeCall(() => deleteQueueIndex(idxNow));
+        });
+        right.appendChild(delBtn);
+      }
 
       if (spotifyUrl) {
         const a = document.createElement('a');
@@ -473,30 +487,32 @@ class WebUI:
 
       root.appendChild(body);
 
-      dragHandle.addEventListener('dragstart', (ev) => {
-        if (queueOpInFlight) {
-          ev.preventDefault();
-          return;
-        }
-        dragInProgress = true;
-        const idxStart = getIndexFromCard(root);
-        if (idxStart === null) {
-          ev.preventDefault();
-          return;
-        }
-        dragFromIndex = idxStart;
-        try {
-          ev.dataTransfer.setData('text/plain', String(idxStart));
-          ev.dataTransfer.effectAllowed = 'move';
-        } catch (_) {
-        }
-      });
+      if (allowDrag) {
+        dragHandle.addEventListener('dragstart', (ev) => {
+          if (queueOpInFlight) {
+            ev.preventDefault();
+            return;
+          }
+          dragInProgress = true;
+          const idxStart = getIndexFromCard(root);
+          if (idxStart === null) {
+            ev.preventDefault();
+            return;
+          }
+          dragFromIndex = idxStart;
+          try {
+            ev.dataTransfer.setData('text/plain', String(idxStart));
+            ev.dataTransfer.effectAllowed = 'move';
+          } catch (_) {
+          }
+        });
 
-      dragHandle.addEventListener('dragend', () => {
-        dragInProgress = false;
-        dragFromIndex = null;
-        clearDropTargets();
-      });
+        dragHandle.addEventListener('dragend', () => {
+          dragInProgress = false;
+          dragFromIndex = null;
+          clearDropTargets();
+        });
+      }
 
       return root;
     }
@@ -570,6 +586,26 @@ class WebUI:
       }
     }
 
+    function renderNowPlaying(item, force) {
+      const key = JSON.stringify(item || null);
+      if (!force && key === lastNowPlayingKey) return;
+      lastNowPlayingKey = key;
+
+      const out = q('nowPlaying');
+      out.innerHTML = '';
+      if (!item) {
+        out.textContent = '(none)';
+        return;
+      }
+
+      out.appendChild(makeQueueCard(item, 0, {
+        allowDrag: false,
+        allowDelete: false,
+        indexLabel: 'Now',
+        extraClass: 'queueCardNowPlaying'
+      }));
+    }
+
     async function refreshQueue(opts) {
       const force = !!(opts && opts.force);
       const allowDuringOp = !!(opts && opts.allowDuringOp);
@@ -579,7 +615,11 @@ class WebUI:
       const st = data.queue || {};
       const paused = !!st.paused;
       q('queueStatus').textContent = paused ? 'Paused' : 'Running';
+      const nowPlaying = (st.now_playing_item && typeof st.now_playing_item === 'object')
+        ? st.now_playing_item
+        : (st.now_playing_track ? st.now_playing_track : null);
       currentQueue = (st.queued_items && st.queued_items.length) ? st.queued_items : (st.queued_tracks || []);
+      renderNowPlaying(nowPlaying, force);
       renderQueue(currentQueue, force);
     }
 
@@ -744,7 +784,6 @@ class WebUI:
         <button id=\"refreshDevicesBtn\" type=\"button\">Refresh</button>
         <button id=\"applyDeviceBtn\" type=\"button\">Apply + Save</button>
       </div>
-      <div class=\"muted\">Applies Spotify transfer playback and saves the chosen device id to config.ini.</div>
     </div>
   </div>
 
@@ -1850,11 +1889,25 @@ class SongRequestService:
 
         paused = self.actions.auto_dj.queue_paused()
 
+        now_playing_track = getattr(self.actions.auto_dj, 'now_playing_track_uri', None)
+        now_playing_item: Optional[dict] = None
+        if isinstance(now_playing_track, str) and now_playing_track.strip() != "":
+            try:
+                enriched_np = await self._enrich_queue_tracks([now_playing_track])
+                if enriched_np and isinstance(enriched_np, list) and isinstance(enriched_np[0], dict):
+                    now_playing_item = enriched_np[0]
+                else:
+                    now_playing_item = {"uri": now_playing_track}
+            except Exception:
+                now_playing_item = {"uri": now_playing_track}
+
         queued_items = await self._enrich_queue_tracks(queued_tracks)
 
         return {
             "enabled": True,
             "paused": bool(paused),
+            "now_playing_track": now_playing_track,
+            "now_playing_item": now_playing_item,
             "queued_tracks": queued_tracks,
             "queued_items": queued_items,
             "playback_device_id": playback_device_id,

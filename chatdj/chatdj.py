@@ -398,6 +398,7 @@ class AutoDJ:
         self._queue_lock = threading.Lock()
 
         self.queued_tracks = []
+        self.now_playing_track_uri = None
         self.clear_playback_context()
         self._print_variables()
 
@@ -906,7 +907,11 @@ class AutoDJ:
                 with self._queue_lock:
                     qlen = len(self.queued_tracks)
 
+                if qlen == 0:
+                    self.now_playing_track_uri = None
+
                 if paused and qlen > 0:
+                    self.now_playing_track_uri = None
                     if not silent:
                         logger.info(
                             "queue.check.paused",
@@ -922,6 +927,7 @@ class AutoDJ:
                         if not self.queued_tracks:
                             return False
                         popped_track = self.queued_tracks.pop(0)
+                        self.now_playing_track_uri = popped_track
                     logger.debug("queue.check.popped",
                                 message=f"Popped track: {popped_track}")
                     self.spotify.start_playback(device_id=self.playback_device, uris=[popped_track])
@@ -949,6 +955,7 @@ class AutoDJ:
                     with self._queue_lock:
                         if self.queued_tracks and self.queued_tracks[0] == current_track:
                             popped_track = self.queued_tracks.pop(0)
+                            self.now_playing_track_uri = popped_track
                         else:
                             popped_track = None
                     logger.debug("queue.check.popped",
@@ -1012,6 +1019,8 @@ class AutoDJ:
                 logger.error("queue.clear.error",
                             message=f"Error pausing playback: {exc}")
             self.playing_first_track = False
+
+            self.now_playing_track_uri = None
 
             with self._queue_lock:
                 self.queued_tracks.clear()
