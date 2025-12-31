@@ -570,14 +570,17 @@ class WebUI:
       }
     }
 
-    async function refreshQueue() {
-      if (dragInProgress || queueOpInFlight) return;
+    async function refreshQueue(opts) {
+      const force = !!(opts && opts.force);
+      const allowDuringOp = !!(opts && opts.allowDuringOp);
+      const allowDuringDrag = !!(opts && opts.allowDuringDrag);
+      if ((dragInProgress && !allowDuringDrag) || (queueOpInFlight && !allowDuringOp)) return;
       const data = await apiJson('/api/queue');
       const st = data.queue || {};
       const paused = !!st.paused;
       q('queueStatus').textContent = paused ? 'Paused' : 'Running';
       currentQueue = (st.queued_items && st.queued_items.length) ? st.queued_items : (st.queued_tracks || []);
-      renderQueue(currentQueue);
+      renderQueue(currentQueue, force);
     }
 
     async function moveQueueIndex(fromIndex, toIndex) {
@@ -588,6 +591,7 @@ class WebUI:
       if (fromIndex < 0 || fromIndex >= currentQueue.length) return;
       if (toIndex < 0 || toIndex >= currentQueue.length) return;
       queueOpInFlight = true;
+      let opErr = null;
       try {
         const moved = currentQueue.splice(fromIndex, 1)[0];
         currentQueue.splice(toIndex, 0, moved);
@@ -597,10 +601,13 @@ class WebUI:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from_index: fromIndex, to_index: toIndex })
         });
-        await refreshQueue();
+      } catch (e) {
+        opErr = e;
       } finally {
+        await refreshQueue({ allowDuringOp: true, allowDuringDrag: true, force: true }).catch(() => {});
         queueOpInFlight = false;
       }
+      if (opErr) throw opErr;
     }
 
     async function deleteQueueIndex(index) {
@@ -609,6 +616,7 @@ class WebUI:
       if (!Number.isInteger(index)) return;
       if (index < 0 || index >= currentQueue.length) return;
       queueOpInFlight = true;
+      let opErr = null;
       try {
         currentQueue.splice(index, 1);
         renderQueue(currentQueue, true);
@@ -617,10 +625,13 @@ class WebUI:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ index })
         });
-        await refreshQueue();
+      } catch (e) {
+        opErr = e;
       } finally {
+        await refreshQueue({ allowDuringOp: true, allowDuringDrag: true, force: true }).catch(() => {});
         queueOpInFlight = false;
       }
+      if (opErr) throw opErr;
     }
 
     q('refreshQueueBtn').addEventListener('click', () => refreshQueue().catch(err => console.error(err)));
