@@ -395,9 +395,60 @@ class AutoDJ:
         self._queue_unpaused = threading.Event()
         self._queue_unpaused.set()
 
+        self._queue_lock = threading.Lock()
+
         self.queued_tracks = []
         self.clear_playback_context()
         self._print_variables()
+
+    def get_queued_tracks_snapshot(self) -> List[Any]:
+        try:
+            with self._queue_lock:
+                return list(self.queued_tracks)
+        except Exception:
+            return []
+
+    def move_queued_track(self, from_index: int, to_index: int) -> bool:
+        try:
+            fi = int(from_index)
+            ti = int(to_index)
+        except Exception:
+            return False
+
+        try:
+            with self._queue_lock:
+                n = len(self.queued_tracks)
+                if fi < 0 or fi >= n:
+                    return False
+                if ti < 0 or ti >= n:
+                    return False
+                if fi == ti:
+                    return True
+                item = self.queued_tracks.pop(fi)
+                self.queued_tracks.insert(ti, item)
+            self._print_variables(True)
+            return True
+        except Exception as exc:
+            logger.exception("queue.move.error", message="Failed to move queued track", exc=exc)
+            return False
+
+    def delete_queued_track(self, index: int) -> bool:
+        try:
+            idx = int(index)
+        except Exception:
+            return False
+
+        try:
+            with self._queue_lock:
+                n = len(self.queued_tracks)
+                if idx < 0 or idx >= n:
+                    return False
+                _ = self.queued_tracks.pop(idx)
+            self._print_variables(True)
+            return True
+        except Exception as exc:
+            logger.exception("queue.delete.error", message="Failed to delete queued track", exc=exc)
+            return False
 
     def get_available_devices(self) -> List[Dict[str, Any]]:
         try:
@@ -831,9 +882,11 @@ class AutoDJ:
                             message="Adding track to queue",
                             data={"track_uri": track_uri})
 
-            self.queued_tracks.append(track_uri)
-            # Start playback if not already active.
-            if not self.playback_active() and len(self.queued_tracks) == 1:
+            with self._queue_lock:
+                self.queued_tracks.append(track_uri)
+                qlen = len(self.queued_tracks)
+
+            if not self.playback_active() and qlen == 1:
                 self.playing_first_track = True
             logger.debug("spotify.queue.status",
                         message="Current queue status",
@@ -849,19 +902,26 @@ class AutoDJ:
     def check_queue_status(self, silent=False) -> bool:
         try:
             if not self.playback_active():
-                if self.queue_paused() and len(self.queued_tracks) > 0:
+                paused = self.queue_paused()
+                with self._queue_lock:
+                    qlen = len(self.queued_tracks)
+
+                if paused and qlen > 0:
                     if not silent:
                         logger.info(
                             "queue.check.paused",
                             message="Queue is paused. Waiting to resume before starting the next song.",
-                            data={"queued_tracks": len(self.queued_tracks)}
+                            data={"queued_tracks": qlen}
                         )
                     self._print_variables(False)
                     return False
-                if len(self.queued_tracks) > 0:
+                if qlen > 0:
                     logger.info("queue.check.start",
                                 message="Queue populated but playback is not active. Starting playback.")
-                    popped_track = self.queued_tracks.pop(0)
+                    with self._queue_lock:
+                        if not self.queued_tracks:
+                            return False
+                        popped_track = self.queued_tracks.pop(0)
                     logger.debug("queue.check.popped",
                                 message=f"Popped track: {popped_track}")
                     self.spotify.start_playback(device_id=self.playback_device, uris=[popped_track])
@@ -871,19 +931,26 @@ class AutoDJ:
                     return True
                 self._print_variables(False)
 
-                if len(self.queued_tracks) == 0 and not self.playing_first_track:
+                if qlen == 0 and not self.playing_first_track:
                     logger.info("queue.check.empty",
                                 message="Queue is now empty")
                     self.playing_first_track = True
 
                 return False
 
-            if self.queued_tracks:
+            with self._queue_lock:
+                first_queued = self.queued_tracks[0] if self.queued_tracks else None
+
+            if first_queued:
                 current_track = self.spotify.current_playback()['item']['uri']
                 logger.debug(f"Current playing track: {current_track}")
-                if current_track == self.queued_tracks[0]:
+                if current_track == first_queued:
                     logger.info(f"Now playing queued track: {current_track}")
-                    popped_track = self.queued_tracks.pop(0)
+                    with self._queue_lock:
+                        if self.queued_tracks and self.queued_tracks[0] == current_track:
+                            popped_track = self.queued_tracks.pop(0)
+                        else:
+                            popped_track = None
                     logger.debug("queue.check.popped",
                                 message=f"Popped track: {popped_track}")
             self._print_variables(True)
@@ -946,7 +1013,8 @@ class AutoDJ:
                             message=f"Error pausing playback: {exc}")
             self.playing_first_track = False
 
-            self.queued_tracks.clear()
+            with self._queue_lock:
+                self.queued_tracks.clear()
             self._print_variables(True)
             return True
 
