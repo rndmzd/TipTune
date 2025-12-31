@@ -7,7 +7,7 @@ import yaml
 
 from utils.structured_logging import get_structured_logger
 
-logger = get_structured_logger('mongobate.handlers.obshandler')
+logger = get_structured_logger('tiptune.handlers.obshandler')
 
 class OBSHandler:
     def __init__(self, host: str = 'localhost', port: int = 4455, password: Optional[str] = None):

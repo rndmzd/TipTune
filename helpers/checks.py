@@ -1,6 +1,6 @@
 from utils.structured_logging import get_structured_logger
 
-logger = get_structured_logger('mongobate.helpers.checks')
+logger = get_structured_logger('tiptune.helpers.checks')
 
 class Checks:
     def __init__(self):

@@ -7,7 +7,7 @@ from utils.structured_logging import get_structured_logger
 from .actions import Actions  # Expose Actions for external imports
 from .checks import Checks  # Expose Checks for external imports
 
-logger = get_structured_logger('mongobate.helpers')
+logger = get_structured_logger('tiptune.helpers')
 
 config_path = Path(__file__).parent.parent / 'config.ini'
 

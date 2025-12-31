@@ -27,7 +27,7 @@ config_path = Path(__file__).resolve().parent / 'config.ini'
 config = configparser.ConfigParser()
 config.read(config_path)
 
-logger = get_structured_logger('mongobate.app')
+logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
 
 
