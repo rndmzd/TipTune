@@ -212,6 +212,18 @@ class WebUI:
     .muted { opacity: 0.8; font-size: 12px; }
     .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
     .actions + .muted { margin-top: 8px; }
+    .queueOut { margin-top: 10px; max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+    .queueCard { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
+    .queueCardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+    .queueCardTitle { font-weight: 650; font-size: 13px; }
+    .queueCardMeta { opacity: 0.85; font-size: 12px; }
+    .queueCardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .queueMessage { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+    .queueTitleMain { font-weight: 650; font-size: 13px; }
+    .queueTitleSub { opacity: 0.85; font-size: 12px; }
+    .queueArt { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; border: 1px solid #2a3a66; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; user-select: none; opacity: 0.9; }
   </style>
 </head>
 <body>
@@ -233,7 +245,7 @@ class WebUI:
         <button id=\"refreshQueueBtn\" type=\"button\">Refresh</button>
       </div>
       <label>Queued tracks</label>
-      <pre id=\"queueList\">(loading)</pre>
+      <div id=\"queueList\" class=\"queueOut\">(loading)</div>
       <div class=\"muted\">Queue is the in-memory AutoDJ queue (URIs). Current song plays to completion when paused.</div>
     </div>
 
@@ -317,12 +329,187 @@ class WebUI:
       }
     }
 
+    let lastQueueKey = null;
+
+    function parseSpotifyTrackId(v) {
+      try {
+        const s = String(v || '');
+        let m = s.match(/^spotify:track:([a-zA-Z0-9]+)$/);
+        if (m) return m[1];
+        m = s.match(/open\\.spotify\\.com\\/track\\/([a-zA-Z0-9]+)/);
+        if (m) return m[1];
+        return null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function truncateMiddle(s, maxLen) {
+      const str = String(s || '');
+      const n = (typeof maxLen === 'number' && maxLen > 0) ? maxLen : 40;
+      if (str.length <= n) return str;
+      const left = Math.max(1, Math.floor((n - 1) / 2));
+      const right = Math.max(1, n - 1 - left);
+      return str.slice(0, left) + '…' + str.slice(str.length - right);
+    }
+
+    function toDurationLabel(ms) {
+      try {
+        const n = Number(ms);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        const s = Math.floor(n / 1000);
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return `${m}:${String(r).padStart(2, '0')}`;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function makeQueueCard(item, idx) {
+      const isObj = item && typeof item === 'object' && !Array.isArray(item);
+      const uri = isObj ? String(item.uri || '') : String(item || '');
+      const trackId = isObj ? (item.track_id ? String(item.track_id) : null) : parseSpotifyTrackId(uri);
+      const name = isObj && typeof item.name === 'string' ? item.name : null;
+      const artists = isObj && Array.isArray(item.artists) ? item.artists.filter(x => typeof x === 'string' && x.trim() !== '') : [];
+      const album = isObj && typeof item.album === 'string' && item.album.trim() !== '' ? item.album : null;
+      const duration = isObj ? toDurationLabel(item.duration_ms) : null;
+      const explicit = isObj ? !!item.explicit : false;
+      const spotifyUrl = isObj && typeof item.spotify_url === 'string' && item.spotify_url.trim() !== ''
+        ? item.spotify_url
+        : (trackId ? `https://open.spotify.com/track/${trackId}` : null);
+      const artUrl = isObj && typeof item.album_image_url === 'string' && item.album_image_url.trim() !== '' ? item.album_image_url : null;
+
+      const root = document.createElement('div');
+      root.className = 'queueCard';
+
+      const header = document.createElement('div');
+      header.className = 'queueCardHeader';
+
+      const left = document.createElement('div');
+      left.className = 'queueCardTitle';
+      left.textContent = `#${idx + 1}`;
+
+      const right = document.createElement('div');
+      right.className = 'queueCardMeta';
+
+      if (spotifyUrl) {
+        const a = document.createElement('a');
+        a.href = spotifyUrl;
+        a.target = '_blank';
+        a.rel = 'noreferrer noopener';
+        a.textContent = 'Open in Spotify';
+        right.appendChild(a);
+      }
+
+      if (trackId) {
+        const idPill = document.createElement('span');
+        idPill.className = 'pill';
+        idPill.style.marginLeft = '8px';
+        idPill.textContent = `track: ${truncateMiddle(trackId, 18)}`;
+        right.appendChild(idPill);
+      }
+
+      header.appendChild(left);
+      header.appendChild(right);
+      root.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'queueCardBody';
+
+      const titleRow = document.createElement('div');
+      titleRow.style.display = 'flex';
+      titleRow.style.gap = '10px';
+      titleRow.style.alignItems = 'center';
+
+      if (artUrl) {
+        const img = document.createElement('img');
+        img.className = 'queueArt';
+        img.src = artUrl;
+        img.alt = '';
+        titleRow.appendChild(img);
+      }
+
+      const titleWrap = document.createElement('div');
+      titleWrap.style.flex = '1';
+      const main = document.createElement('div');
+      main.className = 'queueTitleMain';
+      main.textContent = name ? name : (trackId ? `spotify:track:${trackId}` : (uri || '(unknown)'));
+      titleWrap.appendChild(main);
+
+      const subParts = [];
+      if (artists.length) subParts.push(artists.join(', '));
+      if (album) subParts.push(album);
+      if (subParts.length) {
+        const sub = document.createElement('div');
+        sub.className = 'queueTitleSub';
+        sub.textContent = subParts.join(' · ');
+        titleWrap.appendChild(sub);
+      }
+
+      titleRow.appendChild(titleWrap);
+      body.appendChild(titleRow);
+
+      const pills = document.createElement('div');
+      pills.style.display = 'flex';
+      pills.style.gap = '8px';
+      pills.style.flexWrap = 'wrap';
+
+      if (duration) {
+        const p = document.createElement('span');
+        p.className = 'pill';
+        p.textContent = duration;
+        pills.appendChild(p);
+      }
+      if (explicit) {
+        const p = document.createElement('span');
+        p.className = 'pill';
+        p.textContent = 'Explicit';
+        pills.appendChild(p);
+      }
+      if (pills.childNodes.length) body.appendChild(pills);
+
+      const msg = document.createElement('div');
+      msg.className = 'queueMessage';
+      msg.textContent = uri;
+      body.appendChild(msg);
+
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = 'Details';
+      details.appendChild(summary);
+      const pre = document.createElement('pre');
+      pre.textContent = isObj ? JSON.stringify(item, null, 2) : uri;
+      details.appendChild(pre);
+      body.appendChild(details);
+
+      root.appendChild(body);
+      return root;
+    }
+
+    function renderQueue(queued) {
+      const arr = Array.isArray(queued) ? queued : [];
+      const key = JSON.stringify(arr);
+      if (key === lastQueueKey) return;
+      lastQueueKey = key;
+
+      const out = q('queueList');
+      out.innerHTML = '';
+      if (!arr.length) {
+        out.textContent = '(empty)';
+        return;
+      }
+      for (let i = 0; i < arr.length; i++) {
+        out.appendChild(makeQueueCard(arr[i], i));
+      }
+    }
+
     async function refreshQueue() {
       const data = await apiJson('/api/queue');
       const st = data.queue || {};
       const paused = !!st.paused;
       q('queueStatus').textContent = paused ? 'Paused' : 'Running';
-      q('queueList').textContent = (st.queued_tracks && st.queued_tracks.length) ? st.queued_tracks.join('\\\\n') : '(empty)';
+      renderQueue((st.queued_items && st.queued_items.length) ? st.queued_items : st.queued_tracks);
       const devName = st.playback_device_name || '';
       const devId = st.playback_device_id || '';
       q('currentDevice').textContent = devId ? ('Current: ' + (devName ? (devName + ' ') : '') + '(' + devId + ')') : 'Current: (none)';
@@ -908,7 +1095,78 @@ class SongRequestService:
         self._events_recent_max = 500
         self._events_subscribers: set[asyncio.Queue] = set()
 
+        self._track_cache: Dict[str, Dict[str, Any]] = {}
+        self._track_cache_ttl_seconds = 6 * 60 * 60
+        self._track_cache_max_items = 500
+
         self._web: Optional[WebUI] = None
+
+    async def _refresh_obs_integration_from_config(self) -> None:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+
+        current_enabled = bool(getattr(self.actions, 'obs_integration_enabled', False))
+        current_obs = getattr(self.actions, 'obs', None)
+
+        if not desired_enabled:
+            if current_enabled:
+                try:
+                    self.actions.obs_integration_enabled = False
+                except Exception:
+                    pass
+
+                if current_obs is not None:
+                    try:
+                        await current_obs.disconnect()
+                    except Exception:
+                        pass
+                    try:
+                        delattr(self.actions, 'obs')
+                    except Exception:
+                        pass
+            return
+
+        host = config.get("OBS", "host", fallback="localhost").strip() or "localhost"
+        try:
+            port = config.getint("OBS", "port", fallback=4455)
+        except Exception:
+            port = 4455
+        if not isinstance(port, int) or port <= 0:
+            port = 4455
+
+        password = config.get("OBS", "password", fallback=None)
+        if isinstance(password, str) and password.strip() == "":
+            password = None
+
+        recreate = False
+        if not current_enabled or current_obs is None:
+            recreate = True
+        else:
+            try:
+                if getattr(current_obs, 'host', None) != host:
+                    recreate = True
+                if getattr(current_obs, 'port', None) != port:
+                    recreate = True
+                if getattr(current_obs, 'password', None) != password:
+                    recreate = True
+            except Exception:
+                recreate = True
+
+        if recreate:
+            if current_obs is not None:
+                try:
+                    await current_obs.disconnect()
+                except Exception:
+                    pass
+            try:
+                from handlers.obshandler import OBSHandler
+                self.actions.obs = OBSHandler(host=host, port=port, password=password)
+            except Exception:
+                return
+
+        try:
+            self.actions.obs_integration_enabled = True
+        except Exception:
+            pass
 
     async def start(self) -> None:
         self._tasks.append(asyncio.create_task(self._events_loop()))
@@ -1244,13 +1502,193 @@ class SongRequestService:
 
         paused = self.actions.auto_dj.queue_paused()
 
+        queued_items = await self._enrich_queue_tracks(queued_tracks)
+
         return {
             "enabled": True,
             "paused": bool(paused),
             "queued_tracks": queued_tracks,
+            "queued_items": queued_items,
             "playback_device_id": playback_device_id,
             "playback_device_name": playback_device_name,
         }
+
+    def _parse_spotify_track_id(self, v: Any) -> Optional[str]:
+        if not isinstance(v, str):
+            return None
+        s = v.strip()
+        if s == "":
+            return None
+        prefix = "spotify:track:"
+        if s.startswith(prefix):
+            tid = s[len(prefix):].strip()
+            return tid if tid else None
+        marker = "open.spotify.com/track/"
+        pos = s.find(marker)
+        if pos >= 0:
+            rest = s[pos + len(marker):]
+            rest = rest.split('?', 1)[0]
+            rest = rest.split('#', 1)[0]
+            rest = rest.split('/', 1)[0]
+            rest = rest.strip()
+            return rest if rest else None
+        return None
+
+    def _cache_get_track(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        try:
+            item = self._track_cache.get(cache_key)
+            if not item:
+                return None
+            ts = float(item.get('ts', 0))
+            if (time.time() - ts) > float(self._track_cache_ttl_seconds):
+                try:
+                    del self._track_cache[cache_key]
+                except Exception:
+                    pass
+                return None
+            meta = item.get('meta')
+            return meta if isinstance(meta, dict) else None
+        except Exception:
+            return None
+
+    def _cache_put_track(self, cache_key: str, meta: Dict[str, Any]) -> None:
+        try:
+            if not isinstance(cache_key, str) or cache_key.strip() == "":
+                return
+            if not isinstance(meta, dict):
+                return
+            self._track_cache[cache_key] = {"ts": time.time(), "meta": meta}
+            if len(self._track_cache) > int(self._track_cache_max_items):
+                items = list(self._track_cache.items())
+                items.sort(key=lambda kv: float((kv[1] or {}).get('ts', 0)))
+                trim = max(0, len(items) - int(self._track_cache_max_items))
+                for i in range(trim):
+                    try:
+                        del self._track_cache[items[i][0]]
+                    except Exception:
+                        pass
+        except Exception:
+            return
+
+    async def _fetch_spotify_track_meta(self, track_uri: str) -> Optional[Dict[str, Any]]:
+        if not isinstance(track_uri, str) or track_uri.strip() == "":
+            return None
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return None
+        if not hasattr(self.actions, 'auto_dj'):
+            return None
+        spotify = getattr(self.actions.auto_dj, 'spotify', None)
+        if spotify is None:
+            return None
+
+        loop = asyncio.get_running_loop()
+        try:
+            data = await asyncio.wait_for(loop.run_in_executor(None, spotify.track, track_uri), timeout=4)
+        except asyncio.TimeoutError:
+            return None
+        except Exception:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        name = data.get('name')
+        artists_raw = data.get('artists')
+        artists: list[str] = []
+        if isinstance(artists_raw, list):
+            for a in artists_raw:
+                if isinstance(a, dict):
+                    an = a.get('name')
+                    if isinstance(an, str) and an.strip() != "":
+                        artists.append(an)
+
+        album_name = None
+        album_image_url = None
+        album_raw = data.get('album')
+        if isinstance(album_raw, dict):
+            an = album_raw.get('name')
+            if isinstance(an, str) and an.strip() != "":
+                album_name = an
+            imgs = album_raw.get('images')
+            if isinstance(imgs, list) and imgs:
+                first = imgs[0]
+                if isinstance(first, dict):
+                    u = first.get('url')
+                    if isinstance(u, str) and u.strip() != "":
+                        album_image_url = u
+
+        duration_ms = data.get('duration_ms')
+        explicit = bool(data.get('explicit', False))
+        preview_url = data.get('preview_url') if isinstance(data.get('preview_url'), str) else None
+        external_urls = data.get('external_urls')
+        spotify_url = None
+        if isinstance(external_urls, dict):
+            u = external_urls.get('spotify')
+            if isinstance(u, str) and u.strip() != "":
+                spotify_url = u
+
+        track_id = data.get('id') if isinstance(data.get('id'), str) else None
+
+        out: Dict[str, Any] = {
+            "track_id": track_id,
+            "name": name,
+            "artists": artists,
+            "album": album_name,
+            "duration_ms": duration_ms,
+            "explicit": explicit,
+            "spotify_url": spotify_url,
+            "preview_url": preview_url,
+            "album_image_url": album_image_url,
+        }
+
+        clean: Dict[str, Any] = {}
+        for k, v in out.items():
+            if v is None:
+                continue
+            clean[k] = v
+        return clean
+
+    async def _enrich_queue_tracks(self, queued_tracks: list[Any]) -> list[dict]:
+        tracks = queued_tracks if isinstance(queued_tracks, list) else []
+        items: list[dict] = []
+
+        to_fetch: list[tuple[int, str, str]] = []
+        max_fetch = 10
+
+        for idx, raw in enumerate(tracks):
+            uri = raw if isinstance(raw, str) else str(raw)
+            tid = self._parse_spotify_track_id(uri)
+            cache_key = tid or uri
+            meta = self._cache_get_track(cache_key)
+
+            item: Dict[str, Any] = {
+                "uri": uri,
+            }
+            if tid:
+                item["track_id"] = tid
+            if meta:
+                item.update(meta)
+            else:
+                if len(to_fetch) < max_fetch:
+                    to_fetch.append((idx, cache_key, uri))
+
+            items.append(item)
+
+        if not to_fetch:
+            return items
+
+        tasks = [self._fetch_spotify_track_meta(uri) for (_idx, _key, uri) in to_fetch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, res in enumerate(results):
+            if isinstance(res, dict):
+                idx, cache_key, _uri = to_fetch[i]
+                self._cache_put_track(cache_key, res)
+                try:
+                    items[idx].update(res)
+                except Exception:
+                    pass
+
+        return items
 
     async def pause_queue(self) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):
@@ -1393,6 +1831,11 @@ class SongRequestService:
                         model=config.get("OpenAI", "model", fallback="gpt-5")
                     )
                 self.actions.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
+        except Exception:
+            pass
+
+        try:
+            await self._refresh_obs_integration_from_config()
         except Exception:
             pass
 
