@@ -165,6 +165,8 @@ class WebUI:
             web.get('/api/queue', self._api_queue),
             web.post('/api/queue/pause', self._api_pause),
             web.post('/api/queue/resume', self._api_resume),
+            web.post('/api/queue/move', self._api_queue_move),
+            web.post('/api/queue/delete', self._api_queue_delete),
             web.get('/api/spotify/devices', self._api_devices),
             web.post('/api/spotify/device', self._api_set_device),
             web.get('/api/config', self._api_get_config),
@@ -213,16 +215,23 @@ class WebUI:
     .muted { opacity: 0.8; font-size: 12px; }
     .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
     .actions + .muted { margin-top: 8px; }
-    .queueOut { margin-top: 10px; max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+    .queueOut { margin-top: 10px; max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
     .queueCard { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
     .queueCardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+    .queueCardHeaderLeft { display: flex; gap: 10px; align-items: baseline; }
     .queueCardTitle { font-weight: 650; font-size: 13px; }
-    .queueCardMeta { opacity: 0.85; font-size: 12px; }
+    .queueCardMeta { opacity: 0.85; font-size: 12px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
     .queueCardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
     .queueMessage { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
     .queueTitleMain { font-weight: 650; font-size: 13px; }
     .queueTitleSub { opacity: 0.85; font-size: 12px; }
     .queueArt { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; border: 1px solid #2a3a66; }
+    .queueDragHandle { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 6px; border: 1px solid #2a3a66; background: #0b1020; cursor: grab; user-select: none; }
+    .queueDragHandle:active { cursor: grabbing; }
+    .queueIconBtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
+    .queueIconBtn:hover { background: #132048; }
+    .queueDropTarget { outline: 2px dashed #8ab4ff; outline-offset: 2px; }
+    .queueInsertLine { height: 0; border-top: 2px solid #8ab4ff; border-radius: 999px; }
     details { margin-top: 8px; }
     summary { cursor: pointer; user-select: none; opacity: 0.9; }
   </style>
@@ -274,6 +283,12 @@ class WebUI:
     }
 
     let lastQueueKey = null;
+    let currentQueue = [];
+    let dragInProgress = false;
+    let queueOpInFlight = false;
+    let dragFromIndex = null;
+    let dropIndicator = null;
+    let dropInsertIndex = null;
 
     function parseSpotifyTrackId(v) {
       try {
@@ -326,16 +341,45 @@ class WebUI:
 
       const root = document.createElement('div');
       root.className = 'queueCard';
+      root.dataset.index = String(idx);
 
       const header = document.createElement('div');
       header.className = 'queueCardHeader';
 
+      const leftWrap = document.createElement('div');
+      leftWrap.className = 'queueCardHeaderLeft';
+
+      const dragHandle = document.createElement('div');
+      dragHandle.className = 'queueDragHandle';
+      dragHandle.textContent = '⠿';
+      dragHandle.setAttribute('draggable', 'true');
+
       const left = document.createElement('div');
       left.className = 'queueCardTitle';
       left.textContent = `#${idx + 1}`;
+      left.dataset.role = 'queueIndexLabel';
+
+      leftWrap.appendChild(dragHandle);
+      leftWrap.appendChild(left);
 
       const right = document.createElement('div');
       right.className = 'queueCardMeta';
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'queueIconBtn';
+      delBtn.type = 'button';
+      delBtn.title = 'Remove from queue';
+      delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 6v-2.5c0-.8.7-1.5 1.5-1.5h5C15.8 2 16.5 2.7 16.5 3.5V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 6l1 16.5c.1.9.8 1.5 1.7 1.5h5.6c.9 0 1.6-.6 1.7-1.5l1-16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+      delBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const label = name ? name : (trackId ? `spotify:track:${trackId}` : (uri || '(unknown)'));
+        if (!confirm('Remove from queue?\\n\\n' + label)) return;
+        const idxNow = getIndexFromCard(root);
+        if (idxNow === null) return;
+        await safeCall(() => deleteQueueIndex(idxNow));
+      });
+      right.appendChild(delBtn);
 
       if (spotifyUrl) {
         const a = document.createElement('a');
@@ -354,7 +398,7 @@ class WebUI:
         right.appendChild(idPill);
       }
 
-      header.appendChild(left);
+      header.appendChild(leftWrap);
       header.appendChild(right);
       root.appendChild(header);
 
@@ -428,13 +472,91 @@ class WebUI:
       body.appendChild(details);
 
       root.appendChild(body);
+
+      dragHandle.addEventListener('dragstart', (ev) => {
+        if (queueOpInFlight) {
+          ev.preventDefault();
+          return;
+        }
+        dragInProgress = true;
+        const idxStart = getIndexFromCard(root);
+        if (idxStart === null) {
+          ev.preventDefault();
+          return;
+        }
+        dragFromIndex = idxStart;
+        try {
+          ev.dataTransfer.setData('text/plain', String(idxStart));
+          ev.dataTransfer.effectAllowed = 'move';
+        } catch (_) {
+        }
+      });
+
+      dragHandle.addEventListener('dragend', () => {
+        dragInProgress = false;
+        dragFromIndex = null;
+        clearDropTargets();
+      });
+
       return root;
     }
 
-    function renderQueue(queued) {
+    function clearDropTargets() {
+      dropInsertIndex = null;
+      if (dropIndicator && dropIndicator.parentNode) {
+        dropIndicator.parentNode.removeChild(dropIndicator);
+      }
+      dropIndicator = null;
+    }
+
+    function ensureDropIndicator() {
+      if (dropIndicator) return dropIndicator;
+      dropIndicator = document.createElement('div');
+      dropIndicator.className = 'queueInsertLine';
+      return dropIndicator;
+    }
+
+    function computeInsertIndexFromEvent(ev) {
+      const out = q('queueList');
+      const cards = Array.from(out.querySelectorAll('.queueCard'));
+      const y = ev.clientY;
+      for (let i = 0; i < cards.length; i++) {
+        const r = cards[i].getBoundingClientRect();
+        const mid = r.top + (r.height / 2);
+        if (y < mid) return i;
+      }
+      return cards.length;
+    }
+
+    function updateDropIndicator(insertIdx) {
+      const out = q('queueList');
+      const cards = Array.from(out.querySelectorAll('.queueCard'));
+      const ind = ensureDropIndicator();
+      if (insertIdx < 0) insertIdx = 0;
+      if (insertIdx > cards.length) insertIdx = cards.length;
+      if (insertIdx === cards.length) {
+        out.appendChild(ind);
+      } else {
+        out.insertBefore(ind, cards[insertIdx]);
+      }
+      dropInsertIndex = insertIdx;
+    }
+
+    function getIndexFromCard(cardEl) {
+      try {
+        const out = q('queueList');
+        const cards = Array.from(out.querySelectorAll('.queueCard'));
+        const idx = cards.indexOf(cardEl);
+        return idx >= 0 ? idx : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function renderQueue(queued, force) {
       const arr = Array.isArray(queued) ? queued : [];
       const key = JSON.stringify(arr);
-      if (key === lastQueueKey) return;
+      if (!force && key === lastQueueKey) return;
       lastQueueKey = key;
 
       const out = q('queueList');
@@ -449,11 +571,56 @@ class WebUI:
     }
 
     async function refreshQueue() {
+      if (dragInProgress || queueOpInFlight) return;
       const data = await apiJson('/api/queue');
       const st = data.queue || {};
       const paused = !!st.paused;
       q('queueStatus').textContent = paused ? 'Paused' : 'Running';
-      renderQueue((st.queued_items && st.queued_items.length) ? st.queued_items : st.queued_tracks);
+      currentQueue = (st.queued_items && st.queued_items.length) ? st.queued_items : (st.queued_tracks || []);
+      renderQueue(currentQueue);
+    }
+
+    async function moveQueueIndex(fromIndex, toIndex) {
+      if (queueOpInFlight) return;
+      if (!Array.isArray(currentQueue)) return;
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return;
+      if (fromIndex === toIndex) return;
+      if (fromIndex < 0 || fromIndex >= currentQueue.length) return;
+      if (toIndex < 0 || toIndex >= currentQueue.length) return;
+      queueOpInFlight = true;
+      try {
+        const moved = currentQueue.splice(fromIndex, 1)[0];
+        currentQueue.splice(toIndex, 0, moved);
+        renderQueue(currentQueue, true);
+        await apiJson('/api/queue/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from_index: fromIndex, to_index: toIndex })
+        });
+        await refreshQueue();
+      } finally {
+        queueOpInFlight = false;
+      }
+    }
+
+    async function deleteQueueIndex(index) {
+      if (queueOpInFlight) return;
+      if (!Array.isArray(currentQueue)) return;
+      if (!Number.isInteger(index)) return;
+      if (index < 0 || index >= currentQueue.length) return;
+      queueOpInFlight = true;
+      try {
+        currentQueue.splice(index, 1);
+        renderQueue(currentQueue, true);
+        await apiJson('/api/queue/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ index })
+        });
+        await refreshQueue();
+      } finally {
+        queueOpInFlight = false;
+      }
     }
 
     q('refreshQueueBtn').addEventListener('click', () => refreshQueue().catch(err => console.error(err)));
@@ -481,6 +648,39 @@ class WebUI:
       });
       setInterval(() => refreshQueue().catch(() => {}), 2000);
     })();
+
+    q('queueList').addEventListener('dragover', (ev) => {
+      if (!dragInProgress || queueOpInFlight) return;
+      ev.preventDefault();
+      const idx = computeInsertIndexFromEvent(ev);
+      updateDropIndicator(idx);
+    });
+
+    q('queueList').addEventListener('dragleave', (ev) => {
+      const out = q('queueList');
+      const rel = ev.relatedTarget;
+      if (rel && out.contains(rel)) return;
+      clearDropTargets();
+    });
+
+    q('queueList').addEventListener('drop', async (ev) => {
+      ev.preventDefault();
+      if (queueOpInFlight) return;
+      const fromRaw = (ev.dataTransfer && ev.dataTransfer.getData) ? ev.dataTransfer.getData('text/plain') : null;
+      const fromIndex = (fromRaw !== null && fromRaw !== '') ? Number(fromRaw) : (Number.isInteger(dragFromIndex) ? dragFromIndex : NaN);
+      const insertRaw = Number.isInteger(dropInsertIndex) ? dropInsertIndex : computeInsertIndexFromEvent(ev);
+      clearDropTargets();
+
+      if (!Number.isInteger(fromIndex)) return;
+      if (!Array.isArray(currentQueue) || currentQueue.length < 2) return;
+
+      let toIndex = insertRaw;
+      if (fromIndex < toIndex) toIndex -= 1;
+      if (toIndex < 0) toIndex = 0;
+      if (toIndex >= currentQueue.length) toIndex = currentQueue.length - 1;
+
+      await safeCall(() => moveQueueIndex(fromIndex, toIndex));
+    });
   </script>
 </body>
 </html>"""
@@ -1041,6 +1241,45 @@ class WebUI:
         ok = await self._service.resume_queue()
         return web.json_response({"ok": bool(ok)})
 
+    async def _api_queue_move(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        try:
+            from_index = int(payload.get('from_index'))
+            to_index = int(payload.get('to_index'))
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid indices"}, status=400)
+
+        ok = await self._service.move_queue_item(from_index, to_index)
+        if not ok:
+            return web.json_response({"ok": False, "error": "Failed to move queue item"}, status=400)
+        return web.json_response({"ok": True})
+
+    async def _api_queue_delete(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        try:
+            index = int(payload.get('index'))
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid index"}, status=400)
+
+        ok = await self._service.delete_queue_item(index)
+        if not ok:
+            return web.json_response({"ok": False, "error": "Failed to delete queue item"}, status=400)
+        return web.json_response({"ok": True})
+
     async def _api_devices(self, _request: web.Request) -> web.Response:
         try:
             devices = await self._service.get_devices()
@@ -1591,7 +1830,10 @@ class SongRequestService:
         if not hasattr(self.actions, 'auto_dj'):
             return {"enabled": False}
 
-        queued_tracks = list(getattr(self.actions.auto_dj, 'queued_tracks', []))
+        try:
+            queued_tracks = self.actions.auto_dj.get_queued_tracks_snapshot()
+        except Exception:
+            queued_tracks = list(getattr(self.actions.auto_dj, 'queued_tracks', []))
         playback_device_id = getattr(self.actions.auto_dj, 'playback_device', None)
         playback_device_name = getattr(self.actions.auto_dj, 'playback_device_name', None)
 
@@ -1798,6 +2040,38 @@ class SongRequestService:
         if not hasattr(self.actions, 'auto_dj'):
             return False
         return bool(self.actions.auto_dj.unpause_queue())
+
+    async def move_queue_item(self, from_index: int, to_index: int) -> bool:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return False
+        if not hasattr(self.actions, 'auto_dj'):
+            return False
+
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, self.actions.auto_dj.move_queued_track, from_index, to_index),
+                timeout=2,
+            )
+        except asyncio.TimeoutError:
+            return False
+        return bool(ok)
+
+    async def delete_queue_item(self, index: int) -> bool:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return False
+        if not hasattr(self.actions, 'auto_dj'):
+            return False
+
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, self.actions.auto_dj.delete_queued_track, index),
+                timeout=2,
+            )
+        except asyncio.TimeoutError:
+            return False
+        return bool(ok)
 
     async def get_devices(self) -> list[dict]:
         if not getattr(self.actions, 'chatdj_enabled', False):
