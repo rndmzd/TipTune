@@ -25,9 +25,22 @@ def _datas():
         if os.path.exists(src):
             items.append((src, dest))
 
+    def add_dir(rel_src_dir: str, rel_dest_dir: str):
+        src_dir = os.path.join(root, rel_src_dir)
+        if not os.path.isdir(src_dir):
+            return
+        for base, dirs, files in os.walk(src_dir):
+            dirs[:] = [d for d in dirs if d not in ('node_modules', '.git')]
+            rel_base = os.path.relpath(base, src_dir)
+            dest = os.path.join(rel_dest_dir, rel_base) if rel_base != '.' else rel_dest_dir
+            for fn in files:
+                items.append((os.path.join(base, fn), dest))
+
     add('scenes.yaml', '.')
     add('config.ini.example', '.')
-    add('webui', 'webui')
+    add_dir('webui/pages', 'webui/pages')
+    add_dir('webui/static', 'webui/static')
+    add_dir('webui/dist', 'webui/dist')
 
     return items
 
