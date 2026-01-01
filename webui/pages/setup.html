@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TipTune Setup</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="actions" style="justify-content: space-between">
+    <h1>Setup Wizard{{TITLE_SUFFIX}}</h1>
+    <div class="muted"><a href="/?dashboard=1">Dashboard</a></div>
+  </div>
+
+  <div class="card">
+    <h2>Setup status: <span class="pill">{{STATUS_TEXT}}</span></h2>
+    <div class="muted">Use the settings page to enter your settings. When you're done, mark setup as complete.</div>
+    <div class="actions">
+      <button id="openDashboardBtn" type="button">Open Settings</button>
+      <button id="finishBtn" type="button">Mark Setup Complete</button>
+    </div>
+    <div id="status" class="muted"></div>
+  </div>
+
+  <script src="/static/setup.js"></script>
+</body>
+</html>

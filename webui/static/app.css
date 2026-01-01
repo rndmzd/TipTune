@@ -1,0 +1,54 @@
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
+*, *::before, *::after { box-sizing: border-box; }
+a { color: #8ab4ff; }
+
+.row { display: flex; gap: 16px; flex-wrap: wrap; }
+.card { background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }
+
+h1 { margin: 0 0 12px 0; font-size: 22px; }
+h2 { margin: 0 0 12px 0; font-size: 16px; }
+
+label { display: block; font-size: 12px; opacity: 0.9; margin-top: 10px; }
+input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
+
+button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
+button:hover { background: #23366f; }
+
+.pill { display: inline-block; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: #0e1530; font-size: 12px; }
+.muted { opacity: 0.8; font-size: 12px; }
+.actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.actions + .muted { margin-top: 8px; }
+
+.queueOut { margin-top: 10px; max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.queueCard { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
+.queueCardNowPlaying { border-color: #8ab4ff; box-shadow: 0 0 0 1px rgba(138,180,255,0.35); }
+.queueCardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.queueCardHeaderLeft { display: flex; gap: 10px; align-items: baseline; }
+.queueCardTitle { font-weight: 650; font-size: 13px; }
+.queueCardMeta { opacity: 0.85; font-size: 12px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.queueCardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.queueMessage { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+.queueTitleMain { font-weight: 650; font-size: 13px; }
+.queueTitleSub { opacity: 0.85; font-size: 12px; }
+.queueArt { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; border: 1px solid #2a3a66; }
+.queueDragHandle { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 6px; border: 1px solid #2a3a66; background: #0b1020; cursor: grab; user-select: none; }
+.queueDragHandle:active { cursor: grabbing; }
+.queueIconBtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
+.queueIconBtn:hover { background: #132048; }
+.queueDropTarget { outline: 2px dashed #8ab4ff; outline-offset: 2px; }
+.queueInsertLine { height: 0; border-top: 2px solid #8ab4ff; border-radius: 999px; }
+
+details { margin-top: 8px; }
+summary { cursor: pointer; user-select: none; opacity: 0.9; }
+
+.page-events .out { max-height: 70vh; overflow: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.page-events .row { gap: 12px; align-items: center; }
+.page-events .card { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; min-width: unset; flex: unset; }
+.page-events .cardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.page-events .cardTitle { font-weight: 650; font-size: 13px; }
+.page-events .cardMeta { opacity: 0.85; font-size: 12px; }
+.page-events .pill { padding: 2px 8px; background: rgba(35, 54, 111, 0.35); }
+.page-events .pillStrong { border-color: #4b69c8; background: rgba(74, 105, 200, 0.22); }
+.page-events .cardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.page-events .message { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+.page-events pre { white-space: pre-wrap; word-break: break-word; background: #0b1020; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; overflow: auto; }
