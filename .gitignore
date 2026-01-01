@@ -1,6 +1,11 @@
 **/config.ini
 node_modules/
 
+src-tauri/binaries
+src-tauri/target
+src-tauri/Cargo.lock
+src-tauri/gen
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
