@@ -15,6 +15,39 @@ Turn tips into queued music requests across multiple players.
 
 `config.ini` is intentionally ignored by git (see `.gitignore`). Do not commit or share it.
 
+## Packaging (PyInstaller)
+
+- Build dependencies:
+
+  ```bash
+  pip install -r requirements.txt -r requirements-build.txt
+  ```
+
+- Build executable:
+
+  ```bash
+  pyinstaller TipTune.spec --clean
+  ```
+
+The built executable is written to `dist/TipTune.exe`.
+
+### Packaged runtime files
+
+When running as a packaged exe, TipTune looks for `config.ini` in this order:
+
+- **Portable config**: `config.ini` next to `TipTune.exe` (if present)
+- **User config**: `%APPDATA%\TipTune\config.ini`
+
+If `config.ini` does not exist yet, TipTune will seed it from the bundled `config.ini.example` on first write.
+
+Spotipy OAuth tokens are stored in a writable cache file named `.cache` alongside the selected `config.ini`.
+
+### Environment overrides
+
+- `TIPTUNE_CONFIG`: full path to the `config.ini` file
+- `TIPTUNE_CACHE_DIR`: directory for TipTune cache usage (if needed)
+- `TIPTUNE_SPOTIPY_CACHE`: full path to the Spotipy token cache file (defaults to `<config_dir>\.cache`)
+
 ## Configuration (`config.ini`)
 
 TipTune reads settings from `config.ini` (same folder as `app.py`). The following sections are used by the code:
