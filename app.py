@@ -214,13 +214,22 @@ class WebUI:
         self._site: Optional[web.TCPSite] = None
 
         self._webui_root = get_resource_path('webui')
-        self._app.router.add_static('/static', str(self._webui_root / 'static'), show_index=False)
+        self._dist_root = self._webui_root / 'dist'
+        self._spa_index = self._dist_root / 'index.html'
+        self._use_spa = self._spa_index.exists()
+
+        if self._use_spa:
+            assets_dir = self._dist_root / 'assets'
+            if assets_dir.exists():
+                self._app.router.add_static('/assets', str(assets_dir), show_index=False)
+        else:
+            self._app.router.add_static('/static', str(self._webui_root / 'static'), show_index=False)
 
         self._app.add_routes([
-            web.get('/', self._page_dashboard),
-            web.get('/settings', self._page_settings),
-            web.get('/setup', self._page_setup),
-            web.get('/events', self._page_events),
+            web.get('/', self._page_app),
+            web.get('/settings', self._page_app),
+            web.get('/setup', self._page_app),
+            web.get('/events', self._page_app),
             web.get('/api/queue', self._api_queue),
             web.post('/api/queue/pause', self._api_pause),
             web.post('/api/queue/resume', self._api_resume),
@@ -233,6 +242,11 @@ class WebUI:
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
         ])
+
+        if self._use_spa:
+            self._app.add_routes([
+                web.get('/{path:.*}', self._page_app),
+            ])
 
     async def start(self) -> None:
         self._runner = web.AppRunner(self._app)
@@ -251,33 +265,33 @@ class WebUI:
         return p.read_text(encoding='utf-8', errors='replace')
 
 
-    async def _page_dashboard(self, request: web.Request) -> web.Response:
+    async def _page_app(self, request: web.Request) -> web.Response:
         force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
-        if not force_dashboard and not _is_setup_complete():
+        if request.path != '/setup' and not force_dashboard and not _is_setup_complete():
             raise web.HTTPFound('/setup')
+
+        if self._use_spa and self._spa_index.exists():
+            html = self._spa_index.read_text(encoding='utf-8', errors='replace')
+            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
+
+        if request.path == '/setup':
+            rerun = _as_bool(request.query.get('rerun'), default=False)
+            is_complete = _is_setup_complete()
+            status_text = "complete" if is_complete else "incomplete"
+            title_suffix = " (rerun)" if rerun else ""
+            html = self._read_page('setup.html')
+            html = html.replace('{{STATUS_TEXT}}', status_text).replace('{{TITLE_SUFFIX}}', title_suffix)
+            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
+
+        if request.path == '/settings':
+            html = self._read_page('settings.html')
+            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
+
+        if request.path == '/events':
+            html = self._read_page('events.html')
+            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
         html = self._read_page('dashboard.html')
-        return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
-
-    async def _page_settings(self, request: web.Request) -> web.Response:
-        force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
-        if not force_dashboard and not _is_setup_complete():
-            raise web.HTTPFound('/setup')
-
-        html = self._read_page('settings.html')
-        return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
-
-    async def _page_setup(self, request: web.Request) -> web.Response:
-        rerun = _as_bool(request.query.get('rerun'), default=False)
-        is_complete = _is_setup_complete()
-        status_text = "complete" if is_complete else "incomplete"
-        title_suffix = " (rerun)" if rerun else ""
-        html = self._read_page('setup.html')
-        html = html.replace('{{STATUS_TEXT}}', status_text).replace('{{TITLE_SUFFIX}}', title_suffix)
-        return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
-
-    async def _page_events(self, _request: web.Request) -> web.Response:
-        html = self._read_page('events.html')
         return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
     async def _api_queue(self, _request: web.Request) -> web.Response:
