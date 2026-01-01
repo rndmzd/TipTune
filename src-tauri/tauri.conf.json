@@ -5,13 +5,13 @@
   "identifier": "com.tiptune.app",
   "build": {
     "devUrl": "http://127.0.0.1:8765",
-    "frontendDist": ["../webui/pages/dashboard.html"],
+    "frontendDist": ["../webui/dist"],
     "beforeDevCommand": {
       "script": "node ./scripts/prepare-sidecar.mjs",
       "wait": true
     },
-    "beforeBuildCommand": "node ./scripts/prepare-sidecar.mjs",
-    "beforeBundleCommand": "node ./scripts/prepare-sidecar.mjs"
+    "beforeBuildCommand": "node ./scripts/prepare-sidecar.mjs && npm --prefix ../webui run build",
+    "beforeBundleCommand": "node ./scripts/prepare-sidecar.mjs && npm --prefix ../webui run build"
   },
   "app": {
     "windows": [
