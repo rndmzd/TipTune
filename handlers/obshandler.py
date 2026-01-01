@@ -1,10 +1,10 @@
 import asyncio
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import simpleobsws
 import yaml
 
+from utils.runtime_paths import get_resource_path
 from utils.structured_logging import get_structured_logger
 
 logger = get_structured_logger('tiptune.handlers.obshandler')
@@ -50,7 +50,7 @@ class OBSHandler:
     def _load_scenes(self) -> Optional[Dict]:
         """Load scene definitions from YAML file."""
         try:
-            scenes_file = Path(__file__).parent.parent / 'scenes.yaml'
+            scenes_file = get_resource_path('scenes.yaml')
             with open(scenes_file, 'r') as f:
                 config = yaml.safe_load(f)
                 logger.debug("obs.scenes.load",
