@@ -7,7 +7,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Tuple
 
 import httpx
 from aiohttp import web
@@ -15,6 +15,7 @@ from aiohttp import web
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
+from utils.runtime_paths import ensure_parent_dir, get_config_path, get_resource_path
 from utils.structured_logging import get_structured_logger
 
 try:
@@ -22,13 +23,65 @@ try:
 except Exception:
     pass
 
-config_path = Path(__file__).resolve().parent / 'config.ini'
+config_path = get_config_path()
+ensure_parent_dir(config_path)
 
 config = configparser.ConfigParser()
 config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+
+
+def _get_web_runtime_overrides() -> Tuple[Optional[str], Optional[int]]:
+    host_env = os.getenv('TIPTUNE_WEB_HOST')
+    host: Optional[str]
+    if isinstance(host_env, str) and host_env.strip():
+        host = host_env.strip()
+    else:
+        host = None
+
+    port: Optional[int] = None
+    port_env = os.getenv('TIPTUNE_WEB_PORT')
+    if isinstance(port_env, str) and port_env.strip():
+        try:
+            port_val = int(port_env.strip())
+            if 0 <= port_val <= 65535:
+                port = port_val
+        except Exception:
+            port = None
+
+    argv: List[str] = list(sys.argv[1:])
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg.startswith('--web-host='):
+            value = arg.split('=', 1)[1].strip()
+            host = value if value else None
+        elif arg == '--web-host' and i + 1 < len(argv):
+            value = argv[i + 1].strip()
+            host = value if value else None
+            i += 1
+        elif arg.startswith('--web-port='):
+            value = arg.split('=', 1)[1].strip()
+            try:
+                port_val = int(value)
+                if 0 <= port_val <= 65535:
+                    port = port_val
+            except Exception:
+                pass
+        elif arg == '--web-port' and i + 1 < len(argv):
+            value = argv[i + 1].strip()
+            try:
+                port_val = int(value)
+                if 0 <= port_val <= 65535:
+                    port = port_val
+            except Exception:
+                pass
+            i += 1
+        i += 1
+
+    return host, port
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -71,9 +124,12 @@ def _is_setup_complete() -> bool:
 def _update_ini_file(path: Path, updates: Dict[str, Dict[str, str]]) -> None:
     if not path.exists():
         example_path = path.with_name(path.name + '.example')
+        bundled_example_path = get_resource_path('config.ini.example')
         try:
             if example_path.exists():
                 path.write_text(example_path.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
+            elif bundled_example_path.exists():
+                path.write_text(bundled_example_path.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
             else:
                 path.write_text('', encoding='utf-8')
         except Exception:
@@ -157,6 +213,9 @@ class WebUI:
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
 
+        self._webui_root = get_resource_path('webui')
+        self._app.router.add_static('/static', str(self._webui_root / 'static'), show_index=False)
+
         self._app.add_routes([
             web.get('/', self._page_dashboard),
             web.get('/settings', self._page_settings),
@@ -187,554 +246,17 @@ class WebUI:
         self._runner = None
         self._site = None
 
+    def _read_page(self, name: str) -> str:
+        p = self._webui_root / 'pages' / name
+        return p.read_text(encoding='utf-8', errors='replace')
+
+
     async def _page_dashboard(self, request: web.Request) -> web.Response:
         force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
         if not force_dashboard and not _is_setup_complete():
             raise web.HTTPFound('/setup')
 
-        html = """<!doctype html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-  <title>TipTune</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
-    *, *::before, *::after { box-sizing: border-box; }
-    a { color: #8ab4ff; }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
-    .card { background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }
-    h1 { margin: 0 0 12px 0; font-size: 22px; }
-    h2 { margin: 0 0 12px 0; font-size: 16px; }
-    label { display: block; font-size: 12px; opacity: 0.9; margin-top: 10px; }
-    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
-    button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
-    button:hover { background: #23366f; }
-    .pill { display: inline-block; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: #0e1530; font-size: 12px; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #0e1530; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; max-height: 240px; overflow: auto; }
-    .muted { opacity: 0.8; font-size: 12px; }
-    .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-    .actions + .muted { margin-top: 8px; }
-    .queueOut { margin-top: 10px; max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
-    .queueCard { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
-    .queueCardNowPlaying { border-color: #8ab4ff; box-shadow: 0 0 0 1px rgba(138,180,255,0.35); }
-    .queueCardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
-    .queueCardHeaderLeft { display: flex; gap: 10px; align-items: baseline; }
-    .queueCardTitle { font-weight: 650; font-size: 13px; }
-    .queueCardMeta { opacity: 0.85; font-size: 12px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
-    .queueCardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-    .queueMessage { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
-    .queueTitleMain { font-weight: 650; font-size: 13px; }
-    .queueTitleSub { opacity: 0.85; font-size: 12px; }
-    .queueArt { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; border: 1px solid #2a3a66; }
-    .queueDragHandle { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 6px; border: 1px solid #2a3a66; background: #0b1020; cursor: grab; user-select: none; }
-    .queueDragHandle:active { cursor: grabbing; }
-    .queueIconBtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
-    .queueIconBtn:hover { background: #132048; }
-    .queueDropTarget { outline: 2px dashed #8ab4ff; outline-offset: 2px; }
-    .queueInsertLine { height: 0; border-top: 2px solid #8ab4ff; border-radius: 999px; }
-    details { margin-top: 8px; }
-    summary { cursor: pointer; user-select: none; opacity: 0.9; }
-  </style>
-</head>
-<body>
-  <div class=\"actions\" style=\"justify-content: space-between\"> 
-    <h1>TipTune</h1>
-    <div style=\"display:flex; gap:10px; align-items:center;\">
-      <button id=\"setupBtn\" type=\"button\">Setup Wizard</button>
-      <button id=\"settingsBtn\" type=\"button\">Settings</button>
-      <div class=\"muted\"><a href=\"/events\">Events</a></div>
-    </div>
-  </div>
-
-  <div class=\"row\">
-    <div class=\"card\">
-      <h2>Queue</h2>
-      <div class=\"actions\">
-        <span id=\"queueStatus\" class=\"pill\">Loading...</span>
-        <button id=\"pauseBtn\" type=\"button\">Pause</button>
-        <button id=\"resumeBtn\" type=\"button\">Resume</button>
-        <button id=\"refreshQueueBtn\" type=\"button\">Refresh</button>
-      </div>
-      <label>Now playing</label>
-      <div id=\"nowPlaying\" class=\"queueOut\">(loading)</div>
-      <label>Up next</label>
-      <div id=\"queueList\" class=\"queueOut\">(loading)</div>
-    </div>
-  </div>
-
-  <script>
-    function q(id) { return document.getElementById(id); }
-
-    async function apiJson(path, opts, timeoutMs) {
-      const ctrl = new AbortController();
-      const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 5000;
-      const tmr = setTimeout(() => ctrl.abort(), ms);
-      try {
-        const o = opts || {};
-        const r = await fetch(path, { ...o, signal: ctrl.signal });
-        const t = await r.text();
-        let j;
-        try { j = JSON.parse(t); } catch { j = { ok: false, error: t }; }
-        if (!r.ok) { throw new Error(j.error || ('HTTP ' + r.status)); }
-        if (j && j.ok === false) { throw new Error(j.error || 'Request failed'); }
-        return j;
-      } finally {
-        clearTimeout(tmr);
-      }
-    }
-
-    let lastQueueKey = null;
-    let lastNowPlayingKey = null;
-    let currentQueue = [];
-    let dragInProgress = false;
-    let queueOpInFlight = false;
-    let dragFromIndex = null;
-    let dropIndicator = null;
-    let dropInsertIndex = null;
-
-    function parseSpotifyTrackId(v) {
-      try {
-        const s = String(v || '');
-        let m = s.match(/^spotify:track:([a-zA-Z0-9]+)$/);
-        if (m) return m[1];
-        m = s.match(/open\\.spotify\\.com\\/track\\/([a-zA-Z0-9]+)/);
-        if (m) return m[1];
-        return null;
-      } catch (_) {
-        return null;
-      }
-    }
-
-    function truncateMiddle(s, maxLen) {
-      const str = String(s || '');
-      const n = (typeof maxLen === 'number' && maxLen > 0) ? maxLen : 40;
-      if (str.length <= n) return str;
-      const left = Math.max(1, Math.floor((n - 1) / 2));
-      const right = Math.max(1, n - 1 - left);
-      return str.slice(0, left) + '…' + str.slice(str.length - right);
-    }
-
-    function toDurationLabel(ms) {
-      try {
-        const n = Number(ms);
-        if (!Number.isFinite(n) || n <= 0) return null;
-        const s = Math.floor(n / 1000);
-        const m = Math.floor(s / 60);
-        const r = s % 60;
-        return `${m}:${String(r).padStart(2, '0')}`;
-      } catch (_) {
-        return null;
-      }
-    }
-
-    function makeQueueCard(item, idx, opts) {
-      const o = (opts && typeof opts === 'object') ? opts : {};
-      const allowDrag = (o.allowDrag !== false);
-      const allowDelete = (o.allowDelete !== false);
-      const indexLabel = (typeof o.indexLabel === 'string' && o.indexLabel.trim() !== '') ? o.indexLabel : `#${idx + 1}`;
-      const extraClass = (typeof o.extraClass === 'string' && o.extraClass.trim() !== '') ? o.extraClass : null;
-      const isObj = item && typeof item === 'object' && !Array.isArray(item);
-      const uri = isObj ? String(item.uri || '') : String(item || '');
-      const trackId = isObj ? (item.track_id ? String(item.track_id) : null) : parseSpotifyTrackId(uri);
-      const name = isObj && typeof item.name === 'string' ? item.name : null;
-      const artists = isObj && Array.isArray(item.artists) ? item.artists.filter(x => typeof x === 'string' && x.trim() !== '') : [];
-      const album = isObj && typeof item.album === 'string' && item.album.trim() !== '' ? item.album : null;
-      const duration = isObj ? toDurationLabel(item.duration_ms) : null;
-      const explicit = isObj ? !!item.explicit : false;
-      const spotifyUrl = isObj && typeof item.spotify_url === 'string' && item.spotify_url.trim() !== ''
-        ? item.spotify_url
-        : (trackId ? `https://open.spotify.com/track/${trackId}` : null);
-      const artUrl = isObj && typeof item.album_image_url === 'string' && item.album_image_url.trim() !== '' ? item.album_image_url : null;
-
-      const root = document.createElement('div');
-      root.className = extraClass ? ('queueCard ' + extraClass) : 'queueCard';
-      root.dataset.index = String(idx);
-
-      const header = document.createElement('div');
-      header.className = 'queueCardHeader';
-
-      const leftWrap = document.createElement('div');
-      leftWrap.className = 'queueCardHeaderLeft';
-
-      const dragHandle = document.createElement('div');
-      dragHandle.className = 'queueDragHandle';
-      dragHandle.textContent = '⠿';
-      dragHandle.setAttribute('draggable', allowDrag ? 'true' : 'false');
-      if (!allowDrag) {
-        dragHandle.style.opacity = '0.55';
-        dragHandle.style.cursor = 'default';
-      }
-
-      const left = document.createElement('div');
-      left.className = 'queueCardTitle';
-      left.textContent = indexLabel;
-      left.dataset.role = 'queueIndexLabel';
-
-      leftWrap.appendChild(dragHandle);
-      leftWrap.appendChild(left);
-
-      const right = document.createElement('div');
-      right.className = 'queueCardMeta';
-
-      if (allowDelete) {
-        const delBtn = document.createElement('button');
-        delBtn.className = 'queueIconBtn';
-        delBtn.type = 'button';
-        delBtn.title = 'Remove from queue';
-        delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 6v-2.5c0-.8.7-1.5 1.5-1.5h5C15.8 2 16.5 2.7 16.5 3.5V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 6l1 16.5c.1.9.8 1.5 1.7 1.5h5.6c.9 0 1.6-.6 1.7-1.5l1-16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
-        delBtn.addEventListener('click', async (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const label = name ? name : (trackId ? `spotify:track:${trackId}` : (uri || '(unknown)'));
-          if (!confirm('Remove from queue?\\n\\n' + label)) return;
-          const idxNow = getIndexFromCard(root);
-          if (idxNow === null) return;
-          await safeCall(() => deleteQueueIndex(idxNow));
-        });
-        right.appendChild(delBtn);
-      }
-
-      if (spotifyUrl) {
-        const a = document.createElement('a');
-        a.href = spotifyUrl;
-        a.target = '_blank';
-        a.rel = 'noreferrer noopener';
-        a.textContent = 'Open in Spotify';
-        right.appendChild(a);
-      }
-
-      if (trackId) {
-        const idPill = document.createElement('span');
-        idPill.className = 'pill';
-        idPill.style.marginLeft = '8px';
-        idPill.textContent = `track: ${truncateMiddle(trackId, 18)}`;
-        right.appendChild(idPill);
-      }
-
-      header.appendChild(leftWrap);
-      header.appendChild(right);
-      root.appendChild(header);
-
-      const body = document.createElement('div');
-      body.className = 'queueCardBody';
-
-      const titleRow = document.createElement('div');
-      titleRow.style.display = 'flex';
-      titleRow.style.gap = '10px';
-      titleRow.style.alignItems = 'center';
-
-      if (artUrl) {
-        const img = document.createElement('img');
-        img.className = 'queueArt';
-        img.src = artUrl;
-        img.alt = '';
-        titleRow.appendChild(img);
-      }
-
-      const titleWrap = document.createElement('div');
-      titleWrap.style.flex = '1';
-      const main = document.createElement('div');
-      main.className = 'queueTitleMain';
-      main.textContent = name ? name : (trackId ? `spotify:track:${trackId}` : (uri || '(unknown)'));
-      titleWrap.appendChild(main);
-
-      const subParts = [];
-      if (artists.length) subParts.push(artists.join(', '));
-      if (album) subParts.push(album);
-      if (subParts.length) {
-        const sub = document.createElement('div');
-        sub.className = 'queueTitleSub';
-        sub.textContent = subParts.join(' · ');
-        titleWrap.appendChild(sub);
-      }
-
-      titleRow.appendChild(titleWrap);
-      body.appendChild(titleRow);
-
-      const pills = document.createElement('div');
-      pills.style.display = 'flex';
-      pills.style.gap = '8px';
-      pills.style.flexWrap = 'wrap';
-
-      if (duration) {
-        const p = document.createElement('span');
-        p.className = 'pill';
-        p.textContent = duration;
-        pills.appendChild(p);
-      }
-      if (explicit) {
-        const p = document.createElement('span');
-        p.className = 'pill';
-        p.textContent = 'Explicit';
-        pills.appendChild(p);
-      }
-      if (pills.childNodes.length) body.appendChild(pills);
-
-      const msg = document.createElement('div');
-      msg.className = 'queueMessage';
-      msg.textContent = uri;
-      body.appendChild(msg);
-
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = 'Details';
-      details.appendChild(summary);
-      const pre = document.createElement('pre');
-      pre.textContent = isObj ? JSON.stringify(item, null, 2) : uri;
-      details.appendChild(pre);
-      body.appendChild(details);
-
-      root.appendChild(body);
-
-      if (allowDrag) {
-        dragHandle.addEventListener('dragstart', (ev) => {
-          if (queueOpInFlight) {
-            ev.preventDefault();
-            return;
-          }
-          dragInProgress = true;
-          const idxStart = getIndexFromCard(root);
-          if (idxStart === null) {
-            ev.preventDefault();
-            return;
-          }
-          dragFromIndex = idxStart;
-          try {
-            ev.dataTransfer.setData('text/plain', String(idxStart));
-            ev.dataTransfer.effectAllowed = 'move';
-          } catch (_) {
-          }
-        });
-
-        dragHandle.addEventListener('dragend', () => {
-          dragInProgress = false;
-          dragFromIndex = null;
-          clearDropTargets();
-        });
-      }
-
-      return root;
-    }
-
-    function clearDropTargets() {
-      dropInsertIndex = null;
-      if (dropIndicator && dropIndicator.parentNode) {
-        dropIndicator.parentNode.removeChild(dropIndicator);
-      }
-      dropIndicator = null;
-    }
-
-    function ensureDropIndicator() {
-      if (dropIndicator) return dropIndicator;
-      dropIndicator = document.createElement('div');
-      dropIndicator.className = 'queueInsertLine';
-      return dropIndicator;
-    }
-
-    function computeInsertIndexFromEvent(ev) {
-      const out = q('queueList');
-      const cards = Array.from(out.querySelectorAll('.queueCard'));
-      const y = ev.clientY;
-      for (let i = 0; i < cards.length; i++) {
-        const r = cards[i].getBoundingClientRect();
-        const mid = r.top + (r.height / 2);
-        if (y < mid) return i;
-      }
-      return cards.length;
-    }
-
-    function updateDropIndicator(insertIdx) {
-      const out = q('queueList');
-      const cards = Array.from(out.querySelectorAll('.queueCard'));
-      const ind = ensureDropIndicator();
-      if (insertIdx < 0) insertIdx = 0;
-      if (insertIdx > cards.length) insertIdx = cards.length;
-      if (insertIdx === cards.length) {
-        out.appendChild(ind);
-      } else {
-        out.insertBefore(ind, cards[insertIdx]);
-      }
-      dropInsertIndex = insertIdx;
-    }
-
-    function getIndexFromCard(cardEl) {
-      try {
-        const out = q('queueList');
-        const cards = Array.from(out.querySelectorAll('.queueCard'));
-        const idx = cards.indexOf(cardEl);
-        return idx >= 0 ? idx : null;
-      } catch (_) {
-        return null;
-      }
-    }
-
-    function renderQueue(queued, force) {
-      const arr = Array.isArray(queued) ? queued : [];
-      const key = JSON.stringify(arr);
-      if (!force && key === lastQueueKey) return;
-      lastQueueKey = key;
-
-      const out = q('queueList');
-      out.innerHTML = '';
-      if (!arr.length) {
-        out.textContent = '(empty)';
-        return;
-      }
-      for (let i = 0; i < arr.length; i++) {
-        out.appendChild(makeQueueCard(arr[i], i));
-      }
-    }
-
-    function renderNowPlaying(item, force) {
-      const key = JSON.stringify(item || null);
-      if (!force && key === lastNowPlayingKey) return;
-      lastNowPlayingKey = key;
-
-      const out = q('nowPlaying');
-      out.innerHTML = '';
-      if (!item) {
-        out.textContent = '(none)';
-        return;
-      }
-
-      out.appendChild(makeQueueCard(item, 0, {
-        allowDrag: false,
-        allowDelete: false,
-        indexLabel: 'Now',
-        extraClass: 'queueCardNowPlaying'
-      }));
-    }
-
-    async function refreshQueue(opts) {
-      const force = !!(opts && opts.force);
-      const allowDuringOp = !!(opts && opts.allowDuringOp);
-      const allowDuringDrag = !!(opts && opts.allowDuringDrag);
-      if ((dragInProgress && !allowDuringDrag) || (queueOpInFlight && !allowDuringOp)) return;
-      const data = await apiJson('/api/queue');
-      const st = data.queue || {};
-      const paused = !!st.paused;
-      q('queueStatus').textContent = paused ? 'Paused' : 'Running';
-      const nowPlaying = (st.now_playing_item && typeof st.now_playing_item === 'object')
-        ? st.now_playing_item
-        : (st.now_playing_track ? st.now_playing_track : null);
-      currentQueue = (st.queued_items && st.queued_items.length) ? st.queued_items : (st.queued_tracks || []);
-      renderNowPlaying(nowPlaying, force);
-      renderQueue(currentQueue, force);
-    }
-
-    async function moveQueueIndex(fromIndex, toIndex) {
-      if (queueOpInFlight) return;
-      if (!Array.isArray(currentQueue)) return;
-      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return;
-      if (fromIndex === toIndex) return;
-      if (fromIndex < 0 || fromIndex >= currentQueue.length) return;
-      if (toIndex < 0 || toIndex >= currentQueue.length) return;
-      queueOpInFlight = true;
-      let opErr = null;
-      try {
-        const moved = currentQueue.splice(fromIndex, 1)[0];
-        currentQueue.splice(toIndex, 0, moved);
-        renderQueue(currentQueue, true);
-        await apiJson('/api/queue/move', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from_index: fromIndex, to_index: toIndex })
-        });
-      } catch (e) {
-        opErr = e;
-      } finally {
-        await refreshQueue({ allowDuringOp: true, allowDuringDrag: true, force: true }).catch(() => {});
-        queueOpInFlight = false;
-      }
-      if (opErr) throw opErr;
-    }
-
-    async function deleteQueueIndex(index) {
-      if (queueOpInFlight) return;
-      if (!Array.isArray(currentQueue)) return;
-      if (!Number.isInteger(index)) return;
-      if (index < 0 || index >= currentQueue.length) return;
-      queueOpInFlight = true;
-      let opErr = null;
-      try {
-        currentQueue.splice(index, 1);
-        renderQueue(currentQueue, true);
-        await apiJson('/api/queue/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ index })
-        });
-      } catch (e) {
-        opErr = e;
-      } finally {
-        await refreshQueue({ allowDuringOp: true, allowDuringDrag: true, force: true }).catch(() => {});
-        queueOpInFlight = false;
-      }
-      if (opErr) throw opErr;
-    }
-
-    q('refreshQueueBtn').addEventListener('click', () => refreshQueue().catch(err => console.error(err)));
-    q('setupBtn').addEventListener('click', () => { window.location.href = '/setup?rerun=1'; });
-    q('settingsBtn').addEventListener('click', () => {
-      const isForced = (new URLSearchParams(window.location.search).get('dashboard') === '1');
-      window.location.href = isForced ? '/settings?dashboard=1' : '/settings';
-    });
-    q('pauseBtn').addEventListener('click', async () => { await apiJson('/api/queue/pause', { method: 'POST' }); await refreshQueue(); });
-    q('resumeBtn').addEventListener('click', async () => { await apiJson('/api/queue/resume', { method: 'POST' }); await refreshQueue(); });
-
-    async function safeCall(fn, onErr) {
-      try {
-        await fn();
-      } catch (e) {
-        console.error(e);
-        if (onErr) onErr(e);
-      }
-    }
-
-    (async () => {
-      await safeCall(refreshQueue, (e) => {
-        q('queueStatus').textContent = 'Error';
-        q('queueList').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
-      });
-      setInterval(() => refreshQueue().catch(() => {}), 2000);
-    })();
-
-    q('queueList').addEventListener('dragover', (ev) => {
-      if (!dragInProgress || queueOpInFlight) return;
-      ev.preventDefault();
-      const idx = computeInsertIndexFromEvent(ev);
-      updateDropIndicator(idx);
-    });
-
-    q('queueList').addEventListener('dragleave', (ev) => {
-      const out = q('queueList');
-      const rel = ev.relatedTarget;
-      if (rel && out.contains(rel)) return;
-      clearDropTargets();
-    });
-
-    q('queueList').addEventListener('drop', async (ev) => {
-      ev.preventDefault();
-      if (queueOpInFlight) return;
-      const fromRaw = (ev.dataTransfer && ev.dataTransfer.getData) ? ev.dataTransfer.getData('text/plain') : null;
-      const fromIndex = (fromRaw !== null && fromRaw !== '') ? Number(fromRaw) : (Number.isInteger(dragFromIndex) ? dragFromIndex : NaN);
-      const insertRaw = Number.isInteger(dropInsertIndex) ? dropInsertIndex : computeInsertIndexFromEvent(ev);
-      clearDropTargets();
-
-      if (!Number.isInteger(fromIndex)) return;
-      if (!Array.isArray(currentQueue) || currentQueue.length < 2) return;
-
-      let toIndex = insertRaw;
-      if (fromIndex < toIndex) toIndex -= 1;
-      if (toIndex < 0) toIndex = 0;
-      if (toIndex >= currentQueue.length) toIndex = currentQueue.length - 1;
-
-      await safeCall(() => moveQueueIndex(fromIndex, toIndex));
-    });
-  </script>
-</body>
-</html>"""
+        html = self._read_page('dashboard.html')
         return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
     async def _page_settings(self, request: web.Request) -> web.Response:
@@ -742,239 +264,7 @@ class WebUI:
         if not force_dashboard and not _is_setup_complete():
             raise web.HTTPFound('/setup')
 
-        html = """<!doctype html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-  <title>TipTune Settings</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
-    *, *::before, *::after { box-sizing: border-box; }
-    a { color: #8ab4ff; }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
-    .card { background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }
-    h1 { margin: 0 0 12px 0; font-size: 22px; }
-    h2 { margin: 0 0 12px 0; font-size: 16px; }
-    label { display: block; font-size: 12px; opacity: 0.9; margin-top: 10px; }
-    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
-    button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
-    button:hover { background: #23366f; }
-    .muted { opacity: 0.8; font-size: 12px; }
-    .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  </style>
-</head>
-<body>
-  <div class=\"actions\" style=\"justify-content: space-between\"> 
-    <h1>Settings</h1>
-    <div style=\"display:flex; gap:10px; align-items:center;\">
-      <button id=\"dashboardBtn\" type=\"button\">Dashboard</button>
-      <button id=\"setupBtn\" type=\"button\">Setup Wizard</button>
-      <div class=\"muted\"><a href=\"/events\">Events</a></div>
-    </div>
-  </div>
-
-  <div class=\"row\">
-    <div class=\"card\">
-      <h2>Playback Device</h2>
-      <div class=\"muted\" id=\"currentDevice\">Loading...</div>
-      <label for=\"deviceSelect\">Available devices</label>
-      <select id=\"deviceSelect\"></select>
-      <div class=\"actions\">
-        <button id=\"refreshDevicesBtn\" type=\"button\">Refresh</button>
-        <button id=\"applyDeviceBtn\" type=\"button\">Apply + Save</button>
-      </div>
-    </div>
-  </div>
-
-  <div class=\"card\" style=\"margin-top: 16px\">
-    <h2>Settings</h2>
-    <div class=\"muted\">Secret fields are not shown. Leave secret fields blank to keep the existing value.</div>
-    <div class=\"row\" style=\"margin-top: 8px\">
-      <div style=\"flex: 1; min-width: 320px\">
-        <label>Events API URL (secret)</label>
-        <input id=\"cfg_events_url\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>Events API max_requests_per_minute</label>
-        <input id=\"cfg_events_rpm\" type=\"text\" />
-        <label>OpenAI API key (secret)</label>
-        <input id=\"cfg_openai_key\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>OpenAI model</label>
-        <input id=\"cfg_openai_model\" type=\"text\" />
-      </div>
-      <div style=\"flex: 1; min-width: 320px\">
-        <label>Spotify client_id</label>
-        <input id=\"cfg_spotify_client_id\" type=\"text\" />
-        <label>Spotify client_secret (secret)</label>
-        <input id=\"cfg_spotify_client_secret\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>Spotify redirect_url</label>
-        <input id=\"cfg_spotify_redirect_url\" type=\"text\" />
-        <label>OBS enabled</label>
-        <select id=\"cfg_obs_enabled\">
-          <option value=\"true\">true</option>
-          <option value=\"false\">false</option>
-        </select>
-      </div>
-      <div style=\"flex: 1; min-width: 320px\">
-        <label>Search google_api_key (secret)</label>
-        <input id=\"cfg_google_key\" type=\"password\" placeholder=\"(leave blank to keep)\" />
-        <label>Search google_cx</label>
-        <input id=\"cfg_google_cx\" type=\"text\" />
-        <label>General song_cost</label>
-        <input id=\"cfg_song_cost\" type=\"text\" />
-        <label>General skip_song_cost</label>
-        <input id=\"cfg_skip_cost\" type=\"text\" />
-        <label>General request_overlay_duration</label>
-        <input id=\"cfg_overlay_dur\" type=\"text\" />
-      </div>
-    </div>
-    <div class=\"actions\">
-      <button id=\"saveConfigBtn\" type=\"button\">Save Settings</button>
-      <span id=\"saveConfigStatus\" class=\"muted\"></span>
-    </div>
-  </div>
-
-  <script>
-    function q(id) { return document.getElementById(id); }
-
-    async function apiJson(path, opts, timeoutMs) {
-      const ctrl = new AbortController();
-      const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 5000;
-      const tmr = setTimeout(() => ctrl.abort(), ms);
-      try {
-        const o = opts || {};
-        const r = await fetch(path, { ...o, signal: ctrl.signal });
-        const t = await r.text();
-        let j;
-        try { j = JSON.parse(t); } catch { j = { ok: false, error: t }; }
-        if (!r.ok) { throw new Error(j.error || ('HTTP ' + r.status)); }
-        if (j && j.ok === false) { throw new Error(j.error || 'Request failed'); }
-        return j;
-      } finally {
-        clearTimeout(tmr);
-      }
-    }
-
-    async function refreshCurrentDevice() {
-      const data = await apiJson('/api/queue');
-      const st = data.queue || {};
-      const devName = st.playback_device_name || '';
-      const devId = st.playback_device_id || '';
-      q('currentDevice').textContent = devId ? ('Current: ' + (devName ? (devName + ' ') : '') + '(' + devId + ')') : 'Current: (none)';
-    }
-
-    async function refreshDevices() {
-      const data = await apiJson('/api/spotify/devices');
-      const sel = q('deviceSelect');
-      sel.innerHTML = '';
-      for (const d of (data.devices || [])) {
-        const opt = document.createElement('option');
-        opt.value = d.id || '';
-        opt.textContent = (d.name || '(unknown)') + (d.is_active ? ' (active)' : '');
-        sel.appendChild(opt);
-      }
-      try {
-        const qst = await apiJson('/api/queue');
-        const cur = (qst.queue || {}).playback_device_id;
-        if (cur) sel.value = cur;
-      } catch (e) {
-      }
-    }
-
-    async function loadConfig() {
-      const data = await apiJson('/api/config');
-      const cfg = data.config || {};
-      q('cfg_events_rpm').value = ((cfg['Events API'] || {}).max_requests_per_minute) || '';
-      q('cfg_openai_model').value = ((cfg['OpenAI'] || {}).model) || '';
-      q('cfg_spotify_client_id').value = ((cfg['Spotify'] || {}).client_id) || '';
-      q('cfg_spotify_redirect_url').value = ((cfg['Spotify'] || {}).redirect_url) || '';
-      q('cfg_google_cx').value = ((cfg['Search'] || {}).google_cx) || '';
-      q('cfg_song_cost').value = ((cfg['General'] || {}).song_cost) || '';
-      q('cfg_skip_cost').value = ((cfg['General'] || {}).skip_song_cost) || '';
-      q('cfg_overlay_dur').value = ((cfg['General'] || {}).request_overlay_duration) || '';
-      q('cfg_obs_enabled').value = (((cfg['OBS'] || {}).enabled) || 'true').toLowerCase();
-    }
-
-    q('dashboardBtn').addEventListener('click', () => {
-      const isForced = (new URLSearchParams(window.location.search).get('dashboard') === '1');
-      window.location.href = isForced ? '/?dashboard=1' : '/';
-    });
-    q('setupBtn').addEventListener('click', () => { window.location.href = '/setup?rerun=1'; });
-
-    q('refreshDevicesBtn').addEventListener('click', () => refreshDevices().catch(err => console.error(err)));
-    q('applyDeviceBtn').addEventListener('click', async () => {
-      const deviceId = q('deviceSelect').value;
-      await apiJson('/api/spotify/device', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: deviceId, persist: true }) });
-      await refreshCurrentDevice();
-      await refreshDevices();
-    });
-
-    q('saveConfigBtn').addEventListener('click', async () => {
-      q('saveConfigStatus').textContent = 'Saving...';
-      const payload = {
-        'Events API': {
-          url: q('cfg_events_url').value,
-          max_requests_per_minute: q('cfg_events_rpm').value
-        },
-        'OpenAI': {
-          api_key: q('cfg_openai_key').value,
-          model: q('cfg_openai_model').value
-        },
-        'Spotify': {
-          client_id: q('cfg_spotify_client_id').value,
-          client_secret: q('cfg_spotify_client_secret').value,
-          redirect_url: q('cfg_spotify_redirect_url').value
-        },
-        'Search': {
-          google_api_key: q('cfg_google_key').value,
-          google_cx: q('cfg_google_cx').value
-        },
-        'General': {
-          song_cost: q('cfg_song_cost').value,
-          skip_song_cost: q('cfg_skip_cost').value,
-          request_overlay_duration: q('cfg_overlay_dur').value
-        },
-        'OBS': {
-          enabled: q('cfg_obs_enabled').value
-        }
-      };
-      try {
-        await apiJson('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        q('saveConfigStatus').textContent = 'Saved.';
-        q('cfg_events_url').value = '';
-        q('cfg_openai_key').value = '';
-        q('cfg_spotify_client_secret').value = '';
-        q('cfg_google_key').value = '';
-        await loadConfig();
-      } catch (e) {
-        q('saveConfigStatus').textContent = 'Error: ' + e.message;
-      }
-    });
-
-    async function safeCall(fn, onErr) {
-      try {
-        await fn();
-      } catch (e) {
-        console.error(e);
-        if (onErr) onErr(e);
-      }
-    }
-
-    (async () => {
-      await Promise.all([
-        safeCall(refreshCurrentDevice, (e) => {
-          q('currentDevice').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
-        }),
-        safeCall(refreshDevices, (e) => {
-          q('currentDevice').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
-        }),
-        safeCall(loadConfig, (e) => {
-          q('saveConfigStatus').textContent = 'Error loading config: ' + (e && e.message ? e.message : String(e));
-        })
-      ]);
-    })();
-  </script>
-</body>
-</html>"""
+        html = self._read_page('settings.html')
         return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
     async def _page_setup(self, request: web.Request) -> web.Response:
@@ -982,297 +272,12 @@ class WebUI:
         is_complete = _is_setup_complete()
         status_text = "complete" if is_complete else "incomplete"
         title_suffix = " (rerun)" if rerun else ""
-        html = f"""<!doctype html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-  <title>TipTune Setup</title>
-  <style>
-    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }}
-    *, *::before, *::after {{ box-sizing: border-box; }}
-    a {{ color: #8ab4ff; }}
-    .row {{ display: flex; gap: 16px; flex-wrap: wrap; }}
-    .card {{ background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }}
-    h1 {{ margin: 0 0 12px 0; font-size: 22px; }}
-    h2 {{ margin: 0 0 12px 0; font-size: 16px; }}
-    button {{ padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }}
-    button:hover {{ background: #23366f; }}
-    .muted {{ opacity: 0.8; font-size: 12px; }}
-    .actions {{ display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }}
-    .pill {{ display: inline-block; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: #0e1530; font-size: 12px; }}
-  </style>
-</head>
-<body>
-  <div class=\"actions\" style=\"justify-content: space-between\">
-    <h1>Setup Wizard{title_suffix}</h1>
-    <div class=\"muted\"><a href=\"/?dashboard=1\">Dashboard</a></div>
-  </div>
-
-  <div class=\"card\">
-    <h2>Setup status: <span class=\"pill\">{status_text}</span></h2>
-    <div class=\"muted\">Use the settings page to enter your settings. When you're done, mark setup as complete.</div>
-    <div class=\"actions\">
-      <button id=\"openDashboardBtn\" type=\"button\">Open Settings</button>
-      <button id=\"finishBtn\" type=\"button\">Mark Setup Complete</button>
-    </div>
-    <div id=\"status\" class=\"muted\"></div>
-  </div>
-
-  <script>
-    function q(id) {{ return document.getElementById(id); }}
-
-    async function apiJson(path, opts, timeoutMs) {{
-      const ctrl = new AbortController();
-      const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 8000;
-      const tmr = setTimeout(() => ctrl.abort(), ms);
-      try {{
-        const o = opts || {{}};
-        const r = await fetch(path, {{ ...o, signal: ctrl.signal }});
-        const t = await r.text();
-        let j;
-        try {{ j = JSON.parse(t); }} catch {{ j = {{ ok: false, error: t }}; }}
-        if (!r.ok) {{ throw new Error(j.error || ('HTTP ' + r.status)); }}
-        if (j && j.ok === false) {{ throw new Error(j.error || 'Request failed'); }}
-        return j;
-      }} finally {{
-        clearTimeout(tmr);
-      }}
-    }}
-
-    q('openDashboardBtn').addEventListener('click', () => {{
-      window.location.href = '/settings?dashboard=1';
-    }});
-
-    q('finishBtn').addEventListener('click', async () => {{
-      q('status').textContent = 'Saving...';
-      try {{
-        await apiJson('/api/config', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ 'General': {{ setup_complete: 'true' }} }})
-        }});
-        q('status').textContent = 'Setup marked complete.';
-        window.location.href = '/';
-      }} catch (e) {{
-        q('status').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
-      }}
-    }});
-  </script>
-</body>
-</html>"""
+        html = self._read_page('setup.html')
+        html = html.replace('{{STATUS_TEXT}}', status_text).replace('{{TITLE_SUFFIX}}', title_suffix)
         return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
     async def _page_events(self, _request: web.Request) -> web.Response:
-        html = """<!doctype html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-  <title>TipTune Events</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0b1020; color: #e6e9f2; }
-    a { color: #8ab4ff; }
-    .out { max-height: 70vh; overflow: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
-    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-    button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
-    button:hover { background: #23366f; }
-    .muted { opacity: 0.8; font-size: 12px; }
-    .card { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
-    .cardHeader { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
-    .cardTitle { font-weight: 650; font-size: 13px; }
-    .cardMeta { opacity: 0.85; font-size: 12px; }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: rgba(35, 54, 111, 0.35); font-size: 12px; }
-    .pillStrong { border-color: #4b69c8; background: rgba(74, 105, 200, 0.22); }
-    .cardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-    .message { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
-    details { margin-top: 8px; }
-    summary { cursor: pointer; user-select: none; opacity: 0.9; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #0b1020; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; overflow: auto; }
-  </style>
-</head>
-<body>
-  <div class=\"row\" style=\"justify-content: space-between\"> 
-    <h1 style=\"margin:0;font-size:22px\">Events</h1>
-    <div class=\"muted\"><a href=\"/\">Dashboard</a></div>
-  </div>
-  <div class=\"row\" style=\"margin-top:12px\">
-    <button id=\"clearBtn\" type=\"button\">Clear</button>
-    <span class=\"muted\">Streaming Events API payloads via SSE.</span>
-  </div>
-  <div id=\"out\" class=\"out\"></div>
-  <script>
-    function q(id) { return document.getElementById(id); }
-    function safeParseJSON(s) {
-      try { return JSON.parse(s); } catch (_) { return null; }
-    }
-    function get(obj, path, fallback) {
-      try {
-        let cur = obj;
-        for (const key of path) {
-          if (!cur || typeof cur !== 'object' || !(key in cur)) return fallback;
-          cur = cur[key];
-        }
-        return cur == null ? fallback : cur;
-      } catch (_) {
-        return fallback;
-      }
-    }
-    function toLocalTimeLabel(v) {
-      try {
-        const d = (v instanceof Date) ? v : new Date(v);
-        if (isNaN(d.getTime())) return null;
-        return d.toLocaleString();
-      } catch (_) {
-        return null;
-      }
-    }
-    function toEventTimestamp(item) {
-      const ev = item && typeof item === 'object' ? (item.event || item) : null;
-      const schemaDate = get(ev, ['timestamp', '$date'], null);
-      if (schemaDate) return schemaDate;
-
-      const ts = get(ev, ['timestamp'], null);
-      if (typeof ts === 'string' || typeof ts === 'number') return ts;
-
-      if (item && typeof item.ts === 'number') return item.ts * 1000;
-      return null;
-    }
-    function summarize(item) {
-      const ev = item && typeof item === 'object' ? (item.event || item) : null;
-      const method = get(ev, ['method'], 'event');
-      const subject = get(ev, ['object', 'subject'], null);
-      const broadcaster = get(ev, ['object', 'broadcaster'], null);
-      const id = get(ev, ['id'], get(ev, ['_id', '$oid'], null));
-      const tokensRaw = get(ev, ['object', 'tip', 'tokens'], null);
-      const tokens = (typeof tokensRaw === 'number') ? tokensRaw : (Number.isFinite(Number(tokensRaw)) ? Number(tokensRaw) : null);
-      const isAnon = get(ev, ['object', 'tip', 'isAnon'], false);
-      const userFromUserObj = get(ev, ['object', 'user', 'username'], null);
-      const userFromMessage = get(ev, ['object', 'message', 'fromUser'], null);
-      const username = isAnon ? 'Anonymous' : (userFromUserObj || userFromMessage || 'Unknown');
-      const tipMessage = get(ev, ['object', 'tip', 'message'], null);
-      const chatMessage = get(ev, ['object', 'message', 'message'], null);
-      const message = (typeof tipMessage === 'string' && tipMessage.trim() !== '') ? tipMessage : chatMessage;
-      const time = toLocalTimeLabel(toEventTimestamp(item));
-      return { method, subject, broadcaster, id, tokens, username, message, time, ev };
-    }
-    function makeCard(item) {
-      const s = summarize(item);
-      const root = document.createElement('div');
-      root.className = 'card';
-
-      const header = document.createElement('div');
-      header.className = 'cardHeader';
-
-      const left = document.createElement('div');
-      left.className = 'cardTitle';
-      left.textContent = `${s.method}${s.subject ? ' · ' + s.subject : ''}`;
-
-      const right = document.createElement('div');
-      right.className = 'cardMeta';
-
-      const userPill = document.createElement('span');
-      userPill.className = 'pill';
-      userPill.textContent = s.username;
-      right.appendChild(userPill);
-
-      if (typeof s.broadcaster === 'string' && s.broadcaster.trim() !== '') {
-        const b = document.createElement('span');
-        b.className = 'pill';
-        b.style.marginLeft = '8px';
-        b.textContent = s.broadcaster;
-        right.appendChild(b);
-      }
-
-      if (typeof s.tokens === 'number') {
-        const tok = document.createElement('span');
-        tok.className = 'pill pillStrong';
-        tok.style.marginLeft = '8px';
-        tok.textContent = `${s.tokens} tokens`;
-        right.appendChild(tok);
-      }
-      if (s.time) {
-        const t = document.createElement('span');
-        t.style.marginLeft = '10px';
-        t.textContent = s.time;
-        right.appendChild(t);
-      }
-
-      if (typeof s.id === 'string' && s.id.trim() !== '') {
-        const idPill = document.createElement('span');
-        idPill.className = 'pill';
-        idPill.style.marginLeft = '8px';
-        const shortId = s.id.length > 12 ? (s.id.slice(0, 8) + '…') : s.id;
-        idPill.textContent = `id: ${shortId}`;
-        right.appendChild(idPill);
-      }
-
-      header.appendChild(left);
-      header.appendChild(right);
-      root.appendChild(header);
-
-      const body = document.createElement('div');
-      body.className = 'cardBody';
-
-      if (typeof s.message === 'string' && s.message.trim() !== '') {
-        const msg = document.createElement('div');
-        msg.className = 'message';
-        msg.textContent = s.message;
-        body.appendChild(msg);
-      }
-
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = 'Details';
-      details.appendChild(summary);
-      const pre = document.createElement('pre');
-      try {
-        pre.textContent = JSON.stringify(item, null, 2);
-      } catch (_) {
-        pre.textContent = String(item);
-      }
-      details.appendChild(pre);
-      body.appendChild(details);
-
-      root.appendChild(body);
-      return root;
-    }
-    function appendItem(item) {
-      const out = q('out');
-      out.appendChild(makeCard(item));
-      while (out.children.length > 300) out.removeChild(out.firstChild);
-      out.scrollTop = out.scrollHeight;
-    }
-    function appendTextLine(line) {
-      const out = q('out');
-      const root = document.createElement('div');
-      root.className = 'card';
-      const pre = document.createElement('pre');
-      pre.textContent = line;
-      root.appendChild(pre);
-      out.appendChild(root);
-      while (out.children.length > 300) out.removeChild(out.firstChild);
-      out.scrollTop = out.scrollHeight;
-    }
-
-    q('clearBtn').addEventListener('click', () => { q('out').textContent = ''; });
-
-    fetch('/api/events/recent?limit=50').then(r => r.json()).then(j => {
-      for (const ev of (j.events || [])) appendItem(ev);
-    }).catch(() => {});
-
-    const es = new EventSource('/api/events/sse');
-    es.onmessage = (e) => {
-      const parsed = safeParseJSON(e.data);
-      if (parsed && typeof parsed === 'object') return appendItem(parsed);
-      appendTextLine(e.data);
-    };
-    es.onerror = () => {
-      appendTextLine('--- connection error ---');
-    };
-  </script>
-</body>
-</html>"""
+        html = self._read_page('events.html')
         return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
     async def _api_queue(self, _request: web.Request) -> web.Response:
@@ -1560,6 +565,11 @@ class SongRequestService:
 
         web_host = config.get("Web", "host", fallback="127.0.0.1") if config.has_section("Web") else "127.0.0.1"
         web_port = config.getint("Web", "port", fallback=8765) if config.has_section("Web") else 8765
+        override_host, override_port = _get_web_runtime_overrides()
+        if override_host is not None:
+            web_host = override_host
+        if override_port is not None:
+            web_port = override_port
         try:
             self._web = WebUI(self, host=web_host, port=web_port)
             await self._web.start()
