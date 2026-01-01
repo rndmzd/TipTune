@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TipTune",
+  "version": "0.1.0",
+  "identifier": "com.tiptune.app",
+  "build": {
+    "devUrl": "http://127.0.0.1:8765",
+    "frontendDist": ["../webui/pages/dashboard.html"],
+    "beforeDevCommand": {
+      "script": "node ./scripts/prepare-sidecar.mjs",
+      "wait": true
+    },
+    "beforeBuildCommand": "node ./scripts/prepare-sidecar.mjs",
+    "beforeBundleCommand": "node ./scripts/prepare-sidecar.mjs"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "TipTune",
+        "width": 1100,
+        "height": 750,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "externalBin": ["binaries/TipTune"],
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/128x128.png"
+    ]
+  }
+}
