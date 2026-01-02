@@ -1,6 +1,6 @@
 # TipTune
 
-Turn tips into queued music requests across multiple players.
+Turn tips into queued music requests with OBS integration.
 
 ## Quick start
 
