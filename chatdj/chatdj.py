@@ -13,7 +13,7 @@ from spotipy import Spotify, SpotifyException
 
 from utils.structured_logging import get_structured_logger
 
-logger = get_structured_logger('mongobate.chatdj')
+logger = get_structured_logger('tiptune.chatdj.chatdj')
 
 
 class SongRequest(BaseModel):

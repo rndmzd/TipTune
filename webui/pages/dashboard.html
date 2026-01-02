@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TipTune</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="actions" style="justify-content: space-between"> 
+    <h1>TipTune</h1>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <button id="setupBtn" type="button">Setup Wizard</button>
+      <button id="settingsBtn" type="button">Settings</button>
+      <div class="muted"><a href="/events">Events</a></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>Queue</h2>
+      <div class="actions">
+        <span id="queueStatus" class="pill">Loading...</span>
+        <button id="pauseBtn" type="button">Pause</button>
+        <button id="resumeBtn" type="button">Resume</button>
+        <button id="refreshQueueBtn" type="button">Refresh</button>
+      </div>
+      <label>Now playing</label>
+      <div id="nowPlaying" class="queueOut">(loading)</div>
+      <label>Up next</label>
+      <div id="queueList" class="queueOut">(loading)</div>
+    </div>
+  </div>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

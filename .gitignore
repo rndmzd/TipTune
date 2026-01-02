@@ -1,4 +1,10 @@
-config.ini
+**/config.ini
+node_modules/
+
+src-tauri/binaries
+src-tauri/target
+src-tauri/Cargo.lock
+src-tauri/gen
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -33,6 +39,7 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!TipTune.spec
 
 # Installer logs
 pip-log.txt

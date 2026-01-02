@@ -4,7 +4,7 @@ from typing import List, Optional
 from chatdj.chatdj import SongRequest
 from utils.structured_logging import get_structured_logger
 
-logger = get_structured_logger('mongobate.helpers.actions')
+logger = get_structured_logger('tiptune.helpers.actions')
 
 class Actions:
     def __init__(self,

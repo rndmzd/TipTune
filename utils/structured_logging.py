@@ -43,7 +43,7 @@ class StructuredLogFormatter(logging.Formatter):
             "metadata": {
                 "version": "1.0.0",
                 "environment": os.getenv("APP_ENV", "development"),
-                "component": "mongobate",
+                "component": "tiptune",
                 "thread_id": threading.get_ident(),
                 "thread_name": threading.current_thread().name
             }
