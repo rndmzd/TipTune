@@ -254,7 +254,18 @@ export function DashboardPage() {
           ) : null}
 
           <div className="actions">
-            <span id="queueStatus" className="pill">
+            <span
+              id="queueStatus"
+              className={
+                status === 'loading'
+                  ? 'pill pillNeutral'
+                  : status === 'error'
+                    ? 'pill pillError'
+                    : paused
+                      ? 'pill pillWarn'
+                      : 'pill pillSuccess'
+              }
+            >
               {status === 'loading' ? 'Loading…' : status === 'error' ? 'Error' : paused ? 'Paused' : 'Running'}
             </span>
             <button

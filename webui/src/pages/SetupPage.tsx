@@ -340,10 +340,11 @@ export function SetupPage() {
 
       <div className="card">
         <h2>
-          Setup status: <span className="pill">{setupComplete ? 'complete' : 'incomplete'}</span>
+          Setup status:{' '}
+          <span className={setupComplete ? 'pill pillSuccess' : 'pill pillWarn'}>{setupComplete ? 'complete' : 'incomplete'}</span>
         </h2>
         <div className="muted">
-          Step {stepIdx + 1} of {STEPS.length}: <span className="pill">{STEPS[stepIdx]?.title}</span>
+          Step {stepIdx + 1} of {STEPS.length}: <span className="pill pillInfo">{STEPS[stepIdx]?.title}</span>
         </div>
         <div className="actions">
           <button type="button" onClick={onBack} disabled={stepIdx === 0}>
@@ -362,7 +363,20 @@ export function SetupPage() {
       {currentStep === 'spotify' ? (
         <div className="card" style={{ marginTop: 16 }}>
           <h2>
-            Spotify: <span className="pill">{sp ? (sp.authorized ? 'authorized' : sp.configured ? 'not authorized' : 'not configured') : 'loading'}</span>
+            Spotify:{' '}
+            <span
+              className={
+                sp
+                  ? sp.authorized
+                    ? 'pill pillSuccess'
+                    : sp.configured
+                      ? 'pill pillWarn'
+                      : 'pill pillError'
+                  : 'pill pillNeutral'
+              }
+            >
+              {sp ? (sp.authorized ? 'authorized' : sp.configured ? 'not authorized' : 'not configured') : 'loading'}
+            </span>
           </h2>
 
           <label>Spotify client_id</label>
@@ -404,7 +418,7 @@ export function SetupPage() {
               Connect Spotify
             </button>
           </div>
-          {sp?.error ? <div className="muted">Error: {String(sp.error)}</div> : null}
+          {sp?.error ? <div className="muted">Error: <span className="pill pillError">{String(sp.error)}</span></div> : null}
           {spMsg ? <div className="muted">{spMsg}</div> : null}
           <div className="muted" style={{ marginTop: 8 }}>
             You can proceed after entering credentials + redirect URL. Connecting Spotify is recommended but not required to click Next.

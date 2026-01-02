@@ -93,8 +93,8 @@ export function QueueCard(props: {
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {duration ? <span className="pill">{duration}</span> : null}
-          {explicit ? <span className="pill">Explicit</span> : null}
+          {duration ? <span className="pill pillNeutral">{duration}</span> : null}
+          {explicit ? <span className="pill pillWarn">Explicit</span> : null}
         </div>
 
         <div className="queueMessage">{uri}</div>

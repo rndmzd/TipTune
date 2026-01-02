@@ -62,3 +62,15 @@ summary { cursor: pointer; user-select: none; opacity: 0.9; }
 .page-events .cardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .page-events .message { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
 .page-events pre { white-space: pre-wrap; word-break: break-word; background: #0b1020; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; overflow: auto; }
+
+.pillNeutral { border-color: #2a3a66; background: rgba(14, 21, 48, 0.9); }
+.pillInfo { border-color: rgba(138, 180, 255, 0.55); background: rgba(138, 180, 255, 0.14); }
+.pillSuccess { border-color: rgba(25, 135, 84, 0.55); background: rgba(25, 135, 84, 0.14); }
+.pillWarn { border-color: rgba(255, 193, 7, 0.55); background: rgba(255, 193, 7, 0.14); }
+.pillError { border-color: rgba(220, 53, 69, 0.65); background: rgba(220, 53, 69, 0.16); }
+
+.page-events .pill.pillNeutral { border-color: #2a3a66; background: rgba(14, 21, 48, 0.9); }
+.page-events .pill.pillInfo { border-color: rgba(138, 180, 255, 0.55); background: rgba(138, 180, 255, 0.14); }
+.page-events .pill.pillSuccess { border-color: rgba(25, 135, 84, 0.55); background: rgba(25, 135, 84, 0.14); }
+.page-events .pill.pillWarn { border-color: rgba(255, 193, 7, 0.55); background: rgba(255, 193, 7, 0.14); }
+.page-events .pill.pillError { border-color: rgba(220, 53, 69, 0.65); background: rgba(220, 53, 69, 0.16); }

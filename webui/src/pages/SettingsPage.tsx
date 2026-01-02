@@ -381,7 +381,7 @@ export function SettingsPage() {
           <div className="card" style={{ flex: 1, minWidth: 360 }}>
             <h2>
               OBS overlay status{' '}
-              <span className="pill">{obsStatus?.connected ? 'connected' : 'not connected'}</span>
+              <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>{obsStatus?.connected ? 'connected' : 'not connected'}</span>
             </h2>
 
             <div className="muted">
@@ -393,9 +393,13 @@ export function SettingsPage() {
               {(requiredSources || []).map((s) => (
                 <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <code style={{ minWidth: 160 }}>{s.name}</code>
-                  <span className="pill">{s.present ? 'present' : 'missing'}</span>
-                  <span className="muted">input: {s.input_exists ? 'yes' : 'no'}</span>
-                  <span className="muted">in main scene: {s.in_main_scene ? 'yes' : 'no'}</span>
+                  <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
+                  <span className="muted">
+                    input: <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
+                  </span>
+                  <span className="muted">
+                    in main scene: <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
+                  </span>
                 </div>
               ))}
               {!(requiredSources || []).length ? <div className="muted">(no data)</div> : null}
@@ -405,10 +409,20 @@ export function SettingsPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <code style={{ minWidth: 160 }}>Application Audio Capture</code>
-                <span className="pill">{spotifyAudio?.present ? 'present' : 'missing'}</span>
+                <span className={spotifyAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{spotifyAudio?.present ? 'present' : 'missing'}</span>
                 <span className="muted">target: {spotifyAudio?.target_exe || 'Spotify.exe'}</span>
-                <span className="muted">input: {spotifyAudio?.input_exists ? 'yes' : 'no'}</span>
-                <span className="muted">in main scene: {spotifyAudio?.in_main_scene ? 'yes' : 'no'}</span>
+                <span className="muted">
+                  input:{' '}
+                  <span className={spotifyAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
+                    {spotifyAudio?.input_exists ? 'yes' : 'no'}
+                  </span>
+                </span>
+                <span className="muted">
+                  in main scene:{' '}
+                  <span className={spotifyAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
+                    {spotifyAudio?.in_main_scene ? 'yes' : 'no'}
+                  </span>
+                </span>
               </div>
               {spotifyAudio?.input_name ? (
                 <div className="muted">
