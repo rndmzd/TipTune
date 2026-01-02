@@ -585,6 +585,18 @@ class WebUI:
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
         })
+
+        origin = request.headers.get('Origin')
+        if origin:
+            resp.headers['Access-Control-Allow-Origin'] = origin
+            resp.headers['Vary'] = 'Origin'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Access-Control-Request-Private-Network'
+
+        if request.headers.get('Access-Control-Request-Private-Network') == 'true':
+            resp.headers['Access-Control-Allow-Private-Network'] = 'true'
+
+        resp.headers['X-Accel-Buffering'] = 'no'
         await resp.prepare(request)
 
         q_events = self._service.register_events_subscriber()
