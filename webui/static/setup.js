@@ -36,3 +36,61 @@ q('finishBtn').addEventListener('click', async () => {
     q('status').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
   }
 });
+
+async function refreshSpotifyStatus() {
+  try {
+    const st = await apiJson('/api/spotify/auth/status');
+    const configured = !!st.configured;
+    const authorized = !!st.authorized;
+    const inProgress = !!st.in_progress;
+    const authUrl = st.auth_url || '';
+    const err = st.error || '';
+
+    q('spRedirect').textContent = st.redirect_url || '(not set)';
+    q('spStatus').textContent = authorized ? 'authorized' : configured ? (inProgress ? 'login in progress' : 'not authorized') : 'not configured';
+
+    q('spConnectBtn').disabled = !configured || inProgress;
+    q('spOpenBtn').style.display = (inProgress && authUrl) ? '' : 'none';
+
+    if (err) {
+      q('spMsg').textContent = 'Error: ' + String(err);
+    }
+  } catch (e) {
+    q('spMsg').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+  }
+}
+
+q('spRefreshBtn').addEventListener('click', () => {
+  refreshSpotifyStatus();
+});
+
+q('spConnectBtn').addEventListener('click', async () => {
+  q('spMsg').textContent = 'Starting Spotify login...';
+  try {
+    const data = await apiJson('/api/spotify/auth/start', { method: 'POST' });
+    if (data && data.auth_url) {
+      try { window.open(data.auth_url, '_blank', 'noopener,noreferrer'); } catch { window.location.href = data.auth_url; }
+      q('spMsg').textContent = 'Browser opened. Complete Spotify login, then return here.';
+    } else {
+      q('spMsg').textContent = 'Error: missing auth_url';
+    }
+  } catch (e) {
+    q('spMsg').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+  } finally {
+    refreshSpotifyStatus();
+  }
+});
+
+q('spOpenBtn').addEventListener('click', async () => {
+  try {
+    const st = await apiJson('/api/spotify/auth/status');
+    if (st && st.auth_url) {
+      try { window.open(st.auth_url, '_blank', 'noopener,noreferrer'); } catch { window.location.href = st.auth_url; }
+    }
+  } catch (e) {
+    q('spMsg').textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+  }
+});
+
+refreshSpotifyStatus();
+setInterval(refreshSpotifyStatus, 1500);

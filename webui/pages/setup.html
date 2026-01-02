@@ -22,6 +22,18 @@
     <div id="status" class="muted"></div>
   </div>
 
+  <div class="card" style="margin-top: 16px">
+    <h2>Spotify</h2>
+    <div class="muted">Status: <span id="spStatus" class="pill">Loading...</span></div>
+    <div class="muted" style="margin-top: 6px">Redirect URL: <code id="spRedirect">(loading)</code></div>
+    <div class="actions" style="margin-top: 10px">
+      <button id="spRefreshBtn" type="button">Refresh</button>
+      <button id="spConnectBtn" type="button">Connect Spotify</button>
+      <button id="spOpenBtn" type="button" style="display:none">Open Login Again</button>
+    </div>
+    <div id="spMsg" class="muted"></div>
+  </div>
+
   <script src="/static/setup.js"></script>
 </body>
 </html>
