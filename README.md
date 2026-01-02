@@ -1,190 +1,271 @@
 # TipTune
 
-Turn tips into queued music requests with OBS integration.
+TipTune turns tips into queued music requests and provides a local dashboard for playback control, setup, and OBS overlays.
 
-## Quick start
+This repo contains:
 
-- Copy `config.ini.example` to `config.ini`.
-- Fill in each section below.
-- Install dependencies and run:
+- A **desktop app** (Tauri v2) for macOS/Linux/Windows.
+- A **Python sidecar** (built with PyInstaller) that runs the TipTune service + local Web UI API.
+- A **React Web UI** bundled into the desktop app.
+- A **tag-triggered GitHub Actions release pipeline** (starting with `v0.1.0`) to publish builds for macOS/Linux/Windows.
 
-  ```bash
-  pip install -r requirements.txt
-  python app.py
-  ```
+---
 
-`config.ini` is intentionally ignored by git (see `.gitignore`). Do not commit or share it.
+## Getting TipTune
 
-## Packaging (PyInstaller)
+- **Desktop app (recommended)**
+  - Download the latest build from GitHub Releases.
+  - Launch TipTune; it will start the bundled TipTune service automatically.
 
-- Build dependencies:
+- **Run from source (developers / power users)**
+  - See [Development](#development) below.
 
-  ```bash
-  pip install -r requirements.txt -r requirements-build.txt
-  ```
+---
 
-- Build executable:
+## First-run setup (recommended path)
 
-  ```bash
-  pyinstaller TipTune.spec --clean
-  ```
+When TipTune starts, it serves a local UI and will redirect you to a **Setup Wizard** until setup is marked complete.
 
-The built executable is written to `dist/TipTune.exe`.
+The Setup Wizard walks you through:
 
-### Packaged runtime files
+- Spotify credentials + OAuth authorization
+- Events API (optional)
+- OpenAI (optional but recommended for AI-assisted parsing)
+- Google Custom Search (optional)
+- OBS connection + creating required text sources (optional)
+- General settings (song/skip costs, overlay duration)
 
-When running as a packaged exe, TipTune looks for `config.ini` in this order:
+If you need to rerun setup:
 
-- **Portable config**: `config.ini` next to `TipTune.exe` (if present)
-- **User config**: `%APPDATA%\TipTune\config.ini`
+- Open the Setup page and add `?rerun=1`.
 
-If `config.ini` does not exist yet, TipTune will seed it from the bundled `config.ini.example` on first write.
+---
 
-Spotipy OAuth tokens are stored in a writable cache file named `.cache` alongside the selected `config.ini`.
+## Web UI
 
-### Environment overrides
+TipTune runs a local HTTP server (default `http://127.0.0.1:8765`). The desktop UI uses it as its backend.
 
-- `TIPTUNE_CONFIG`: full path to the `config.ini` file
-- `TIPTUNE_CACHE_DIR`: directory for TipTune cache usage (if needed)
-- `TIPTUNE_SPOTIPY_CACHE`: full path to the Spotipy token cache file (defaults to `<config_dir>\.cache`)
+Pages:
+
+- `/` and `/settings`
+  - Full configuration editor (including secrets fields)
+  - Playback device selection
+  - OBS overlay management tools
+  - App update check/install (desktop only)
+- `/setup`
+  - Setup Wizard
+- `/events`
+  - Recent events + live SSE stream
+
+---
 
 ## Configuration (`config.ini`)
 
-TipTune reads settings from `config.ini` (same folder as `app.py`). The following sections are used by the code:
+TipTune reads settings from a single `config.ini` file.
 
-- `[Events API]` (required)
-- `[OpenAI]` (required)
-- `[Spotify]` (required for song requests / AutoDJ)
+`config.ini` is intentionally ignored by git (see `.gitignore`). Do not commit or share it.
+
+### Where the config file lives
+
+TipTune picks the config path in this order:
+
+- **Override**: `TIPTUNE_CONFIG` environment variable
+- **Packaged (frozen) runtime**
+  - **Portable config**: `config.ini` next to the executable (if present)
+  - Otherwise: a per-user config directory (currently based on `APPDATA` semantics)
+- **Development**: `<repo_root>/config.ini`
+
+If the chosen `config.ini` does not exist yet, TipTune will seed it from the bundled `config.ini.example` on first write.
+
+### Cache files
+
+Spotipy OAuth tokens are stored in a writable cache file named `.cache` alongside the selected `config.ini` (or overridden by `TIPTUNE_SPOTIPY_CACHE`).
+
+Environment overrides:
+
+- `TIPTUNE_CONFIG`: full path to the `config.ini` file
+- `TIPTUNE_CACHE_DIR`: directory for TipTune cache usage
+- `TIPTUNE_SPOTIPY_CACHE`: full path to the Spotipy token cache file (defaults to `<config_dir>/.cache`)
+- `TIPTUNE_WEB_HOST`: override Web UI bind host
+- `TIPTUNE_WEB_PORT`: override Web UI bind port
+
+### Config sections
+
+TipTune uses these sections/keys (see `config.ini.example`):
+
+- `[Spotify]` (required for playback)
+  - `client_id`, `client_secret`, `redirect_url`, `playback_device_id`
+- `[OpenAI]` (optional)
+  - `api_key`, `model`
+- `[Events API]` (optional)
+  - `url`, `max_requests_per_minute`
 - `[Search]` (optional)
+  - `google_api_key`, `google_cx`
 - `[OBS]` (optional)
+  - `enabled`, `host`, `port`, `password`
 - `[Web]` (optional)
+  - `host`, `port`
 - `[General]` (required)
+  - `song_cost`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`
 
-### 1) Events API (Chaturbate)
+---
 
-TipTune polls the Chaturbate Events API long-poll feed for `tip` events.
+## Spotify setup
 
-- **Where to get it**
-  - Log into your Chaturbate account.
-  - Go to your settings page that lists your **Events API token** (the UI location can change; it is commonly under something like **Settings** / **Apps & Bots** / **Events API**).
-  - Copy your Events API token.
-  - Useful links:
-    - `https://chaturbate.com/apps/api/docs/index.html`
-    - `https://chaturbate.com/apps/api/docs/rest.html`
+TipTune controls playback and queues tracks via the Spotify Web API.
 
-- **What to set**
-  - Set `Events API.url` to:
+Steps:
 
-    `https://eventsapi.chaturbate.com/events/<your_username>/<your_token>/`
+1. Create a Spotify app: `https://developer.spotify.com/dashboard`
+1. Add a Redirect URI matching your config (default):
 
-  - Keep the trailing `/`.
-  - `max_requests_per_minute` is a local throttle to avoid over-polling.
+    - `http://127.0.0.1:8888/callback`
 
-- **Security note**
-  - Treat the Events API token like a password. Anyone with it can subscribe to your room events.
+1. In TipTune Setup Wizard:
 
-### 2) OpenAI
+    - Enter `client_id`, `client_secret`, `redirect_url`
+    - Click **Connect Spotify** and complete login in your browser
 
-OpenAI is used to extract song + artist information from the tip message when a Spotify URL/URI is not present.
+1. In Settings:
 
-- **Where to get it**
-  - Create an account at `https://platform.openai.com/`.
-  - Create (or choose) a Project.
-  - Create a Project API key.
-  - Useful links:
-    - `https://platform.openai.com/api-keys`
+    - Choose the playback device and click **Apply + Save** (writes `Spotify.playback_device_id`)
 
-- **What to set**
-  - Set `OpenAI.api_key` to your API key.
-  - Set `OpenAI.model` to the model you want to use (the default in the config template is `gpt-5`).
+Notes:
 
-### 3) Spotify (required for playback / queuing)
+- Spotify playback control typically requires Spotify Premium.
+- The redirect URL must be `http` and must use `127.0.0.1` or `localhost` with an explicit port.
 
-Spotify is used to search tracks and control playback/queue via the Web API.
+---
 
-- **Prerequisites**
-  - A Spotify account.
-  - For playback control, a Spotify Premium account is typically required by Spotify.
-  - At least one active Spotify device (Spotify app open somewhere) on the same account.
+## OBS integration (optional)
 
-- **Where to get `client_id` / `client_secret`**
-  - Go to the Spotify Developer dashboard: `https://developer.spotify.com/dashboard`
-  - Create an app.
-  - Copy the app’s **Client ID** and **Client Secret**.
+If enabled, TipTune connects to OBS via obs-websocket.
 
-- **Redirect URI (very important)**
-  - In your Spotify app settings, add this Redirect URI:
+Steps:
 
-    `http://127.0.0.1:8888/callback`
+1. Install OBS Studio.
+1. Enable obs-websocket in OBS (commonly under **Tools → WebSocket Server Settings**).
+1. Configure TipTune (Setup Wizard or Settings):
 
-  - The value in `Spotify.redirect_url` must match the Spotify app setting exactly.
+    - `OBS.enabled=true`
+    - `OBS.host`, `OBS.port` (often `4455`), `OBS.password`
 
-- **What to set**
-  - `Spotify.client_id` = Client ID
-  - `Spotify.client_secret` = Client Secret
-  - `Spotify.redirect_url` = redirect URI (see above)
-  - Optional: `Spotify.playback_device_id`
-    - You can leave this blank and select a device from the Web UI once the app is running.
+1. In Setup Wizard or Settings, use **Create missing text sources** and then position/size them in OBS.
+1. Optional: use **Create Spotify audio capture** (Windows) to set up an Application Audio Capture input for `Spotify.exe`.
 
-After TipTune is running, open the Web UI and select a playback device (this writes `Spotify.playback_device_id` into `config.ini`).
+`scenes.yaml` defines scene metadata used by the project.
 
-- **First run OAuth login**
-  - On first run, Spotipy will require you to authorize the app.
-  - Because the code uses `open_browser=False`, you may need to manually open the printed URL and paste the final redirected URL back into the prompt.
+---
 
-- **Scopes used by TipTune**
-  - `user-modify-playback-state`
-  - `user-read-playback-state`
-  - `user-read-currently-playing`
-  - `user-read-private`
+## App updates (desktop)
 
-### 4) Google Custom Search (optional, improves artist lookup)
+The desktop app includes the Tauri updater plugin and can check for updates from GitHub release artifacts.
 
-TipTune can optionally use Google Custom Search to help identify the artist when a song request contains only a title.
+In Settings → **App Updates**:
 
-- **Where to get it**
-  - Create a Google Cloud project: `https://console.cloud.google.com/`
-  - Enable the **Custom Search API** for the project.
-  - Create an API key.
-  - Create a **Programmable Search Engine** and copy its **Search engine ID** (also called `cx`).
-    - If you want broad results, configure it to search the entire web.
+- Click **Check for Updates**
+- If an update is available, click **Download + Install**
 
-Some Google projects may require billing to be enabled to use the API reliably.
+Update metadata endpoint is configured in `src-tauri/tauri.conf.json` under `plugins.updater.endpoints`.
 
-- **What to set**
-  - `Search.google_api_key` = your Google API key
-  - `Search.google_cx` = your Programmable Search Engine ID (`cx`)
+---
 
-### 5) OBS WebSocket (optional, for overlays/scenes)
+## Development
 
-If enabled, TipTune can connect to OBS via OBS WebSocket.
+Prereqs:
 
-- **Where to get it**
-  - Install OBS Studio.
-  - In OBS, enable the WebSocket server (commonly under **Tools → WebSocket Server Settings**).
-  - Set a password and note the port.
+- Node.js 20
+- Rust (stable)
+- Python 3.11
 
-- **What to set**
-  - `OBS.enabled` = `true` or `false`
-  - `OBS.host` = `localhost` (or the machine running OBS)
-  - `OBS.port` = the OBS WebSocket port (often `4455` unless you changed it)
-  - `OBS.password` = the password you configured in OBS
+Install deps:
 
-Scene names are mapped in `scenes.yaml`. Make sure the scene names in that file match your OBS scenes.
+```bash
+npm ci
+pip install -r requirements.txt
+pip install -r requirements-build.txt
+```
 
-### 6) Web UI (optional)
+Run the desktop dev app:
 
-TipTune starts a small local web UI.
+```bash
+npm run dev
+```
 
-- `Web.host` defaults to `127.0.0.1`
-- `Web.port` defaults to `8765`
+Notes:
 
-Once running, open `http://127.0.0.1:8765/`.
+- Tauri will run a `beforeDevCommand` that builds/prepares the Python sidecar and spawns `npm run webui:dev`.
+- The Web UI dev server runs on `http://127.0.0.1:5173`.
+- The Python service runs the API/UI backend on `http://127.0.0.1:8765` by default.
 
-### 7) General
+Build the desktop app locally:
 
-These settings control how tips map to requests:
+```bash
+npm run build
+```
 
-- `General.song_cost`: tip token amount (or multiple) that triggers a song request
-- `General.skip_song_cost`: tip token amount (or multiple) that triggers a skip
-- `General.request_overlay_duration`: OBS overlay duration (seconds)
+This will:
+
+- Build/prepare the Python sidecar into `src-tauri/binaries/`.
+- Build the Web UI into `webui/dist`.
+- Produce Tauri bundles for your platform.
+
+---
+
+## Releases (macOS / Linux / Windows)
+
+Starting with **`v0.1.0`**, releases are built by GitHub Actions when you push a tag matching `v*`.
+
+The workflow is: `.github/workflows/release-from-tag.yml`.
+
+### Making a release
+
+1. Ensure versions match
+
+    - `package.json` `version`
+    - `src-tauri/tauri.conf.json` `version`
+    - `src-tauri/Cargo.toml` `version`
+
+1. Commit the version bump
+1. Create and push a tag
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+GitHub Actions will:
+
+- Build desktop artifacts for macOS, Linux, and Windows.
+- Create a GitHub Release for the tag.
+- Upload platform installers/bundles and updater metadata (such as `latest.json`).
+
+Typical output formats (varies by platform/runner configuration):
+
+- Windows: `.msi` / installer artifacts
+- macOS: `.dmg`
+- Linux: `.AppImage` / `.deb`
+
+### Version bump helper
+
+This repo includes a script to bump `x.y.z -> x.(y+1).0` across the versioned files and optionally tag:
+
+```bash
+npm run version:bump-minor
+```
+
+Options:
+
+- `--dry-run`
+- `--allow-dirty`
+- `--no-commit`
+- `--no-tag`
+
+### Required GitHub Secrets
+
+The release workflow is configured to use Tauri updater signing secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
+Optional (macOS signing/notarization) secrets are listed in the workflow but commented out.
