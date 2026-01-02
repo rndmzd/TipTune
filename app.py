@@ -35,6 +35,38 @@ logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
 
 
+async def _watch_parent_process() -> None:
+    pid_str = os.getenv('TIPTUNE_PARENT_PID')
+    if not pid_str:
+        return
+
+    try:
+        parent_pid = int(pid_str)
+        if parent_pid <= 0:
+            return
+    except Exception:
+        return
+
+    while not shutdown_event.is_set():
+        await asyncio.sleep(1.5)
+
+        try:
+            if sys.platform == 'win32':
+                import ctypes
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, parent_pid)
+                if handle:
+                    ctypes.windll.kernel32.CloseHandle(handle)
+                else:
+                    shutdown_event.set()
+                    break
+            else:
+                os.kill(parent_pid, 0)
+        except Exception:
+            shutdown_event.set()
+            break
+
+
 def _get_web_runtime_overrides() -> Tuple[Optional[str], Optional[int]]:
     host_env = os.getenv('TIPTUNE_WEB_HOST')
     host: Optional[str]
@@ -1710,6 +1742,8 @@ async def main() -> None:
 
     loop = asyncio.get_event_loop()
     loop.set_exception_handler(handle_exception)
+
+    asyncio.create_task(_watch_parent_process())
 
     service = SongRequestService()
     await service.start()
