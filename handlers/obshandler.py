@@ -11,6 +11,22 @@ logger = get_structured_logger('tiptune.handlers.obshandler')
 
 REQUIRED_TEXT_SOURCES = ['SongRequester', 'WarningOverlay', 'GeneralOverlay']
 
+DEFAULT_TEXT_SETTINGS_GDIPLUS: Dict[str, Any] = {
+    'align': 'left',
+    'chatlog': False,
+    'extents': False,
+    'font': {
+        'face': 'Cascadia Mono',
+        'flags': 0,
+        'size': 256,
+        'style': 'Regular',
+    },
+    'outline': True,
+    'outline_color': 4278190080,
+    'outline_size': 20,
+    'text': '',
+}
+
 class OBSHandler:
     def __init__(self, host: str = 'localhost', port: int = 4455, password: Optional[str] = None):
         """Initialize OBS WebSocket handler.
@@ -446,11 +462,15 @@ class OBSHandler:
         kinds = ['text_gdiplus_v3', 'text_gdiplus_v2', 'text_ft2_source']
         failures: list[str] = []
         for kind in kinds:
+            input_settings: Dict[str, Any] = {'text': ''}
+            if kind.startswith('text_gdiplus'):
+                input_settings = dict(DEFAULT_TEXT_SETTINGS_GDIPLUS)
+
             ok, _, code, comment = await self._send_request_with_status('CreateInput', {
                 'sceneName': scene_name,
                 'inputName': input_name,
                 'inputKind': kind,
-                'inputSettings': {'text': ''},
+                'inputSettings': input_settings,
                 'sceneItemEnabled': False,
             }, max_retries=0)
             if ok:
