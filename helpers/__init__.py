@@ -49,6 +49,16 @@ def refresh_spotify_client() -> None:
             open_browser=False,
             cache_path=str(cache_path)
         )
+
+        token_info = None
+        try:
+            token_info = sp_oauth.validate_token(sp_oauth.cache_handler.get_cached_token())
+        except Exception:
+            token_info = None
+
+        if token_info is None:
+            return
+
         spotify_client = Spotify(auth_manager=sp_oauth)
     except Exception as exc:
         logger.exception("spotify.init.error", message="Failed to initialize Spotify client", exc=exc)
