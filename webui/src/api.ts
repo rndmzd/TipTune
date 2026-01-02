@@ -1,13 +1,16 @@
 export type ApiOk<T> = { ok: true } & T;
 export type ApiErr = { ok: false; error?: string };
 
-const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 8000;
+
+function isTauriRuntime(): boolean {
+  const w: any = window as any;
+  return !!(w && (w.__TAURI_INTERNALS__ || w.__TAURI__));
+}
 
 function getApiBase(): string {
-  const protocol = window.location.protocol;
-  const hostname = window.location.hostname;
-  if ((protocol === 'http:' || protocol === 'https:') && hostname !== 'tauri.localhost') return '';
-  return 'http://127.0.0.1:8765';
+  if (isTauriRuntime()) return 'http://127.0.0.1:8765';
+  return '';
 }
 
 export async function apiJson<T>(
