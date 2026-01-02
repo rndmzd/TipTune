@@ -36,12 +36,13 @@ function asBool(v: unknown): boolean {
   return s === '1' || s === 'true' || s === 'yes' || s === 'on';
 }
 
-type WizardStepKey = 'spotify' | 'events' | 'openai' | 'google' | 'general';
+type WizardStepKey = 'spotify' | 'events' | 'openai' | 'google' | 'obs' | 'general';
 const STEPS: { key: WizardStepKey; title: string }[] = [
   { key: 'spotify', title: 'Spotify' },
   { key: 'events', title: 'Events API' },
   { key: 'openai', title: 'OpenAI API' },
   { key: 'google', title: 'Google' },
+  { key: 'obs', title: 'OBS' },
   { key: 'general', title: 'General Settings' },
 ];
 
@@ -55,6 +56,11 @@ const DEFAULT_CFG: Record<string, Record<string, string>> = {
   OpenAI: {
     model: 'gpt-5-mini',
   },
+  OBS: {
+    enabled: 'false',
+    host: '127.0.0.1',
+    port: '4455',
+  },
   General: {
     request_overlay_duration: '10',
   },
@@ -66,6 +72,7 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
   const spotify = cfg.Spotify || {};
   const events = cfg['Events API'] || {};
   const openai = cfg.OpenAI || {};
+  const obs = cfg.OBS || {};
   const general = cfg.General || {};
 
   return {
@@ -81,6 +88,12 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
     OpenAI: {
       ...openai,
       model: norm(openai.model) || DEFAULT_CFG.OpenAI.model,
+    },
+    OBS: {
+      ...obs,
+      enabled: norm(obs.enabled) || DEFAULT_CFG.OBS.enabled,
+      host: norm(obs.host) || DEFAULT_CFG.OBS.host,
+      port: norm(obs.port) || DEFAULT_CFG.OBS.port,
     },
     General: {
       ...general,
@@ -103,6 +116,7 @@ export function SetupPage() {
     openaiKey: '',
     spotifySecret: '',
     googleKey: '',
+    obsPassword: '',
   });
   const [status, setStatus] = useState('');
 
@@ -222,6 +236,18 @@ export function SetupPage() {
         setSecrets((s) => ({ ...s, googleKey: '' }));
         await loadConfig();
         await loadSetupStatus().catch(() => {});
+      } else if (step === 'obs') {
+        await savePartial({
+          OBS: {
+            enabled: v('OBS', 'enabled'),
+            host: v('OBS', 'host'),
+            port: v('OBS', 'port'),
+            password: secrets.obsPassword,
+          },
+        });
+        setSecrets((s) => ({ ...s, obsPassword: '' }));
+        await loadConfig();
+        await loadSetupStatus().catch(() => {});
       } else if (step === 'general') {
         await savePartial({
           General: {
@@ -281,6 +307,11 @@ export function SetupPage() {
     (googleCx === '' && googleKey === '') ||
     (googleCx !== '' && googleKey !== '');
 
+  const obsEnabled = asBool(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled);
+  const obsHost = norm(v('OBS', 'host'));
+  const obsPort = norm(v('OBS', 'port'));
+  const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '');
+
   const generalOk =
     norm(v('General', 'song_cost')) !== '' && norm(v('General', 'skip_song_cost')) !== '' && norm(v('General', 'request_overlay_duration')) !== '';
 
@@ -293,9 +324,11 @@ export function SetupPage() {
           ? openaiOk
           : currentStep === 'google'
             ? googleOk
-            : currentStep === 'general'
-              ? generalOk
-              : false;
+            : currentStep === 'obs'
+              ? obsOk
+              : currentStep === 'general'
+                ? generalOk
+                : false;
 
   const nextLabel = currentStep === 'general' ? 'Finish' : 'Next';
 
@@ -376,6 +409,44 @@ export function SetupPage() {
           <div className="muted" style={{ marginTop: 8 }}>
             You can proceed after entering credentials + redirect URL. Connecting Spotify is recommended but not required to click Next.
           </div>
+        </div>
+      ) : null}
+
+      {currentStep === 'obs' ? (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2>OBS</h2>
+
+          <label>OBS enabled</label>
+          <select
+            value={(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled).toLowerCase()}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+
+          <label>OBS host</label>
+          <input
+            type="text"
+            value={v('OBS', 'host')}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), host: e.target.value } }))}
+          />
+
+          <label>OBS port</label>
+          <input
+            type="text"
+            value={v('OBS', 'port')}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), port: e.target.value } }))}
+          />
+
+          <label>OBS password (secret)</label>
+          <input
+            type="password"
+            placeholder="(leave blank to keep existing)"
+            value={secrets.obsPassword}
+            onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
+          />
+          <div className="muted">This is the password configured in OBS → Tools → WebSocket Server Settings.</div>
         </div>
       ) : null}
 

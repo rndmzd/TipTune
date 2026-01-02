@@ -19,6 +19,7 @@ export function SettingsPage() {
     openaiKey: '',
     spotifySecret: '',
     googleKey: '',
+    obsPassword: '',
   });
 
   const [status, setStatus] = useState<string>('');
@@ -98,105 +99,140 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2>Settings</h2>
-        <div className="muted">Secret fields are not shown. Leave secret fields blank to keep the existing value.</div>
-
-        <div className="row" style={{ marginTop: 8 }}>
-          <div style={{ flex: 1, minWidth: 320 }}>
-            <label>Events API URL (secret)</label>
-            <input
-              type="password"
-              placeholder="(leave blank to keep)"
-              value={secrets.eventsUrl}
-              onChange={(e) => setSecrets((s) => ({ ...s, eventsUrl: e.target.value }))}
-            />
-            <label>Events API max_requests_per_minute</label>
-            <input
-              type="text"
-              value={v('Events API', 'max_requests_per_minute')}
-              onChange={(e) => setCfg((c) => ({ ...c, 'Events API': { ...(c['Events API'] || {}), max_requests_per_minute: e.target.value } }))}
-            />
-            <label>OpenAI API key (secret)</label>
-            <input
-              type="password"
-              placeholder="(leave blank to keep)"
-              value={secrets.openaiKey}
-              onChange={(e) => setSecrets((s) => ({ ...s, openaiKey: e.target.value }))}
-            />
-            <label>OpenAI model</label>
-            <input
-              type="text"
-              value={v('OpenAI', 'model')}
-              onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
-            />
-          </div>
-
-          <div style={{ flex: 1, minWidth: 320 }}>
-            <label>Spotify client_id</label>
-            <input
-              type="text"
-              value={v('Spotify', 'client_id')}
-              onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
-            />
-            <label>Spotify client_secret (secret)</label>
-            <input
-              type="password"
-              placeholder="(leave blank to keep)"
-              value={secrets.spotifySecret}
-              onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
-            />
-            <label>Spotify redirect_url</label>
-            <input
-              type="text"
-              value={v('Spotify', 'redirect_url')}
-              onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), redirect_url: e.target.value } }))}
-            />
-            <label>OBS enabled</label>
-            <select
-              value={(v('OBS', 'enabled') || 'true').toLowerCase()}
-              onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
-            >
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          </div>
-
-          <div style={{ flex: 1, minWidth: 320 }}>
-            <label>Search google_api_key (secret)</label>
-            <input
-              type="password"
-              placeholder="(leave blank to keep)"
-              value={secrets.googleKey}
-              onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
-            />
-            <label>Search google_cx</label>
-            <input
-              type="text"
-              value={v('Search', 'google_cx')}
-              onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
-            />
-            <label>General song_cost</label>
-            <input
-              type="text"
-              value={v('General', 'song_cost')}
-              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), song_cost: e.target.value } }))}
-            />
-            <label>General skip_song_cost</label>
-            <input
-              type="text"
-              value={v('General', 'skip_song_cost')}
-              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), skip_song_cost: e.target.value } }))}
-            />
-            <label>General request_overlay_duration</label>
-            <input
-              type="text"
-              value={v('General', 'request_overlay_duration')}
-              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
-            />
-          </div>
+      <div className="row" style={{ marginTop: 16 }}>
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>Events API</h2>
+          <label>URL (secret)</label>
+          <input
+            type="password"
+            placeholder="(leave blank to keep)"
+            value={secrets.eventsUrl}
+            onChange={(e) => setSecrets((s) => ({ ...s, eventsUrl: e.target.value }))}
+          />
+          <label>max_requests_per_minute</label>
+          <input
+            type="text"
+            value={v('Events API', 'max_requests_per_minute')}
+            onChange={(e) => setCfg((c) => ({ ...c, 'Events API': { ...(c['Events API'] || {}), max_requests_per_minute: e.target.value } }))}
+          />
         </div>
 
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>OpenAI</h2>
+          <label>API key (secret)</label>
+          <input
+            type="password"
+            placeholder="(leave blank to keep)"
+            value={secrets.openaiKey}
+            onChange={(e) => setSecrets((s) => ({ ...s, openaiKey: e.target.value }))}
+          />
+          <label>Model</label>
+          <input
+            type="text"
+            value={v('OpenAI', 'model')}
+            onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
+          />
+        </div>
+      </div>
+
+      <div className="row" style={{ marginTop: 16 }}>
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>Spotify</h2>
+          <label>client_id</label>
+          <input
+            type="text"
+            value={v('Spotify', 'client_id')}
+            onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
+          />
+          <label>client_secret (secret)</label>
+          <input
+            type="password"
+            placeholder="(leave blank to keep)"
+            value={secrets.spotifySecret}
+            onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
+          />
+          <label>redirect_url</label>
+          <input
+            type="text"
+            value={v('Spotify', 'redirect_url')}
+            onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), redirect_url: e.target.value } }))}
+          />
+        </div>
+
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>OBS</h2>
+          <label>enabled</label>
+          <select
+            value={(v('OBS', 'enabled') || 'true').toLowerCase()}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+          <label>host</label>
+          <input
+            type="text"
+            value={v('OBS', 'host')}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), host: e.target.value } }))}
+          />
+          <label>port</label>
+          <input
+            type="text"
+            value={v('OBS', 'port')}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), port: e.target.value } }))}
+          />
+          <label>password (secret)</label>
+          <input
+            type="password"
+            placeholder="(leave blank to keep)"
+            value={secrets.obsPassword}
+            onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
+          />
+        </div>
+      </div>
+
+      <div className="row" style={{ marginTop: 16 }}>
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>Search</h2>
+          <label>google_api_key (secret)</label>
+          <input
+            type="password"
+            placeholder="(leave blank to keep)"
+            value={secrets.googleKey}
+            onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
+          />
+          <label>google_cx</label>
+          <input
+            type="text"
+            value={v('Search', 'google_cx')}
+            onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
+          />
+        </div>
+
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>General</h2>
+          <label>song_cost</label>
+          <input
+            type="text"
+            value={v('General', 'song_cost')}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), song_cost: e.target.value } }))}
+          />
+          <label>skip_song_cost</label>
+          <input
+            type="text"
+            value={v('General', 'skip_song_cost')}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), skip_song_cost: e.target.value } }))}
+          />
+          <label>request_overlay_duration</label>
+          <input
+            type="text"
+            value={v('General', 'request_overlay_duration')}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
+          />
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <div className="actions">
           <button
             type="button"
@@ -228,6 +264,9 @@ export function SettingsPage() {
                 },
                 OBS: {
                   enabled: v('OBS', 'enabled'),
+                  host: v('OBS', 'host'),
+                  port: v('OBS', 'port'),
+                  password: secrets.obsPassword,
                 },
               };
 
@@ -239,7 +278,7 @@ export function SettingsPage() {
                 });
 
                 setStatus('Saved.');
-                setSecrets({ eventsUrl: '', openaiKey: '', spotifySecret: '', googleKey: '' });
+                setSecrets({ eventsUrl: '', openaiKey: '', spotifySecret: '', googleKey: '', obsPassword: '' });
                 await loadConfig();
               } catch (e: any) {
                 setStatus(`Error: ${e?.message ? e.message : String(e)}`);
