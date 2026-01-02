@@ -1,21 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 
 import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
-import { EventsLink, HeaderBar } from '../components/HeaderBar';
+import { HeaderBar } from '../components/HeaderBar';
 
 type DevicesResp = { ok: true; devices: Device[] };
 type QueueResp = { ok: true; queue: QueueState };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 
 export function SettingsPage() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const isForced = searchParams.get('dashboard') === '1';
-
-  const querySuffix = useMemo(() => (isForced ? '?dashboard=1' : ''), [isForced]);
-
   const [currentDeviceText, setCurrentDeviceText] = useState<string>('Loading...');
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceId, setDeviceId] = useState<string>('');
@@ -69,17 +62,6 @@ export function SettingsPage() {
     <>
       <HeaderBar
         title="Settings"
-        right={
-          <>
-            <button type="button" onClick={() => navigate('/setup?rerun=1')}>
-              Setup Wizard
-            </button>
-            <button type="button" onClick={() => navigate(`/${querySuffix}`)}>
-              Dashboard
-            </button>
-            <EventsLink />
-          </>
-        }
       />
 
       <div className="row">

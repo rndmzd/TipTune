@@ -259,11 +259,6 @@ export function SetupPage() {
     <>
       <HeaderBar
         title={`Setup Wizard${titleSuffix}`}
-        right={
-          <div className="muted">
-            <a href="/?dashboard=1">Dashboard</a>
-          </div>
-        }
       />
 
       <div className="card">

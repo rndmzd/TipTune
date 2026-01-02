@@ -21,6 +21,18 @@ button:disabled:hover { background: #1b2a55; }
 .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .actions + .muted { margin-top: 8px; }
 
+.headerBar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+.headerTitle { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
+.headerNav { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+
+.navBtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border-radius: 10px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; text-decoration: none; cursor: pointer; line-height: 1; white-space: nowrap; }
+.navBtn:hover { background: #23366f; }
+.navBtnPrimary { border-color: rgba(138, 180, 255, 0.55); background: rgba(138, 180, 255, 0.14); }
+.navBtnPrimary:hover { background: rgba(138, 180, 255, 0.22); }
+.navBtnGhost { background: transparent; }
+.navBtnGhost:hover { background: rgba(35, 54, 111, 0.35); }
+.navBtnActive { border-color: rgba(138, 180, 255, 0.85); box-shadow: 0 0 0 1px rgba(138,180,255,0.35), 0 6px 18px rgba(0,0,0,0.25); }
+
 .queueOut { margin-top: 10px; max-height: 420px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 .queueCard { background: #0e1530; border: 1px solid #2a3a66; border-radius: 10px; padding: 10px 12px; }
 .queueCardNowPlaying { border-color: #8ab4ff; box-shadow: 0 0 0 1px rgba(138,180,255,0.35); }
