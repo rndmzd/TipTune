@@ -900,6 +900,46 @@ class AutoDJ:
                 exc=e)
             return False
 
+    def insert_song_to_queue(self, track_uri: str, index: int = 0, silent: bool = False) -> bool:
+        try:
+            if not silent:
+                logger.debug(
+                    "spotify.queue.insert",
+                    message="Inserting track into queue",
+                    data={"track_uri": track_uri, "index": index},
+                )
+
+            with self._queue_lock:
+                n = len(self.queued_tracks)
+                try:
+                    idx = int(index)
+                except Exception:
+                    idx = 0
+                if idx < 0:
+                    idx = 0
+                if idx > n:
+                    idx = n
+                self.queued_tracks.insert(idx, track_uri)
+                qlen = len(self.queued_tracks)
+
+            if not self.playback_active() and qlen == 1:
+                self.playing_first_track = True
+
+            logger.debug(
+                "spotify.queue.status",
+                message="Current queue status",
+                data={"queued_tracks": self.queued_tracks},
+            )
+            self._print_variables(True)
+            return True
+        except SpotifyException as e:
+            logger.exception(
+                "spotify.queue.insert.error",
+                message="Failed to insert song into queue",
+                exc=e,
+            )
+            return False
+
     def check_queue_status(self, silent=False) -> bool:
         try:
             if not self.playback_active():

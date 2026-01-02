@@ -281,6 +281,7 @@ class WebUI:
             web.get('/setup', self._page_app),
             web.get('/events', self._page_app),
             web.get('/api/queue', self._api_queue),
+            web.post('/api/queue/add', self._api_queue_add),
             web.post('/api/queue/pause', self._api_pause),
             web.post('/api/queue/resume', self._api_resume),
             web.post('/api/queue/move', self._api_queue_move),
@@ -290,6 +291,7 @@ class WebUI:
             web.post('/api/obs/ensure_spotify_audio_capture', self._api_obs_ensure_spotify_audio_capture),
             web.post('/api/obs/test_overlay', self._api_obs_test_overlay),
             web.get('/api/spotify/devices', self._api_devices),
+            web.get('/api/spotify/search', self._api_spotify_search),
             web.post('/api/spotify/device', self._api_set_device),
             web.get('/api/spotify/auth/status', self._api_spotify_auth_status),
             web.post('/api/spotify/auth/start', self._api_spotify_auth_start),
@@ -388,6 +390,30 @@ class WebUI:
             return web.json_response({"ok": False, "error": "Failed to delete queue item"}, status=400)
         return web.json_response({"ok": True})
 
+    async def _api_queue_add(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        uri = payload.get('uri')
+        if not isinstance(uri, str) or uri.strip() == "":
+            return web.json_response({"ok": False, "error": "Invalid uri"}, status=400)
+
+        index_raw = payload.get('index', 0)
+        try:
+            index = int(index_raw)
+        except Exception:
+            index = 0
+
+        ok = await self._service.insert_track_to_queue(uri, index=index)
+        if not ok:
+            return web.json_response({"ok": False, "error": "Failed to add track to queue"}, status=400)
+        return web.json_response({"ok": True})
+
     async def _api_devices(self, _request: web.Request) -> web.Response:
         try:
             devices, error = await self._service.get_spotify_devices()
@@ -398,6 +424,28 @@ class WebUI:
         except Exception as exc:
             logger.exception("webui.api.devices.error", exc=exc, message="Failed to get devices")
             return web.json_response({"ok": False, "error": str(exc), "devices": []})
+
+    async def _api_spotify_search(self, request: web.Request) -> web.Response:
+        q = request.query.get('q', '')
+        q = q.strip() if isinstance(q, str) else ''
+        if q == '' or len(q) < 2:
+            return web.json_response({"ok": False, "error": "Query too short"}, status=400)
+
+        limit_raw = request.query.get('limit', '10')
+        try:
+            limit = int(limit_raw)
+        except Exception:
+            limit = 10
+        if limit <= 0:
+            limit = 10
+        limit = min(limit, 25)
+
+        try:
+            tracks = await self._service.search_spotify_tracks(q, limit=limit)
+            return web.json_response({"ok": True, "tracks": tracks})
+        except Exception as exc:
+            logger.exception("webui.api.spotify.search.error", exc=exc, message="Failed to search Spotify")
+            return web.json_response({"ok": False, "error": str(exc), "tracks": []}, status=400)
 
     async def _api_set_device(self, request: web.Request) -> web.Response:
         try:
@@ -1678,6 +1726,158 @@ class SongRequestService:
         except asyncio.TimeoutError:
             return False
         return bool(ok)
+
+    def _normalize_spotify_track_uri(self, v: Any) -> Optional[str]:
+        if not isinstance(v, str):
+            return None
+        s = v.strip()
+        if s == "":
+            return None
+        if s.startswith('spotify:track:'):
+            return s
+
+        tid = self._parse_spotify_track_id(s)
+        if tid:
+            return f"spotify:track:{tid}"
+
+        if s.isalnum() and 10 <= len(s) <= 64:
+            return f"spotify:track:{s}"
+
+        return s
+
+    async def insert_track_to_queue(self, uri: Any, index: int = 0) -> bool:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return False
+        if not hasattr(self.actions, 'auto_dj'):
+            return False
+
+        track_uri = self._normalize_spotify_track_uri(uri)
+        if not track_uri:
+            return False
+
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, self.actions.auto_dj.insert_song_to_queue, track_uri, int(index), True),
+                timeout=2,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
+        return bool(ok)
+
+    async def search_spotify_tracks(self, query: str, limit: int = 10) -> list[dict]:
+        loop = asyncio.get_running_loop()
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError("Timed out initializing Spotify client")
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            raise RuntimeError("Spotify client not ready")
+
+        q = query.strip() if isinstance(query, str) else ''
+        if q == '' or len(q) < 2:
+            return []
+
+        try:
+            def _do_search():
+                return helpers_spotify_client.search(q=q, type='track', market='US', limit=int(limit))
+
+            payload = await asyncio.wait_for(
+                loop.run_in_executor(None, _do_search),
+                timeout=6,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timed out searching Spotify")
+        except Exception as exc:
+            raise RuntimeError(str(exc))
+
+        items = []
+        if isinstance(payload, dict):
+            tracks = payload.get('tracks')
+            if isinstance(tracks, dict):
+                raw_items = tracks.get('items', [])
+                if isinstance(raw_items, list):
+                    items = raw_items
+
+        out: list[dict] = []
+        for t in items:
+            if not isinstance(t, dict):
+                continue
+
+            track_id = t.get('id') if isinstance(t.get('id'), str) else None
+            uri = t.get('uri') if isinstance(t.get('uri'), str) else None
+            name = t.get('name') if isinstance(t.get('name'), str) else None
+
+            artists: list[str] = []
+            artists_raw = t.get('artists')
+            if isinstance(artists_raw, list):
+                for a in artists_raw:
+                    if isinstance(a, dict):
+                        an = a.get('name')
+                        if isinstance(an, str) and an.strip() != '':
+                            artists.append(an)
+
+            album_name = None
+            album_image_url = None
+            album_raw = t.get('album')
+            if isinstance(album_raw, dict):
+                an = album_raw.get('name')
+                if isinstance(an, str) and an.strip() != '':
+                    album_name = an
+                imgs = album_raw.get('images')
+                if isinstance(imgs, list) and imgs:
+                    first = imgs[0]
+                    if isinstance(first, dict):
+                        u = first.get('url')
+                        if isinstance(u, str) and u.strip() != '':
+                            album_image_url = u
+
+            duration_ms = t.get('duration_ms')
+            explicit = bool(t.get('explicit', False))
+            external_urls = t.get('external_urls')
+            spotify_url = None
+            if isinstance(external_urls, dict):
+                u = external_urls.get('spotify')
+                if isinstance(u, str) and u.strip() != '':
+                    spotify_url = u
+
+            item: Dict[str, Any] = {}
+            if uri is not None:
+                item['uri'] = uri
+            if track_id is not None:
+                item['track_id'] = track_id
+            if name is not None:
+                item['name'] = name
+            if artists:
+                item['artists'] = artists
+            if album_name is not None:
+                item['album'] = album_name
+            if duration_ms is not None:
+                item['duration_ms'] = duration_ms
+            if explicit is not None:
+                item['explicit'] = explicit
+            if spotify_url is not None:
+                item['spotify_url'] = spotify_url
+            if album_image_url is not None:
+                item['album_image_url'] = album_image_url
+
+            if item:
+                out.append(item)
+        return out
 
     async def delete_queue_item(self, index: int) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):

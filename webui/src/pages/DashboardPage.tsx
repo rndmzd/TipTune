@@ -8,6 +8,7 @@ import { QueueCard } from '../components/QueueCard';
 
 type QueueResp = { ok: true; queue: QueueState };
 type DevicesResp = { ok: true; devices: Device[] };
+type SearchTracksResp = { ok: true; tracks: QueueItem[] };
 
 export function DashboardPage() {
   const location = useLocation();
@@ -22,6 +23,13 @@ export function DashboardPage() {
   const [activeDeviceName, setActiveDeviceName] = useState<string>('');
   const [activeDeviceWarning, setActiveDeviceWarning] = useState<string>('');
   const [selectedDeviceWarning, setSelectedDeviceWarning] = useState<string>('');
+
+  const [addTrackOpen, setAddTrackOpen] = useState<boolean>(false);
+  const [searchQ, setSearchQ] = useState<string>('');
+  const [searchBusy, setSearchBusy] = useState<boolean>(false);
+  const [searchErr, setSearchErr] = useState<string>('');
+  const [searchResults, setSearchResults] = useState<QueueItem[]>([]);
+  const searchSeqRef = useRef<number>(0);
 
   const selectedDeviceIdRef = useRef<string>('');
   const lastActiveDeviceIdRef = useRef<string>('');
@@ -113,6 +121,46 @@ export function DashboardPage() {
     });
   }
 
+  async function searchTracks(q: string) {
+    const qs = String(q ?? '').trim();
+    if (qs.length < 2) {
+      setSearchErr('Enter at least 2 characters.');
+      setSearchResults([]);
+      return;
+    }
+
+    const seq = ++searchSeqRef.current;
+    setSearchBusy(true);
+    try {
+      const data = await apiJson<SearchTracksResp>(`/api/spotify/search?q=${encodeURIComponent(qs)}&limit=10`);
+      if (seq !== searchSeqRef.current) return;
+
+      const tracks = Array.isArray(data.tracks) ? data.tracks : [];
+      setSearchResults(tracks);
+      setSearchErr('');
+    } catch (e: any) {
+      if (seq !== searchSeqRef.current) return;
+      setSearchResults([]);
+      setSearchErr(e?.message ? String(e.message) : String(e));
+    } finally {
+      if (seq === searchSeqRef.current) setSearchBusy(false);
+    }
+  }
+
+  async function addTrackToTop(item: QueueItem) {
+    if (opBusy) return;
+    const uri = typeof item?.uri === 'string' && item.uri.trim() !== '' ? item.uri.trim() : '';
+    if (!uri) return;
+
+    setOpBusy(true);
+    try {
+      await post('/api/queue/add', { uri, index: 0 });
+    } finally {
+      await refresh(true);
+      setOpBusy(false);
+    }
+  }
+
   async function move(fromIndex: number, toIndex: number) {
     if (opBusy) return;
     if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return;
@@ -171,6 +219,7 @@ export function DashboardPage() {
   const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
   const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && !!activeDeviceWarning;
   const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && !!selectedDeviceWarning;
+  const canUseQueueControls = status === 'ok' && queueState?.enabled === true;
 
   return (
     <>
@@ -291,7 +340,107 @@ export function DashboardPage() {
             <button type="button" onClick={() => refresh(true)} disabled={opBusy}>
               Refresh
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAddTrackOpen((v) => {
+                  const next = !v;
+                  if (!next) {
+                    searchSeqRef.current += 1;
+                    setSearchBusy(false);
+                    setSearchErr('');
+                    setSearchResults([]);
+                    setSearchQ('');
+                  }
+                  return next;
+                });
+              }}
+              disabled={opBusy || !canUseQueueControls}
+            >
+              {addTrackOpen ? 'Close Add Track' : 'Add Track'}
+            </button>
           </div>
+
+          {addTrackOpen ? (
+            <div
+              style={{
+                marginTop: 12,
+                border: '1px solid #2a3a66',
+                background: '#0e1530',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 6 }}>Add Track</div>
+              <div className="muted" style={{ marginBottom: 10 }}>
+                Search Spotify for a track, then add it to the top of the queue.
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={searchQ}
+                  placeholder="Artist and song title"
+                  onChange={(e) => setSearchQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      searchTracks(searchQ).catch(() => {});
+                    }
+                  }}
+                  style={{ flex: 1, minWidth: 220, width: 'auto' }}
+                />
+                <button type="button" onClick={() => searchTracks(searchQ)} disabled={searchBusy || opBusy}>
+                  {searchBusy ? 'Searching…' : 'Search'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    searchSeqRef.current += 1;
+                    setSearchBusy(false);
+                    setSearchErr('');
+                    setSearchResults([]);
+                    setSearchQ('');
+                  }}
+                  disabled={searchBusy || opBusy}
+                >
+                  Clear
+                </button>
+              </div>
+
+              {searchErr ? <div className="muted" style={{ marginTop: 8 }}>Error: {searchErr}</div> : null}
+
+              <div className="queueOut" style={{ maxHeight: 320, marginTop: 10 }}>
+                {searchResults.length ? (
+                  searchResults.map((item, i) => (
+                    <QueueCard
+                      key={String(item.track_id || item.uri || i)}
+                      item={item}
+                      indexLabel={`Result #${i + 1}`}
+                      allowDelete={false}
+                      rightActions={
+                        <button
+                          className="queueIconBtn"
+                          type="button"
+                          title="Add to top of queue"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            addTrackToTop(item).catch(() => {});
+                          }}
+                          disabled={opBusy || !(typeof item?.uri === 'string' && item.uri.trim() !== '')}
+                        >
+                          +
+                        </button>
+                      }
+                    />
+                  ))
+                ) : (
+                  <div className="muted">Search results will appear here.</div>
+                )}
+              </div>
+            </div>
+          ) : null}
 
           {status === 'error' ? <div className="muted">Error: {err}</div> : null}
 
