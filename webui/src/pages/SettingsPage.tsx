@@ -163,7 +163,7 @@ export function SettingsPage() {
           <h2>OBS</h2>
           <label>enabled</label>
           <select
-            value={(v('OBS', 'enabled') || 'true').toLowerCase()}
+            value={(v('OBS', 'enabled') || 'false').toLowerCase()}
             onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
           >
             <option value="true">true</option>
