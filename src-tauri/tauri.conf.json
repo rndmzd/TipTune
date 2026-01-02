@@ -7,8 +7,8 @@
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": ["../webui/dist"],
     "beforeDevCommand": {
-      "script": "node ./scripts/prepare-sidecar.mjs && npm run webui:dev",
-      "wait": false
+      "script": "node ./scripts/prepare-sidecar.mjs --spawn-webui-dev",
+      "wait": true
     },
     "beforeBuildCommand": "node ./scripts/prepare-sidecar.mjs && npm run webui:build",
     "beforeBundleCommand": "node ./scripts/prepare-sidecar.mjs && npm run webui:build"

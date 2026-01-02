@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,13 +44,68 @@ function resolveSidecarDistPath(sidecarName, extension) {
   return candidates[0];
 }
 
+function newestMtimeMs(paths) {
+  let newest = 0;
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) {
+        const st = fs.statSync(p);
+        if (st.mtimeMs > newest) newest = st.mtimeMs;
+      }
+    } catch {
+    }
+  }
+  return newest;
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForReadable(filePath, timeoutMs = 4000) {
+  const start = Date.now();
+  while (true) {
+    try {
+      const fd = fs.openSync(filePath, 'r');
+      fs.closeSync(fd);
+      return;
+    } catch (err) {
+      const code = err && err.code ? String(err.code) : '';
+      if (Date.now() - start > timeoutMs) {
+        throw err;
+      }
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY') {
+        await sleepMs(150);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 function ensureSidecarBuilt(sidecarName, extension) {
   const distPath = resolveSidecarDistPath(sidecarName, extension);
-  if (fs.existsSync(distPath)) {
-    return distPath;
+  const specPath = path.join(repoRoot, `${sidecarName}.spec`);
+  const forceRebuild = String(process.env.TIPTUNE_FORCE_SIDECAR_REBUILD || '').trim() === '1';
+  const sourcePaths = [
+    specPath,
+    path.join(repoRoot, 'app.py'),
+    path.join(repoRoot, 'helpers', '__init__.py'),
+    path.join(repoRoot, 'utils', 'runtime_paths.py'),
+  ];
+
+  if (fs.existsSync(distPath) && !forceRebuild) {
+    try {
+      const distStat = fs.statSync(distPath);
+      const newestSrc = newestMtimeMs(sourcePaths);
+      if (distStat.mtimeMs >= newestSrc && newestSrc > 0) {
+        return distPath;
+      }
+    } catch {
+      return distPath;
+    }
   }
 
-  const specPath = path.join(repoRoot, `${sidecarName}.spec`);
   const pythonCmd = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 
   try {
@@ -81,6 +136,67 @@ const binariesDir = path.join(repoRoot, 'src-tauri', 'binaries');
 fs.mkdirSync(binariesDir, { recursive: true });
 
 const destPath = path.join(binariesDir, `${sidecarName}-${targetTriple}${extension}`);
-fs.copyFileSync(distPath, destPath);
+let shouldCopy = true;
+try {
+  if (fs.existsSync(destPath)) {
+    const srcStat = fs.statSync(distPath);
+    const dstStat = fs.statSync(destPath);
+    if (dstStat.size === srcStat.size && dstStat.mtimeMs >= srcStat.mtimeMs) {
+      shouldCopy = false;
+    }
+  }
+} catch {
+  shouldCopy = true;
+}
+
+if (shouldCopy) {
+  const tmpPath = destPath + `.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.copyFileSync(distPath, tmpPath);
+    try {
+      fs.chmodSync(tmpPath, 0o666);
+    } catch {
+    }
+    fs.renameSync(tmpPath, destPath);
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+    }
+  }
+}
+
+try {
+  fs.chmodSync(destPath, 0o666);
+} catch {
+}
+
+await waitForReadable(destPath, 15000);
 
 console.log(`Prepared sidecar: ${destPath}`);
+
+const shouldSpawnDev = process.argv.includes('--spawn-webui-dev');
+if (shouldSpawnDev) {
+  try {
+    if (process.platform === 'win32') {
+      const comspec = process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe';
+      const child = spawn(comspec, ['/d', '/s', '/c', 'npm run webui:dev'], {
+        cwd: repoRoot,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+    } else {
+      const child = spawn('npm', ['run', 'webui:dev'], {
+        cwd: repoRoot,
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    }
+    console.log('Spawned webui dev server (detached).');
+  } catch (err) {
+    console.warn('Failed to spawn webui dev server:', err);
+  }
+}
