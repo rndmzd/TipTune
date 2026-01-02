@@ -114,11 +114,12 @@ def _is_secret_field(section: str, key: str) -> bool:
     return False
 
 
-def _is_setup_complete() -> bool:
+def _is_setup_complete(cfg: Optional[configparser.ConfigParser] = None) -> bool:
     try:
-        if not config.has_section("General"):
+        src = cfg if cfg is not None else config
+        if not src.has_section("General"):
             return False
-        return config.getboolean("General", "setup_complete", fallback=False)
+        return src.getboolean("General", "setup_complete", fallback=False)
     except Exception:
         return False
 
@@ -402,26 +403,29 @@ class WebUI:
 
     async def _api_setup_status(self, _request: web.Request) -> web.Response:
         try:
+            fresh_config = configparser.ConfigParser()
+            fresh_config.read(config_path)
+
             events_url = ""
-            if config.has_section("Events API"):
-                events_url = config.get("Events API", "url", fallback="").strip()
+            if fresh_config.has_section("Events API"):
+                events_url = fresh_config.get("Events API", "url", fallback="").strip()
             events_configured = bool(events_url) and "yourusername" not in events_url and "your-token" not in events_url
 
             openai_api_key = ""
-            if config.has_section("OpenAI"):
-                openai_api_key = config.get("OpenAI", "api_key", fallback="").strip()
+            if fresh_config.has_section("OpenAI"):
+                openai_api_key = fresh_config.get("OpenAI", "api_key", fallback="").strip()
             openai_configured = bool(openai_api_key) and openai_api_key not in ("your-openai-api-key",)
 
             google_api_key = ""
             google_cx = ""
-            if config.has_section("Search"):
-                google_api_key = config.get("Search", "google_api_key", fallback="").strip()
-                google_cx = config.get("Search", "google_cx", fallback="").strip()
+            if fresh_config.has_section("Search"):
+                google_api_key = fresh_config.get("Search", "google_api_key", fallback="").strip()
+                google_cx = fresh_config.get("Search", "google_cx", fallback="").strip()
             google_configured = bool(google_api_key) and bool(google_cx)
 
             return web.json_response({
                 "ok": True,
-                "setup_complete": _is_setup_complete(),
+                "setup_complete": _is_setup_complete(fresh_config),
                 "events_configured": events_configured,
                 "openai_configured": openai_configured,
                 "google_configured": google_configured,
