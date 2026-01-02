@@ -9,6 +9,8 @@ from utils.structured_logging import get_structured_logger
 
 logger = get_structured_logger('tiptune.handlers.obshandler')
 
+REQUIRED_TEXT_SOURCES = ['SongRequester', 'WarningOverlay', 'GeneralOverlay']
+
 class OBSHandler:
     def __init__(self, host: str = 'localhost', port: int = 4455, password: Optional[str] = None):
         """Initialize OBS WebSocket handler.
@@ -286,6 +288,151 @@ class OBSHandler:
                         data={"scene": scene_name})
             return scene_name
         return None
+
+    async def _get_input_names(self) -> Optional[set[str]]:
+        response = await self.send_request('GetInputList')
+        if not response:
+            return None
+        inputs = response.get('inputs')
+        if not isinstance(inputs, list):
+            return None
+        names: set[str] = set()
+        for item in inputs:
+            if not isinstance(item, dict):
+                continue
+            name = item.get('inputName')
+            if isinstance(name, str) and name.strip():
+                names.add(name)
+        return names
+
+    async def _get_scene_item_id_by_scene_name(self, scene_name: str, source_name: str) -> Optional[int]:
+        if not scene_name or not source_name:
+            return None
+        id_response = await self.send_request('GetSceneItemId', {
+            'sceneName': scene_name,
+            'sourceName': source_name
+        })
+        if not id_response or 'sceneItemId' not in id_response:
+            return None
+        try:
+            return int(id_response['sceneItemId'])
+        except Exception:
+            return None
+
+    async def get_text_source_status(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+        names = source_names or list(REQUIRED_TEXT_SOURCES)
+
+        current_scene = await self.get_current_scene()
+        main_scene = self._get_scene_name(scene_key) if scene_key else None
+
+        input_names = await self._get_input_names()
+        if input_names is None:
+            return None
+
+        sources = []
+        for n in names:
+            input_exists = n in input_names
+            in_main_scene = False
+            if main_scene and input_exists:
+                in_main_scene = (await self._get_scene_item_id_by_scene_name(main_scene, n)) is not None
+            sources.append({
+                'name': n,
+                'input_exists': bool(input_exists),
+                'in_main_scene': bool(in_main_scene),
+                'present': bool(input_exists and in_main_scene),
+            })
+
+        return {
+            'current_scene': current_scene,
+            'main_scene': main_scene,
+            'sources': sources,
+        }
+
+    async def _create_text_input(self, scene_name: str, input_name: str) -> bool:
+        if not scene_name or not input_name:
+            return False
+
+        kinds = ['text_gdiplus_v2', 'text_ft2_source']
+        for kind in kinds:
+            resp = await self.send_request('CreateInput', {
+                'sceneName': scene_name,
+                'inputName': input_name,
+                'inputKind': kind,
+                'inputSettings': {'text': ''},
+                'sceneItemEnabled': False,
+            })
+            if resp is not None:
+                return True
+        return False
+
+    async def ensure_text_sources(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+        names = source_names or list(REQUIRED_TEXT_SOURCES)
+        scene_name = self._get_scene_name(scene_key) if scene_key else None
+        if not scene_name:
+            scene_name = await self.get_current_scene()
+        if not scene_name:
+            return None
+
+        input_names = await self._get_input_names()
+        if input_names is None:
+            return None
+
+        created: list[str] = []
+        added_to_scene: list[str] = []
+        already_present: list[str] = []
+        errors: Dict[str, str] = {}
+
+        for n in names:
+            try:
+                exists = n in input_names
+                if not exists:
+                    ok = await self._create_text_input(scene_name, n)
+                    if not ok:
+                        errors[n] = 'create_input_failed'
+                        continue
+                    created.append(n)
+                    input_names.add(n)
+
+                scene_item_id = await self._get_scene_item_id_by_scene_name(scene_name, n)
+                if scene_item_id is None:
+                    resp = await self.send_request('CreateSceneItem', {
+                        'sceneName': scene_name,
+                        'sourceName': n,
+                    })
+                    if not resp or 'sceneItemId' not in resp:
+                        errors[n] = 'add_to_scene_failed'
+                        continue
+                    try:
+                        scene_item_id = int(resp['sceneItemId'])
+                    except Exception:
+                        scene_item_id = None
+
+                    if scene_item_id is None:
+                        errors[n] = 'add_to_scene_failed'
+                        continue
+                    added_to_scene.append(n)
+
+                await self.send_request('SetSceneItemEnabled', {
+                    'sceneName': scene_name,
+                    'sceneItemId': scene_item_id,
+                    'sceneItemEnabled': False,
+                })
+                await self.send_request('SetInputSettings', {
+                    'inputName': n,
+                    'inputSettings': {'text': ''}
+                })
+
+                already_present.append(n)
+            except Exception as exc:
+                errors[n] = str(exc)
+
+        return {
+            'scene': scene_name,
+            'created': created,
+            'added_to_scene': added_to_scene,
+            'already_present': already_present,
+            'errors': errors,
+        }
 
     async def set_source_visibility(self, scene_key: str, source_name: str, visible: bool) -> bool:
         """Set the visibility of a source in a scene.

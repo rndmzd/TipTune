@@ -552,13 +552,13 @@ export function SetupPage() {
           />
           <div className="muted">Tip amount (in tokens) that triggers a “skip current song” action.</div>
 
-          <label>request_overlay_duration</label>
+          <label>OBS overlay duration</label>
           <input
             type="text"
             value={v('General', 'request_overlay_duration')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
           />
-          <div className="muted">How long (seconds) the request overlay stays visible in OBS.</div>
+          <div className="muted">How long (seconds) OBS overlays stay visible.</div>
         </div>
       ) : null}
     </>

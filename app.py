@@ -285,6 +285,9 @@ class WebUI:
             web.post('/api/queue/resume', self._api_resume),
             web.post('/api/queue/move', self._api_queue_move),
             web.post('/api/queue/delete', self._api_queue_delete),
+            web.get('/api/obs/status', self._api_obs_status),
+            web.post('/api/obs/ensure_sources', self._api_obs_ensure_sources),
+            web.post('/api/obs/test_overlay', self._api_obs_test_overlay),
             web.get('/api/spotify/devices', self._api_devices),
             web.post('/api/spotify/device', self._api_set_device),
             web.get('/api/spotify/auth/status', self._api_spotify_auth_status),
@@ -477,6 +480,38 @@ class WebUI:
             return web.json_response({"ok": False, "error": error or "update failed"}, status=400)
         return web.json_response({"ok": True})
 
+    async def _api_obs_status(self, _request: web.Request) -> web.Response:
+        try:
+            data = await self._service.get_obs_status()
+            return web.json_response({"ok": True, **data})
+        except Exception as exc:
+            logger.exception("webui.api.obs_status.error", exc=exc, message="Failed to get OBS status")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def _api_obs_ensure_sources(self, _request: web.Request) -> web.Response:
+        try:
+            result = await self._service.ensure_obs_text_sources()
+            if result is None:
+                return web.json_response({"ok": False, "error": "OBS not available"}, status=400)
+            return web.json_response({"ok": True, "result": result})
+        except Exception as exc:
+            logger.exception("webui.api.obs_ensure_sources.error", exc=exc, message="Failed to ensure OBS sources")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def _api_obs_test_overlay(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        overlay = payload.get('overlay')
+        ok, error = await self._service.trigger_obs_test_overlay(overlay)
+        if not ok:
+            return web.json_response({"ok": False, "error": error or "Failed to trigger overlay"}, status=400)
+        return web.json_response({"ok": True})
+
     async def _api_events_recent(self, request: web.Request) -> web.Response:
         limit_raw = request.query.get('limit', '50')
         try:
@@ -601,6 +636,80 @@ class SongRequestService:
         self._spotify_auth_oauth: Any = None
         self._spotify_auth_runner: Optional[web.AppRunner] = None
         self._spotify_auth_site: Optional[web.BaseSite] = None
+
+    def _get_obs_overlay_duration_seconds(self) -> int:
+        try:
+            return max(1, int(config.getint("General", "request_overlay_duration", fallback=10)))
+        except Exception:
+            return 10
+
+    async def get_obs_status(self) -> Dict[str, Any]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return {"enabled": False}
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+            return {"enabled": True, "connected": False}
+
+        status = await obs.get_text_source_status(scene_key='main')
+        if status is None:
+            return {"enabled": True, "connected": False}
+        return {"enabled": True, "connected": True, "status": status}
+
+    async def ensure_obs_text_sources(self) -> Optional[Dict[str, Any]]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return None
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+            return None
+        return await obs.ensure_text_sources(scene_key='main')
+
+    async def trigger_obs_test_overlay(self, overlay: Any) -> tuple[bool, Optional[str]]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return (False, "OBS is disabled")
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+            return (False, "OBS is not available")
+
+        overlay_name = str(overlay or '').strip()
+        duration = self._get_obs_overlay_duration_seconds()
+
+        async def _run() -> None:
+            if overlay_name == 'SongRequester':
+                await obs.trigger_song_requester_overlay('TestUser', 'Test Song - Test Artist', duration)
+            elif overlay_name == 'WarningOverlay':
+                await obs.trigger_warning_overlay('TestUser', 'This is a test warning overlay.', duration)
+            elif overlay_name == 'GeneralOverlay':
+                await obs.trigger_motor_overlay('This is a test general overlay.', overlay_type='processing', display_duration=duration)
+            else:
+                raise ValueError('Unknown overlay')
+
+        try:
+            asyncio.create_task(_run())
+        except Exception as exc:
+            return (False, str(exc))
+
+        return (True, None)
 
     async def _refresh_obs_integration_from_config(self) -> None:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
