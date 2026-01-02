@@ -45,6 +45,50 @@ const STEPS: { key: WizardStepKey; title: string }[] = [
   { key: 'general', title: 'General Settings' },
 ];
 
+const DEFAULT_CFG: Record<string, Record<string, string>> = {
+  Spotify: {
+    redirect_url: 'http://127.0.0.1:8888/callback',
+  },
+  'Events API': {
+    max_requests_per_minute: '1000',
+  },
+  OpenAI: {
+    model: 'gpt-5-mini',
+  },
+  General: {
+    request_overlay_duration: '10',
+  },
+};
+
+function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
+  const cfg = inputCfg || {};
+
+  const spotify = cfg.Spotify || {};
+  const events = cfg['Events API'] || {};
+  const openai = cfg.OpenAI || {};
+  const general = cfg.General || {};
+
+  return {
+    ...cfg,
+    Spotify: {
+      ...spotify,
+      redirect_url: norm(spotify.redirect_url) || DEFAULT_CFG.Spotify.redirect_url,
+    },
+    'Events API': {
+      ...events,
+      max_requests_per_minute: norm(events.max_requests_per_minute) || DEFAULT_CFG['Events API'].max_requests_per_minute,
+    },
+    OpenAI: {
+      ...openai,
+      model: norm(openai.model) || DEFAULT_CFG.OpenAI.model,
+    },
+    General: {
+      ...general,
+      request_overlay_duration: norm(general.request_overlay_duration) || DEFAULT_CFG.General.request_overlay_duration,
+    },
+  };
+}
+
 export function SetupPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -53,7 +97,7 @@ export function SetupPage() {
 
   const [stepIdx, setStepIdx] = useState(0);
 
-  const [cfg, setCfg] = useState<Record<string, Record<string, string>>>({});
+  const [cfg, setCfg] = useState<Record<string, Record<string, string>>>(DEFAULT_CFG);
   const [secrets, setSecrets] = useState({
     eventsUrl: '',
     openaiKey: '',
@@ -72,7 +116,7 @@ export function SetupPage() {
 
   async function loadConfig() {
     const data = await apiJson<ConfigResp>('/api/config');
-    setCfg(data.config || {});
+    setCfg(withDefaults(data.config || {}));
   }
 
   async function loadSetupStatus() {
@@ -383,7 +427,7 @@ export function SetupPage() {
           <label>Model</label>
           <input
             type="text"
-            value={v('OpenAI', 'model') || 'gpt-5'}
+            value={v('OpenAI', 'model') || 'gpt-5-mini'}
             onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
           />
           <div className="muted">Use a supported model name for your account. If you’re unsure, keep the default.</div>
