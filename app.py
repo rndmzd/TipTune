@@ -374,8 +374,11 @@ class WebUI:
 
     async def _api_devices(self, _request: web.Request) -> web.Response:
         try:
-            devices = await self._service.get_devices()
-            return web.json_response({"ok": True, "devices": devices})
+            devices, error = await self._service.get_spotify_devices()
+            payload: Dict[str, Any] = {"ok": True, "devices": devices}
+            if error:
+                payload["error"] = error
+            return web.json_response(payload)
         except Exception as exc:
             logger.exception("webui.api.devices.error", exc=exc, message="Failed to get devices")
             return web.json_response({"ok": False, "error": str(exc), "devices": []})
@@ -388,7 +391,7 @@ class WebUI:
 
         device_id = payload.get('device_id') if isinstance(payload, dict) else None
         persist = _as_bool(payload.get('persist'), default=True) if isinstance(payload, dict) else True
-        ok = await self._service.set_device(device_id, persist=persist)
+        ok = await self._service.set_spotify_device(device_id, persist=persist)
         if not ok:
             return web.json_response({"ok": False, "error": "Failed to set device"}, status=400)
         return web.json_response({"ok": True})
@@ -1484,6 +1487,43 @@ class SongRequestService:
             return []
         return devices if isinstance(devices, list) else []
 
+    async def get_spotify_devices(self) -> tuple[list[dict], Optional[str]]:
+        loop = asyncio.get_running_loop()
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return ([], "Timed out initializing Spotify client")
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return ([], "Spotify client not ready")
+
+        try:
+            payload = await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.devices),
+                timeout=5,
+            )
+        except asyncio.TimeoutError:
+            return ([], "Timed out listing devices")
+        except Exception as exc:
+            logger.exception("spotify.devices.error", exc=exc, message="Failed to list Spotify devices")
+            return ([], str(exc))
+
+        devices = payload.get('devices', []) if isinstance(payload, dict) else []
+        if isinstance(devices, list):
+            return (devices, None)
+        return ([], None)
+
     async def set_device(self, device_id: Any, persist: bool = True) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):
             return False
@@ -1500,6 +1540,51 @@ class SongRequestService:
             )
         except asyncio.TimeoutError:
             return False
+        if not ok:
+            return False
+
+        if persist:
+            await self.update_config_from_ui({"Spotify": {"playback_device_id": device_id}})
+        return True
+
+    async def set_spotify_device(self, device_id: Any, persist: bool = True) -> bool:
+        if not isinstance(device_id, str) or device_id.strip() == '':
+            return False
+        device_id = device_id.strip()
+
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            return await self.set_device(device_id, persist=persist)
+
+        loop = asyncio.get_running_loop()
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return False
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return False
+
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.transfer_playback, device_id, False),
+                timeout=10,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
+
         if not ok:
             return False
 
