@@ -110,6 +110,11 @@ function tooltip(section: string, key: string) {
   return tips[k] || '';
 }
 
+function isTauriRuntime(): boolean {
+  const w: any = window as any;
+  return !!(w && (w.__TAURI_INTERNALS__ || w.__TAURI__));
+}
+
 export function SettingsPage() {
   const [currentDeviceText, setCurrentDeviceText] = useState<string>('Loading...');
   const [devices, setDevices] = useState<Device[]>([]);
@@ -131,6 +136,10 @@ export function SettingsPage() {
   const [obsEnsureMsg, setObsEnsureMsg] = useState<string>('');
   const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState<string>('');
   const [obsBusy, setObsBusy] = useState<boolean>(false);
+
+  const [updateBusy, setUpdateBusy] = useState<boolean>(false);
+  const [updateMsg, setUpdateMsg] = useState<string>('');
+  const [updateObj, setUpdateObj] = useState<any>(null);
 
   async function refreshCurrentDevice() {
     const data = await apiJson<QueueResp>('/api/queue');
@@ -655,6 +664,105 @@ export function SettingsPage() {
           </div>
         </div>
       ) : null}
+
+      <div className="row" style={{ marginTop: 16 }}>
+        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+          <h2>App Updates</h2>
+          <div className="muted" style={{ marginTop: -6 }}>
+            Check for updates via GitHub releases.
+          </div>
+
+          {updateObj ? (
+            <div className="muted" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>
+              Update available.
+              {typeof updateObj?.version === 'string' && updateObj.version ? `\nVersion: ${updateObj.version}` : ''}
+              {typeof updateObj?.date === 'string' && updateObj.date ? `\nDate: ${updateObj.date}` : ''}
+            </div>
+          ) : null}
+
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              disabled={updateBusy}
+              onClick={async () => {
+                setUpdateBusy(true);
+                setUpdateMsg('Checking for updates...');
+                setUpdateObj(null);
+                try {
+                  if (!isTauriRuntime()) {
+                    setUpdateMsg('Updater is only available in the desktop app.');
+                    return;
+                  }
+
+                  const mod: any = await import('@tauri-apps/plugin-updater');
+                  const checkFn = mod?.check || mod?.checkUpdate;
+                  if (typeof checkFn !== 'function') {
+                    throw new Error('Updater API not available.');
+                  }
+
+                  const res: any = await checkFn();
+                  const update = res && typeof res === 'object' ? res : null;
+                  const available =
+                    (typeof update?.available === 'boolean' && update.available) ||
+                    typeof update?.downloadAndInstall === 'function' ||
+                    typeof update?.download === 'function';
+
+                  if (!update || !available) {
+                    setUpdateObj(null);
+                    setUpdateMsg('No update available.');
+                    return;
+                  }
+
+                  setUpdateObj(update);
+                  setUpdateMsg('Update found.');
+                } catch (e: any) {
+                  setUpdateObj(null);
+                  setUpdateMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                } finally {
+                  setUpdateBusy(false);
+                }
+              }}
+            >
+              {updateBusy ? 'Checking…' : 'Check for Updates'}
+            </button>
+
+            <button
+              type="button"
+              disabled={updateBusy || !updateObj}
+              onClick={async () => {
+                if (!updateObj) return;
+                setUpdateBusy(true);
+                setUpdateMsg('Downloading update...');
+                try {
+                  if (typeof updateObj.downloadAndInstall === 'function') {
+                    await updateObj.downloadAndInstall();
+                    setUpdateMsg('Update installed. Restarting...');
+                    return;
+                  }
+
+                  if (typeof updateObj.download === 'function') {
+                    await updateObj.download();
+                  }
+                  if (typeof updateObj.install === 'function') {
+                    await updateObj.install();
+                    setUpdateMsg('Update installed. Restarting...');
+                    return;
+                  }
+                  throw new Error('Updater install API not available.');
+                } catch (e: any) {
+                  setUpdateMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                } finally {
+                  setUpdateBusy(false);
+                }
+              }}
+            >
+              Download + Install
+            </button>
+
+            <span className="muted">{updateMsg}</span>
+          </div>
+        </div>
+      </div>
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="actions">
