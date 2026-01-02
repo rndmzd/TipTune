@@ -38,8 +38,6 @@ def _datas():
 
     add('scenes.yaml', '.')
     add('config.ini.example', '.')
-    add_dir('webui/pages', 'webui/pages')
-    add_dir('webui/static', 'webui/static')
     add_dir('webui/dist', 'webui/dist')
 
     return items

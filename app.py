@@ -114,11 +114,12 @@ def _is_secret_field(section: str, key: str) -> bool:
     return False
 
 
-def _is_setup_complete() -> bool:
+def _is_setup_complete(cfg: Optional[configparser.ConfigParser] = None) -> bool:
     try:
-        if not config.has_section("General"):
+        src = cfg if cfg is not None else config
+        if not src.has_section("General"):
             return False
-        return config.getboolean("General", "setup_complete", fallback=False)
+        return src.getboolean("General", "setup_complete", fallback=False)
     except Exception:
         return False
 
@@ -237,14 +238,10 @@ class WebUI:
         self._webui_root = get_resource_path('webui')
         self._dist_root = self._webui_root / 'dist'
         self._spa_index = self._dist_root / 'index.html'
-        self._use_spa = self._spa_index.exists()
 
-        if self._use_spa:
-            assets_dir = self._dist_root / 'assets'
-            if assets_dir.exists():
-                self._app.router.add_static('/assets', str(assets_dir), show_index=False)
-        else:
-            self._app.router.add_static('/static', str(self._webui_root / 'static'), show_index=False)
+        assets_dir = self._dist_root / 'assets'
+        if self._spa_index.exists() and assets_dir.exists():
+            self._app.router.add_static('/assets', str(assets_dir), show_index=False)
 
         self._app.add_routes([
             web.get('/', self._page_app),
@@ -260,16 +257,17 @@ class WebUI:
             web.post('/api/spotify/device', self._api_set_device),
             web.get('/api/spotify/auth/status', self._api_spotify_auth_status),
             web.post('/api/spotify/auth/start', self._api_spotify_auth_start),
+            web.get('/api/setup/status', self._api_setup_status),
             web.get('/api/config', self._api_get_config),
             web.post('/api/config', self._api_update_config),
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
         ])
 
-        if self._use_spa:
-            self._app.add_routes([
-                web.get('/{path:.*}', self._page_app),
-            ])
+        # SPA fallback for client-side routes
+        self._app.add_routes([
+            web.get('/{path:.*}', self._page_app),
+        ])
 
     async def start(self) -> None:
         self._runner = web.AppRunner(self._app)
@@ -283,39 +281,21 @@ class WebUI:
         self._runner = None
         self._site = None
 
-    def _read_page(self, name: str) -> str:
-        p = self._webui_root / 'pages' / name
-        return p.read_text(encoding='utf-8', errors='replace')
-
-
     async def _page_app(self, request: web.Request) -> web.Response:
         force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
         if request.path != '/setup' and not force_dashboard and not _is_setup_complete():
             raise web.HTTPFound('/setup')
 
-        if self._use_spa and self._spa_index.exists():
+        if self._spa_index.exists():
             html = self._spa_index.read_text(encoding='utf-8', errors='replace')
             return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
 
-        if request.path == '/setup':
-            rerun = _as_bool(request.query.get('rerun'), default=False)
-            is_complete = _is_setup_complete()
-            status_text = "complete" if is_complete else "incomplete"
-            title_suffix = " (rerun)" if rerun else ""
-            html = self._read_page('setup.html')
-            html = html.replace('{{STATUS_TEXT}}', status_text).replace('{{TITLE_SUFFIX}}', title_suffix)
-            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
-
-        if request.path == '/settings':
-            html = self._read_page('settings.html')
-            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
-
-        if request.path == '/events':
-            html = self._read_page('events.html')
-            return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
-
-        html = self._read_page('dashboard.html')
-        return web.Response(text=html, content_type='text/html', headers={"Cache-Control": "no-store"})
+        msg = (
+            "Web UI is not built.\n\n"
+            "To build the WebUI, run: npm run webui:build\n"
+            "Then restart TipTune.\n"
+        )
+        return web.Response(text=msg, content_type='text/plain', status=503, headers={"Cache-Control": "no-store"})
 
     async def _api_queue(self, _request: web.Request) -> web.Response:
         try:
@@ -420,6 +400,39 @@ class WebUI:
         except Exception as exc:
             logger.exception("webui.api.config.error", exc=exc, message="Failed to read config for UI")
             return web.json_response({"ok": False, "error": str(exc), "config": {}})
+
+    async def _api_setup_status(self, _request: web.Request) -> web.Response:
+        try:
+            fresh_config = configparser.ConfigParser()
+            fresh_config.read(config_path)
+
+            events_url = ""
+            if fresh_config.has_section("Events API"):
+                events_url = fresh_config.get("Events API", "url", fallback="").strip()
+            events_configured = bool(events_url) and "yourusername" not in events_url and "your-token" not in events_url
+
+            openai_api_key = ""
+            if fresh_config.has_section("OpenAI"):
+                openai_api_key = fresh_config.get("OpenAI", "api_key", fallback="").strip()
+            openai_configured = bool(openai_api_key) and openai_api_key not in ("your-openai-api-key",)
+
+            google_api_key = ""
+            google_cx = ""
+            if fresh_config.has_section("Search"):
+                google_api_key = fresh_config.get("Search", "google_api_key", fallback="").strip()
+                google_cx = fresh_config.get("Search", "google_cx", fallback="").strip()
+            google_configured = bool(google_api_key) and bool(google_cx)
+
+            return web.json_response({
+                "ok": True,
+                "setup_complete": _is_setup_complete(fresh_config),
+                "events_configured": events_configured,
+                "openai_configured": openai_configured,
+                "google_configured": google_configured,
+            })
+        except Exception as exc:
+            logger.exception("webui.api.setup_status.error", exc=exc, message="Failed to compute setup status")
+            return web.json_response({"ok": False, "error": str(exc)})
 
     async def _api_update_config(self, request: web.Request) -> web.Response:
         try:

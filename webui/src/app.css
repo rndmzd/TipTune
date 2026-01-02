@@ -13,6 +13,8 @@ input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px soli
 
 button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
 button:hover { background: #23366f; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:disabled:hover { background: #1b2a55; }
 
 .pill { display: inline-block; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a66; background: #0e1530; font-size: 12px; }
 .muted { opacity: 0.8; font-size: 12px; }
