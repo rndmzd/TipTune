@@ -212,3 +212,14 @@ class Actions:
         if not self.obs_integration_enabled:
             return
         await self.obs.trigger_warning_overlay(username, message, duration)
+
+    async def trigger_queue_state_overlay(self, message: str, duration: int = 3) -> None:
+        if not self.obs_integration_enabled:
+            return
+        obs = getattr(self, 'obs', None)
+        if obs is None:
+            return
+        try:
+            await obs.trigger_motor_overlay(message, overlay_type='processing', display_duration=duration)
+        except Exception as exc:
+            logger.exception("obs.overlay.queue_state.error", message="Failed to trigger queue state overlay", exc=exc)
