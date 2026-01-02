@@ -1,3 +1,3 @@
 fn main() {
-  tiptune_tauri::run();
+    tiptune_tauri::run();
 }

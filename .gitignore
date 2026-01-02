@@ -1,5 +1,6 @@
 **/config.ini
 node_modules/
+.secrets/
 
 src-tauri/binaries
 src-tauri/target
