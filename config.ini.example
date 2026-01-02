@@ -6,7 +6,7 @@ max_requests_per_minute = 1000
 [OpenAI]
 # OpenAI API configuration for song extraction
 api_key = your-openai-api-key
-model = gpt-5
+model = gpt-5-mini
 
 [Spotify]
 # Spotify API credentials
@@ -28,7 +28,7 @@ request_overlay_duration = 10
 [OBS]
 # OBS WebSocket configuration
 enabled = true
-host = localhost
+host = 127.0.0.1
 port = 4455
 password = your-obs-password
 
