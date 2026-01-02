@@ -1,18 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 
 import { apiJson } from '../api';
 import type { QueueItem, QueueState } from '../types';
-import { EventsLink, HeaderBar } from '../components/HeaderBar';
+import { HeaderBar } from '../components/HeaderBar';
 import { QueueCard } from '../components/QueueCard';
 
 type QueueResp = { ok: true; queue: QueueState };
 
 export function DashboardPage() {
-  const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
-  const isForced = searchParams.get('dashboard') === '1';
 
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [paused, setPaused] = useState<boolean>(false);
@@ -20,8 +17,6 @@ export function DashboardPage() {
   const [queue, setQueue] = useState<(QueueItem | string)[]>([]);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
-
-  const querySuffix = useMemo(() => (isForced ? '?dashboard=1' : ''), [isForced]);
 
   async function refresh(force?: boolean) {
     if (!force && opBusy) return;
@@ -108,17 +103,6 @@ export function DashboardPage() {
     <>
       <HeaderBar
         title="TipTune"
-        right={
-          <>
-            <button type="button" onClick={() => navigate('/setup?rerun=1')}>
-              Setup Wizard
-            </button>
-            <button type="button" onClick={() => navigate(`/settings${querySuffix}`)}>
-              Settings
-            </button>
-            <EventsLink />
-          </>
-        }
       />
 
       <div className="row">

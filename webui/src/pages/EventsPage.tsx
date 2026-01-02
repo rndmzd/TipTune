@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 
 import { apiJson, sseUrl } from '../api';
+import { HeaderBar } from '../components/HeaderBar';
 
 function safeParseJSON(s: string): any {
   try {
@@ -121,12 +121,9 @@ export function EventsPage() {
 
   return (
     <div className="page-events">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 style={{ margin: 0, fontSize: 22 }}>Events</h1>
-        <div className="muted">
-          <Link to="/">Dashboard</Link>
-        </div>
-      </div>
+      <HeaderBar
+        title="Events"
+      />
 
       <div className="row" style={{ marginTop: 12 }}>
         <button type="button" onClick={() => setLines([])}>
