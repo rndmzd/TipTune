@@ -696,7 +696,7 @@ class OBSHandler:
                         })
 
             request_content = {
-                'inputName': 'MotorOverlay',  # Make sure this matches your OBS text source name
+                'inputName': 'GeneralOverlay',  # Make sure this matches your OBS text source name
                 'inputSettings': {
                     'text': message
                 }
@@ -714,7 +714,7 @@ class OBSHandler:
 
             await asyncio.sleep(1)
 
-            visibility_success = await self.set_source_visibility('main', 'MotorOverlay', True)
+            visibility_success = await self.set_source_visibility('main', 'GeneralOverlay', True)
 
             if text_success and visibility_success:
                 logger.info("obs.overlay.motor.success",
@@ -751,7 +751,7 @@ class OBSHandler:
             logger.debug("obs.overlay.motor.hide",
                         message="Hiding motor action overlay")
 
-            visibility_success = await self.set_source_visibility('main', 'MotorOverlay', False)
+            visibility_success = await self.set_source_visibility('main', 'GeneralOverlay', False)
 
             if visibility_success:
                 logger.info("obs.overlay.motor.hide.success",
@@ -764,7 +764,7 @@ class OBSHandler:
             await asyncio.sleep(1)
 
             request_content = {
-                'inputName': 'MotorOverlay',
+                'inputName': 'GeneralOverlay',
                 'inputSettings': {
                     'text': ''
                 }

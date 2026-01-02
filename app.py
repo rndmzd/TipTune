@@ -1476,14 +1476,26 @@ class SongRequestService:
             return False
         if not hasattr(self.actions, 'auto_dj'):
             return False
-        return bool(self.actions.auto_dj.pause_queue())
+        ok = bool(self.actions.auto_dj.pause_queue())
+        if ok:
+            try:
+                await self.actions.trigger_queue_state_overlay("Queue Paused")
+            except Exception:
+                pass
+        return ok
 
     async def resume_queue(self) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):
             return False
         if not hasattr(self.actions, 'auto_dj'):
             return False
-        return bool(self.actions.auto_dj.unpause_queue())
+        ok = bool(self.actions.auto_dj.unpause_queue())
+        if ok:
+            try:
+                await self.actions.trigger_queue_state_overlay("Queue Resumed")
+            except Exception:
+                pass
+        return ok
 
     async def move_queue_item(self, from_index: int, to_index: int) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):

@@ -102,6 +102,7 @@ export function DashboardPage() {
   }, [location.key]);
 
   const showDeviceWarning = status === 'ok' && queueState?.enabled === true && !queueState?.playback_device_id;
+  const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
 
   return (
     <>
@@ -128,6 +129,21 @@ export function DashboardPage() {
                 Make sure Spotify is open (so it can register a device), then go to{' '}
                 <Link to="/settings?dashboard=1">Settings</Link> and select a playback device.
               </div>
+            </div>
+          ) : null}
+
+          {showPausedBanner ? (
+            <div
+              style={{
+                marginTop: 10,
+                border: '1px solid rgba(220, 53, 69, 0.45)',
+                background: 'rgba(220, 53, 69, 0.12)',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 6 }}>Queue is paused</div>
+              <div className="muted">The current song can finish, but new songs will wait until you click Resume.</div>
             </div>
           ) : null}
 
