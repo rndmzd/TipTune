@@ -59,6 +59,31 @@ function bumpMinor(v) {
   return `${major}.${minor + 1}.0`;
 }
 
+function extractPackageJsonVersion(text) {
+  let j;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw new Error('Could not parse root package.json');
+  }
+  const v = j && typeof j === 'object' ? j.version : undefined;
+  if (typeof v !== 'string' || !v.trim()) throw new Error('Could not find version in root package.json');
+  parseSemver(v.trim());
+  return v.trim();
+}
+
+function replacePackageJsonVersion(text, next) {
+  let j;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw new Error('Could not parse root package.json');
+  }
+  if (!j || typeof j !== 'object') throw new Error('Could not parse root package.json');
+  j.version = next;
+  return JSON.stringify(j, null, 2) + '\n';
+}
+
 function extractJsonVersion(text) {
   const m = text.match(/\n\s*"version"\s*:\s*"(\d+\.\d+\.\d+)"\s*,?/);
   if (!m) throw new Error('Could not find "version" in tauri.conf.json');
@@ -96,6 +121,7 @@ async function main() {
 
   const tauriConfPath = new URL('./src-tauri/tauri.conf.json', ROOT);
   const cargoTomlPath = new URL('./src-tauri/Cargo.toml', ROOT);
+  const packageJsonPath = new URL('./package.json', ROOT);
 
   if (!args.allowDirty) {
     const st = sh('git', ['status', '--porcelain'], { cwd: ROOT });
@@ -106,17 +132,20 @@ async function main() {
 
   const tauriConfText = await fs.readFile(tauriConfPath, 'utf8');
   const cargoTomlText = await fs.readFile(cargoTomlPath, 'utf8');
+  const packageJsonText = await fs.readFile(packageJsonPath, 'utf8');
 
   const v1 = extractJsonVersion(tauriConfText);
   const v2 = extractCargoVersion(cargoTomlText);
-  if (v1 !== v2) {
-    throw new Error(`Version mismatch: tauri.conf.json=${v1} Cargo.toml=${v2}`);
+  const v3 = extractPackageJsonVersion(packageJsonText);
+  if (v1 !== v2 || v1 !== v3) {
+    throw new Error(`Version mismatch: tauri.conf.json=${v1} Cargo.toml=${v2} package.json=${v3}`);
   }
 
   const next = bumpMinor(v1);
 
   const nextTauriConf = replaceJsonVersion(tauriConfText, next);
   const nextCargoToml = replaceCargoVersion(cargoTomlText, next);
+  const nextPackageJson = replacePackageJsonVersion(packageJsonText, next);
 
   console.log(`Current version: ${v1}`);
   console.log(`Next version:    ${next}`);
@@ -128,8 +157,9 @@ async function main() {
 
   await fs.writeFile(tauriConfPath, nextTauriConf, 'utf8');
   await fs.writeFile(cargoTomlPath, nextCargoToml, 'utf8');
+  await fs.writeFile(packageJsonPath, nextPackageJson, 'utf8');
 
-  sh('git', ['add', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml'], { cwd: ROOT });
+  sh('git', ['add', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'package.json'], { cwd: ROOT });
 
   if (!args.noCommit) {
     sh('git', ['commit', '-m', `Bump version to v${next}`], { cwd: ROOT });
