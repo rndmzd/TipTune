@@ -24,6 +24,14 @@ type ObsStatusResp = {
     main_scene?: string | null;
     sources?: ObsSourceStatus[];
   };
+  spotify_audio_capture?: {
+    target_exe?: string;
+    input_name?: string | null;
+    input_kind?: string | null;
+    input_exists?: boolean;
+    in_main_scene?: boolean;
+    present?: boolean;
+  } | null;
 };
 
 type ObsEnsureResp = {
@@ -34,6 +42,21 @@ type ObsEnsureResp = {
     added_to_scene?: string[];
     already_present?: string[];
     errors?: Record<string, string>;
+  };
+};
+
+type ObsEnsureSpotifyAudioResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    target_exe?: string;
+    input_name?: string | null;
+    created?: boolean;
+    configured?: boolean;
+    added_to_scene?: boolean;
+    in_main_scene?: boolean;
+    targets_exe?: boolean;
+    errors?: string[];
   };
 };
 
@@ -106,6 +129,7 @@ export function SettingsPage() {
   const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
   const [obsMsg, setObsMsg] = useState<string>('');
   const [obsEnsureMsg, setObsEnsureMsg] = useState<string>('');
+  const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState<string>('');
   const [obsBusy, setObsBusy] = useState<boolean>(false);
 
   async function refreshCurrentDevice() {
@@ -159,6 +183,9 @@ export function SettingsPage() {
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
   const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
+
+  const spotifyAudio = obsStatus?.spotify_audio_capture || null;
+  const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
 
   return (
     <>
@@ -373,6 +400,63 @@ export function SettingsPage() {
               ))}
               {!(requiredSources || []).length ? <div className="muted">(no data)</div> : null}
             </div>
+
+            <label style={{ marginTop: 14 }}>Spotify audio capture</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <code style={{ minWidth: 160 }}>Application Audio Capture</code>
+                <span className="pill">{spotifyAudio?.present ? 'present' : 'missing'}</span>
+                <span className="muted">target: {spotifyAudio?.target_exe || 'Spotify.exe'}</span>
+                <span className="muted">input: {spotifyAudio?.input_exists ? 'yes' : 'no'}</span>
+                <span className="muted">in main scene: {spotifyAudio?.in_main_scene ? 'yes' : 'no'}</span>
+              </div>
+              {spotifyAudio?.input_name ? (
+                <div className="muted">
+                  Matched input: <code>{spotifyAudio.input_name}</code>
+                  {spotifyAudio?.input_kind ? (
+                    <>
+                      {' '}(<code>{spotifyAudio.input_kind}</code>)
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+              {!spotifyAudio ? <div className="muted">(no data)</div> : null}
+            </div>
+
+            {showCreateSpotifyAudio ? (
+              <div className="actions" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  disabled={obsBusy}
+                  onClick={async () => {
+                    setObsBusy(true);
+                    setObsSpotifyEnsureMsg('Creating Spotify audio capture...');
+                    try {
+                      const resp = await apiJson<ObsEnsureSpotifyAudioResp>('/api/obs/ensure_spotify_audio_capture', { method: 'POST' });
+                      const r = resp.result || ({} as any);
+                      const errs = Array.isArray(r.errors) ? r.errors : [];
+                      const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
+
+                      setObsSpotifyEnsureMsg(
+                        `Spotify audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
+                          (r.input_name ? `\nInput: ${r.input_name}` : '') +
+                          (typeof r.targets_exe === 'boolean' ? `\nTargets Spotify.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
+                          errBlock
+                      );
+                    } catch (e: any) {
+                      setObsSpotifyEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                    } finally {
+                      setObsBusy(false);
+                      await loadObsStatus().catch(() => {});
+                    }
+                  }}
+                >
+                  Create Spotify audio capture
+                </button>
+              </div>
+            ) : null}
+
+            {obsSpotifyEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsSpotifyEnsureMsg}</div> : null}
 
             <div className="actions" style={{ marginTop: 12 }}>
               <button type="button" onClick={() => loadObsStatus().catch(() => {})} disabled={obsBusy}>

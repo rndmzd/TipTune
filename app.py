@@ -287,6 +287,7 @@ class WebUI:
             web.post('/api/queue/delete', self._api_queue_delete),
             web.get('/api/obs/status', self._api_obs_status),
             web.post('/api/obs/ensure_sources', self._api_obs_ensure_sources),
+            web.post('/api/obs/ensure_spotify_audio_capture', self._api_obs_ensure_spotify_audio_capture),
             web.post('/api/obs/test_overlay', self._api_obs_test_overlay),
             web.get('/api/spotify/devices', self._api_devices),
             web.post('/api/spotify/device', self._api_set_device),
@@ -498,6 +499,16 @@ class WebUI:
             logger.exception("webui.api.obs_ensure_sources.error", exc=exc, message="Failed to ensure OBS sources")
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
+    async def _api_obs_ensure_spotify_audio_capture(self, _request: web.Request) -> web.Response:
+        try:
+            result = await self._service.ensure_obs_spotify_audio_capture()
+            if result is None:
+                return web.json_response({"ok": False, "error": "OBS not available"}, status=400)
+            return web.json_response({"ok": True, "result": result})
+        except Exception as exc:
+            logger.exception("webui.api.obs_ensure_spotify_audio_capture.error", exc=exc, message="Failed to ensure Spotify audio capture")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
     async def _api_obs_test_overlay(self, request: web.Request) -> web.Response:
         try:
             payload = await request.json()
@@ -660,7 +671,14 @@ class SongRequestService:
         status = await obs.get_text_source_status(scene_key='main')
         if status is None:
             return {"enabled": True, "connected": False}
-        return {"enabled": True, "connected": True, "status": status}
+
+        spotify_audio_capture = None
+        try:
+            spotify_audio_capture = await obs.get_spotify_audio_capture_status(scene_key='main', exe_name='Spotify.exe')
+        except Exception:
+            spotify_audio_capture = None
+
+        return {"enabled": True, "connected": True, "status": status, "spotify_audio_capture": spotify_audio_capture}
 
     async def ensure_obs_text_sources(self) -> Optional[Dict[str, Any]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
@@ -676,6 +694,22 @@ class SongRequestService:
         if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
             return None
         return await obs.ensure_text_sources(scene_key='main')
+
+    async def ensure_obs_spotify_audio_capture(self) -> Optional[Dict[str, Any]]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return None
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+            return None
+
+        return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name='Spotify.exe', preferred_input_name='Spotify Audio')
 
     async def trigger_obs_test_overlay(self, overlay: Any) -> tuple[bool, Optional[str]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
@@ -1609,7 +1643,9 @@ class SongRequestService:
         ok = bool(self.actions.auto_dj.pause_queue())
         if ok:
             try:
-                await self.actions.trigger_queue_state_overlay("Queue Paused")
+                await self.actions.trigger_queue_state_overlay(
+                    "Song queue paused — current song will finish, then new requests will wait."
+                )
             except Exception:
                 pass
         return ok
@@ -1622,7 +1658,7 @@ class SongRequestService:
         ok = bool(self.actions.auto_dj.unpause_queue())
         if ok:
             try:
-                await self.actions.trigger_queue_state_overlay("Queue Resumed")
+                await self.actions.trigger_queue_state_overlay("Song request queue resumed")
             except Exception:
                 pass
         return ok
