@@ -38,6 +38,22 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-build.txt
+
+      - name: Python sanity check (compile)
+        run: |
+          python -m compileall -q .
 
       # Linux only deps for Tauri bundling
       - name: Install Linux deps
