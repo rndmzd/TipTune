@@ -8,24 +8,6 @@ import { QueueCard } from '../components/QueueCard';
 
 type QueueResp = { ok: true; queue: QueueState };
 
-type ObsSourceStatus = {
-  name: string;
-  input_exists: boolean;
-  in_main_scene: boolean;
-  present: boolean;
-};
-
-type ObsStatusResp = {
-  ok: true;
-  enabled: boolean;
-  connected?: boolean;
-  status?: {
-    current_scene?: string | null;
-    main_scene?: string | null;
-    sources?: ObsSourceStatus[];
-  };
-};
-
 export function DashboardPage() {
   const location = useLocation();
 
@@ -36,8 +18,6 @@ export function DashboardPage() {
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
-
-  const [obs, setObs] = useState<ObsStatusResp | null>(null);
 
   async function refresh(force?: boolean) {
     if (!force && opBusy) return;
@@ -60,13 +40,6 @@ export function DashboardPage() {
 
       setStatus('ok');
       setErr('');
-
-      try {
-        const obsData = await apiJson<ObsStatusResp>('/api/obs/status');
-        setObs(obsData);
-      } catch {
-        setObs(null);
-      }
     } catch (e: any) {
       setStatus('error');
       setErr(e?.message ? String(e.message) : String(e));
@@ -130,7 +103,6 @@ export function DashboardPage() {
 
   const showDeviceWarning = status === 'ok' && queueState?.enabled === true && !queueState?.playback_device_id;
   const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
-  const showObsStatus = !!obs && obs.enabled === true;
 
   return (
     <>
@@ -242,38 +214,6 @@ export function DashboardPage() {
             )}
           </div>
         </div>
-
-        {showObsStatus ? (
-          <div className="card">
-            <h2>
-              OBS:{' '}
-              <span className="pill">
-                {obs?.connected ? 'connected' : 'not connected'}
-              </span>
-            </h2>
-
-            <div className="muted">
-              Current scene: <code>{obs?.status?.current_scene || '(unknown)'}</code>
-            </div>
-
-            <label>Required text sources</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-              {(obs?.status?.sources || []).map((s) => (
-                <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <code style={{ minWidth: 160 }}>{s.name}</code>
-                  <span className="pill">{s.present ? 'present' : 'missing'}</span>
-                  <span className="muted">
-                    input: {s.input_exists ? 'yes' : 'no'}
-                  </span>
-                  <span className="muted">
-                    in main scene: {s.in_main_scene ? 'yes' : 'no'}
-                  </span>
-                </div>
-              ))}
-              {!(obs?.status?.sources || []).length ? <div className="muted">(no data)</div> : null}
-            </div>
-          </div>
-        ) : null}
       </div>
     </>
   );
