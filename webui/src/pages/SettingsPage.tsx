@@ -384,57 +384,124 @@ export function SettingsPage() {
               <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>{obsStatus?.connected ? 'connected' : 'not connected'}</span>
             </h2>
 
-            <div className="muted">
-              Current scene: <code>{obsStatus?.status?.current_scene || '(unknown)'}</code>
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, alignItems: 'baseline' }}>
+              <div className="muted">Current scene</div>
+              <div>
+                <code>{obsStatus?.status?.current_scene || '(unknown)'}</code>
+              </div>
+              <div className="muted">Main scene</div>
+              <div>
+                <code>{obsStatus?.status?.main_scene || '(unknown)'}</code>
+              </div>
             </div>
 
             <label>Required text sources</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-              {(requiredSources || []).map((s) => (
-                <div key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <code style={{ minWidth: 160 }}>{s.name}</code>
-                  <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
-                  <span className="muted">
-                    input: <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
-                  </span>
-                  <span className="muted">
-                    in main scene: <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
-                  </span>
-                </div>
-              ))}
-              {!(requiredSources || []).length ? <div className="muted">(no data)</div> : null}
+            <div style={{ overflowX: 'auto', marginTop: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left' }}>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Source</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 110 }}>Present</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 120 }}>Input</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 150 }}>In main scene</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(requiredSources || []).map((s) => (
+                    <tr key={s.name}>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <code style={{ whiteSpace: 'nowrap' }}>{s.name}</code>
+                      </td>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
+                      </td>
+                    </tr>
+                  ))}
+                  {!(requiredSources || []).length ? (
+                    <tr>
+                      <td colSpan={4} className="muted" style={{ padding: '8px 8px' }}>
+                        (no data)
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
             </div>
 
             <label style={{ marginTop: 14 }}>Spotify audio capture</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <code style={{ minWidth: 160 }}>Application Audio Capture</code>
-                <span className={spotifyAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{spotifyAudio?.present ? 'present' : 'missing'}</span>
-                <span className="muted">target: {spotifyAudio?.target_exe || 'Spotify.exe'}</span>
-                <span className="muted">
-                  input:{' '}
-                  <span className={spotifyAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
-                    {spotifyAudio?.input_exists ? 'yes' : 'no'}
-                  </span>
-                </span>
-                <span className="muted">
-                  in main scene:{' '}
-                  <span className={spotifyAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
-                    {spotifyAudio?.in_main_scene ? 'yes' : 'no'}
-                  </span>
-                </span>
-              </div>
-              {spotifyAudio?.input_name ? (
-                <div className="muted">
-                  Matched input: <code>{spotifyAudio.input_name}</code>
-                  {spotifyAudio?.input_kind ? (
-                    <>
-                      {' '}(<code>{spotifyAudio.input_kind}</code>)
-                    </>
+            <div style={{ overflowX: 'auto', marginTop: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left' }}>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Item</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <code>Application Audio Capture</code>
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={spotifyAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{spotifyAudio?.present ? 'present' : 'missing'}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      Target exe
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>{spotifyAudio?.target_exe || 'Spotify.exe'}</td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      Input exists
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={spotifyAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
+                        {spotifyAudio?.input_exists ? 'yes' : 'no'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      In main scene
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={spotifyAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
+                        {spotifyAudio?.in_main_scene ? 'yes' : 'no'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      Matched input
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      {spotifyAudio?.input_name ? <code>{spotifyAudio.input_name}</code> : <span className="muted">(none)</span>}
+                      {spotifyAudio?.input_kind ? (
+                        <>
+                          {' '}<span className="muted">(</span>
+                          <code>{spotifyAudio.input_kind}</code>
+                          <span className="muted">)</span>
+                        </>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {!spotifyAudio ? (
+                    <tr>
+                      <td colSpan={2} className="muted" style={{ padding: '8px 8px' }}>
+                        (no data)
+                      </td>
+                    </tr>
                   ) : null}
-                </div>
-              ) : null}
-              {!spotifyAudio ? <div className="muted">(no data)</div> : null}
+                </tbody>
+              </table>
             </div>
 
             {showCreateSpotifyAudio ? (
