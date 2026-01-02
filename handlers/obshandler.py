@@ -66,6 +66,97 @@ class OBSHandler:
                            data={"file": str(scenes_file)})
             return None
 
+    async def _send_request_with_status(self, request_type: str, request_data: Optional[Dict] = None, max_retries: int = 2) -> tuple[bool, Optional[Dict[str, Any]], Optional[int], Optional[str]]:
+        retries = 0
+
+        while retries <= max_retries:
+            try:
+                if not self.ws or not self._connected:
+                    if retries < max_retries:
+                        if await self._try_reconnect():
+                            logger.info("obs.reconnect.success",
+                                      message="Reconnected successfully")
+                        else:
+                            logger.error("obs.reconnect.error",
+                                       message="Reconnection failed")
+                            retries += 1
+                            await asyncio.sleep(1)
+                            continue
+                    else:
+                        logger.error("obs.request.error",
+                                   message="Not connected and max retries exceeded",
+                                   data={"request_type": request_type})
+                        return (False, None, None, "not_connected")
+
+                request = simpleobsws.Request(request_type, request_data)
+                response = await self.ws.call(request)
+
+                if response and response.ok():
+                    return (True, response.responseData, None, None)
+
+                code: Optional[int] = None
+                comment: Optional[str] = None
+                status = getattr(response, 'requestStatus', None) if response is not None else None
+                if isinstance(status, dict):
+                    try:
+                        code_raw = status.get('code')
+                        code = int(code_raw) if code_raw is not None else None
+                    except Exception:
+                        code = None
+                    try:
+                        comment_raw = status.get('comment')
+                        comment = str(comment_raw) if comment_raw is not None else None
+                    except Exception:
+                        comment = None
+                else:
+                    try:
+                        code_raw = getattr(status, 'code', None)
+                        code = int(code_raw) if code_raw is not None else None
+                    except Exception:
+                        code = None
+                    try:
+                        comment_raw = getattr(status, 'comment', None)
+                        comment = str(comment_raw) if comment_raw is not None else None
+                    except Exception:
+                        comment = None
+
+                if retries < max_retries:
+                    retries += 1
+                    await asyncio.sleep(1)
+                    continue
+
+                return (False, None, code, comment or "request_failed")
+
+            except simpleobsws.NotIdentifiedError:
+                logger.warning("obs.connection.lost",
+                             message="Lost connection to OBS WebSocket")
+                self._connected = False
+                if retries < max_retries:
+                    if await self._try_reconnect():
+                        logger.info("obs.reconnect.success",
+                                  message="Reconnected successfully")
+                        retries += 1
+                        continue
+                    else:
+                        logger.error("obs.reconnect.error",
+                                   message="Reconnection failed")
+                        retries += 1
+                        await asyncio.sleep(1)
+                        continue
+                return (False, None, None, "not_identified")
+            except Exception as exc:
+                logger.exception("obs.request.error",
+                               exc=exc,
+                               message="Failed to send request",
+                               data={"request_type": request_type})
+                if retries < max_retries:
+                    retries += 1
+                    await asyncio.sleep(1)
+                    continue
+                return (False, None, None, str(exc))
+
+        return (False, None, None, "request_failed")
+
     def _get_scene_name(self, scene_key: str) -> Optional[str]:
         """Get the actual scene name from scene key."""
         if not self.scenes or scene_key not in self.scenes:
@@ -348,22 +439,28 @@ class OBSHandler:
             'sources': sources,
         }
 
-    async def _create_text_input(self, scene_name: str, input_name: str) -> bool:
+    async def _create_text_input(self, scene_name: str, input_name: str) -> tuple[bool, Optional[str]]:
         if not scene_name or not input_name:
-            return False
+            return (False, 'invalid_scene_or_input')
 
-        kinds = ['text_gdiplus_v2', 'text_ft2_source']
+        kinds = ['text_gdiplus_v3', 'text_gdiplus_v2', 'text_ft2_source']
+        failures: list[str] = []
         for kind in kinds:
-            resp = await self.send_request('CreateInput', {
+            ok, _, code, comment = await self._send_request_with_status('CreateInput', {
                 'sceneName': scene_name,
                 'inputName': input_name,
                 'inputKind': kind,
                 'inputSettings': {'text': ''},
                 'sceneItemEnabled': False,
-            })
-            if resp is not None:
-                return True
-        return False
+            }, max_retries=0)
+            if ok:
+                return (True, None)
+            if code is not None or comment:
+                failures.append(f"{kind}: {code if code is not None else ''} {comment or ''}".strip())
+            else:
+                failures.append(f"{kind}: failed")
+
+        return (False, "; ".join(failures) if failures else 'create_input_failed')
 
     async def ensure_text_sources(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
         names = source_names or list(REQUIRED_TEXT_SOURCES)
@@ -386,9 +483,9 @@ class OBSHandler:
             try:
                 exists = n in input_names
                 if not exists:
-                    ok = await self._create_text_input(scene_name, n)
+                    ok, err = await self._create_text_input(scene_name, n)
                     if not ok:
-                        errors[n] = 'create_input_failed'
+                        errors[n] = err or 'create_input_failed'
                         continue
                     created.append(n)
                     input_names.add(n)

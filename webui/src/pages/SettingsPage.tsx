@@ -37,6 +37,13 @@ type ObsEnsureResp = {
   };
 };
 
+function formatObsErrors(errs: Record<string, string> | undefined): string {
+  if (!errs) return '';
+  const entries = Object.entries(errs);
+  if (!entries.length) return '';
+  return entries.map(([k, v]) => `${k}: ${v}`).join('\n');
+}
+
 function humanizeKey(raw: string) {
   const cleaned = (raw || '')
     .replace(/[_\-]+/g, ' ')
@@ -386,8 +393,11 @@ export function SettingsPage() {
                       const errs = resp.result?.errors || {};
                       const errCount = Object.keys(errs).length;
 
+                      const errText = formatObsErrors(errs);
+                      const errBlock = errText ? `\n\nErrors:\n${errText}` : '';
+
                       setObsEnsureMsg(
-                        `Created/ensured sources. Created: ${created}, added to scene: ${added}, errors: ${errCount}.\n\nNow go to OBS and set the size + position of each text source.`
+                        `Created/ensured sources. Created: ${created}, added to scene: ${added}, errors: ${errCount}.${errBlock}\n\nNow go to OBS and set the size + position of each text source.`
                       );
                     } catch (e: any) {
                       setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
