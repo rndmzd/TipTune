@@ -153,11 +153,24 @@ if (shouldCopy) {
   const tmpPath = destPath + `.tmp-${process.pid}-${Date.now()}`;
   try {
     fs.copyFileSync(distPath, tmpPath);
+    const desiredMode = (() => {
+      if (process.platform === 'win32') return null;
+      try {
+        const srcMode = fs.statSync(distPath).mode & 0o777;
+        return srcMode || 0o755;
+      } catch {
+        return 0o755;
+      }
+    })();
     try {
-      fs.chmodSync(tmpPath, 0o666);
+      if (desiredMode !== null) fs.chmodSync(tmpPath, desiredMode);
     } catch {
     }
     fs.renameSync(tmpPath, destPath);
+    try {
+      if (desiredMode !== null) fs.chmodSync(destPath, desiredMode);
+    } catch {
+    }
   } finally {
     try {
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
@@ -167,7 +180,10 @@ if (shouldCopy) {
 }
 
 try {
-  fs.chmodSync(destPath, 0o666);
+  if (process.platform !== 'win32') {
+    const srcMode = fs.statSync(distPath).mode & 0o777;
+    fs.chmodSync(destPath, srcMode || 0o755);
+  }
 } catch {
 }
 
