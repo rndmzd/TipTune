@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { apiJson } from '../api';
 import type { QueueItem, QueueState } from '../types';
@@ -15,6 +15,7 @@ export function DashboardPage() {
   const [paused, setPaused] = useState<boolean>(false);
   const [nowPlaying, setNowPlaying] = useState<QueueItem | null>(null);
   const [queue, setQueue] = useState<(QueueItem | string)[]>([]);
+  const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
 
@@ -23,6 +24,7 @@ export function DashboardPage() {
     try {
       const data = await apiJson<QueueResp>('/api/queue');
       const st = data.queue ?? {};
+      setQueueState(st);
       setPaused(!!st.paused);
 
       const np =
@@ -99,6 +101,8 @@ export function DashboardPage() {
     return () => window.clearInterval(t);
   }, [location.key]);
 
+  const showDeviceWarning = status === 'ok' && queueState?.enabled === true && !queueState?.playback_device_id;
+
   return (
     <>
       <HeaderBar
@@ -108,6 +112,25 @@ export function DashboardPage() {
       <div className="row">
         <div className="card">
           <h2>Queue</h2>
+
+          {showDeviceWarning ? (
+            <div
+              style={{
+                marginTop: 10,
+                border: '1px solid rgba(255, 193, 7, 0.35)',
+                background: 'rgba(255, 193, 7, 0.10)',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 6 }}>No Spotify playback device selected</div>
+              <div className="muted">
+                Make sure Spotify is open (so it can register a device), then go to{' '}
+                <Link to="/settings?dashboard=1">Settings</Link> and select a playback device.
+              </div>
+            </div>
+          ) : null}
+
           <div className="actions">
             <span id="queueStatus" className="pill">
               {status === 'loading' ? 'Loading…' : status === 'error' ? 'Error' : paused ? 'Paused' : 'Running'}
