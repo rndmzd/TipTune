@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { apiJson } from '../api';
-import type { QueueItem, QueueState } from '../types';
+import type { Device, QueueItem, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { QueueCard } from '../components/QueueCard';
 
 type QueueResp = { ok: true; queue: QueueState };
+type DevicesResp = { ok: true; devices: Device[] };
 
 export function DashboardPage() {
   const location = useLocation();
@@ -18,6 +19,18 @@ export function DashboardPage() {
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
+  const [activeDeviceName, setActiveDeviceName] = useState<string>('');
+  const [activeDeviceWarning, setActiveDeviceWarning] = useState<string>('');
+  const [selectedDeviceWarning, setSelectedDeviceWarning] = useState<string>('');
+
+  const selectedDeviceIdRef = useRef<string>('');
+  const lastActiveDeviceIdRef = useRef<string>('');
+  const hadActiveDeviceRef = useRef<boolean>(false);
+  const hadSelectedDeviceAvailableRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    selectedDeviceIdRef.current = String(queueState?.playback_device_id || '');
+  }, [queueState?.playback_device_id]);
 
   async function refresh(force?: boolean) {
     if (!force && opBusy) return;
@@ -43,6 +56,52 @@ export function DashboardPage() {
     } catch (e: any) {
       setStatus('error');
       setErr(e?.message ? String(e.message) : String(e));
+    }
+  }
+
+  async function refreshDevices() {
+    try {
+      const data = await apiJson<DevicesResp>('/api/spotify/devices');
+      const devices = Array.isArray(data.devices) ? data.devices : [];
+      const active = devices.find((d) => !!d && typeof d === 'object' && !!(d as any).is_active) as Device | undefined;
+
+      const selectedId = selectedDeviceIdRef.current;
+      const selectedDevice = selectedId
+        ? (devices.find((d) => (d && typeof d === 'object' ? (d as any).id : '') === selectedId) as Device | undefined)
+        : undefined;
+
+      const activeId = (active && typeof active.id === 'string') ? active.id : '';
+      const activeName = (active && typeof active.name === 'string') ? active.name : '';
+
+      const selectedName = (selectedDevice && typeof selectedDevice.name === 'string') ? selectedDevice.name : '';
+      const selectedLabel = selectedName || (selectedDevice && typeof selectedDevice.id === 'string' ? selectedDevice.id : '');
+      const activeLabel = activeName || activeId;
+      const displayLabel = activeLabel || selectedLabel;
+
+      setActiveDeviceName(displayLabel);
+
+      const hasActive = !!activeId;
+      if (hasActive && lastActiveDeviceIdRef.current && activeId !== lastActiveDeviceIdRef.current) {
+        setActiveDeviceWarning(`Spotify switched the active device to ${activeName || 'another device'}.`);
+      } else if (!hasActive && hadActiveDeviceRef.current) {
+        setActiveDeviceWarning('No active Spotify device detected. Open Spotify on a device and start playback.');
+      } else if (hasActive) {
+        setActiveDeviceWarning('');
+      }
+
+      lastActiveDeviceIdRef.current = activeId;
+      hadActiveDeviceRef.current = hasActive;
+
+      const selectedAvailable = !selectedId ? true : devices.some((d) => (d && typeof d === 'object' ? (d as any).id : '') === selectedId);
+      if (!selectedAvailable && hadSelectedDeviceAvailableRef.current) {
+        setSelectedDeviceWarning('Your selected playback device is no longer available. Please re-select a device in Settings.');
+      } else if (selectedAvailable) {
+        setSelectedDeviceWarning('');
+      }
+      hadSelectedDeviceAvailableRef.current = selectedAvailable;
+    } catch {
+      const fallbackLabel = String(queueState?.playback_device_name || queueState?.playback_device_id || '');
+      if (fallbackLabel) setActiveDeviceName(fallbackLabel);
     }
   }
 
@@ -95,14 +154,23 @@ export function DashboardPage() {
 
   useEffect(() => {
     refresh(true).catch(() => {});
+    refreshDevices().catch(() => {});
     const t = window.setInterval(() => {
       refresh(false).catch(() => {});
     }, 2000);
-    return () => window.clearInterval(t);
+    const td = window.setInterval(() => {
+      refreshDevices().catch(() => {});
+    }, 10000);
+    return () => {
+      window.clearInterval(t);
+      window.clearInterval(td);
+    };
   }, [location.key]);
 
   const showDeviceWarning = status === 'ok' && queueState?.enabled === true && !queueState?.playback_device_id;
   const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
+  const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && !!activeDeviceWarning;
+  const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && !!selectedDeviceWarning;
 
   return (
     <>
@@ -113,6 +181,44 @@ export function DashboardPage() {
       <div className="row">
         <div className="card">
           <h2>Queue</h2>
+
+          {status === 'ok' && queueState?.enabled === true ? (
+            <div className="muted" style={{ marginTop: -6, marginBottom: 10, fontSize: 13 }}>
+              Active Spotify device: {activeDeviceName ? activeDeviceName : '(none)'}
+            </div>
+          ) : null}
+
+          {showActiveDeviceWarning ? (
+            <div
+              style={{
+                marginTop: 10,
+                border: '1px solid rgba(255, 193, 7, 0.35)',
+                background: 'rgba(255, 193, 7, 0.10)',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 6 }}>Spotify device changed</div>
+              <div className="muted">{activeDeviceWarning}</div>
+            </div>
+          ) : null}
+
+          {showSelectedDeviceWarning ? (
+            <div
+              style={{
+                marginTop: 10,
+                border: '1px solid rgba(255, 193, 7, 0.35)',
+                background: 'rgba(255, 193, 7, 0.10)',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 6 }}>Selected playback device unavailable</div>
+              <div className="muted">
+                {selectedDeviceWarning} Go to <Link to="/settings?dashboard=1">Settings</Link>.
+              </div>
+            </div>
+          ) : null}
 
           {showDeviceWarning ? (
             <div
@@ -143,12 +249,23 @@ export function DashboardPage() {
               }}
             >
               <div style={{ fontWeight: 650, marginBottom: 6 }}>Queue is paused</div>
-              <div className="muted">The current song can finish, but new songs will wait until you click Resume.</div>
+              <div className="muted">Song queue is paused, but the currently playing song will finish first.</div>
             </div>
           ) : null}
 
           <div className="actions">
-            <span id="queueStatus" className="pill">
+            <span
+              id="queueStatus"
+              className={
+                status === 'loading'
+                  ? 'pill pillNeutral'
+                  : status === 'error'
+                    ? 'pill pillError'
+                    : paused
+                      ? 'pill pillWarn'
+                      : 'pill pillSuccess'
+              }
+            >
               {status === 'loading' ? 'Loading…' : status === 'error' ? 'Error' : paused ? 'Paused' : 'Running'}
             </span>
             <button

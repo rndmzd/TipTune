@@ -8,6 +8,65 @@ type DevicesResp = { ok: true; devices: Device[] };
 type QueueResp = { ok: true; queue: QueueState };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 
+type ObsSourceStatus = {
+  name: string;
+  input_exists: boolean;
+  in_main_scene: boolean;
+  present: boolean;
+};
+
+type ObsStatusResp = {
+  ok: true;
+  enabled: boolean;
+  connected?: boolean;
+  status?: {
+    current_scene?: string | null;
+    main_scene?: string | null;
+    sources?: ObsSourceStatus[];
+  };
+  spotify_audio_capture?: {
+    target_exe?: string;
+    input_name?: string | null;
+    input_kind?: string | null;
+    input_exists?: boolean;
+    in_main_scene?: boolean;
+    present?: boolean;
+  } | null;
+};
+
+type ObsEnsureResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    created?: string[];
+    added_to_scene?: string[];
+    already_present?: string[];
+    errors?: Record<string, string>;
+  };
+};
+
+type ObsEnsureSpotifyAudioResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    target_exe?: string;
+    input_name?: string | null;
+    created?: boolean;
+    configured?: boolean;
+    added_to_scene?: boolean;
+    in_main_scene?: boolean;
+    targets_exe?: boolean;
+    errors?: string[];
+  };
+};
+
+function formatObsErrors(errs: Record<string, string> | undefined): string {
+  if (!errs) return '';
+  const entries = Object.entries(errs);
+  if (!entries.length) return '';
+  return entries.map(([k, v]) => `${k}: ${v}`).join('\n');
+}
+
 function humanizeKey(raw: string) {
   const cleaned = (raw || '')
     .replace(/[_\-]+/g, ' ')
@@ -45,7 +104,7 @@ function tooltip(section: string, key: string) {
     'Search.google_cx': 'Google Custom Search Engine (CSE) ID used for web search results.',
     'General.song_cost': 'Default token cost to request a song.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
-    'General.request_overlay_duration': 'How long (in seconds) the request overlay stays visible after a request is shown.',
+    'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
   };
 
   return tips[k] || '';
@@ -66,6 +125,12 @@ export function SettingsPage() {
   });
 
   const [status, setStatus] = useState<string>('');
+
+  const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
+  const [obsMsg, setObsMsg] = useState<string>('');
+  const [obsEnsureMsg, setObsEnsureMsg] = useState<string>('');
+  const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState<string>('');
+  const [obsBusy, setObsBusy] = useState<boolean>(false);
 
   async function refreshCurrentDevice() {
     const data = await apiJson<QueueResp>('/api/queue');
@@ -92,15 +157,35 @@ export function SettingsPage() {
     setCfg(data.config || {});
   }
 
+  async function loadObsStatus() {
+    try {
+      const data = await apiJson<ObsStatusResp>('/api/obs/status');
+      setObsStatus(data);
+      setObsMsg('');
+    } catch (e: any) {
+      setObsStatus(null);
+      setObsMsg(`Error loading OBS status: ${e?.message ? e.message : String(e)}`);
+    }
+  }
+
   useEffect(() => {
     Promise.all([
       refreshCurrentDevice().catch((e) => setCurrentDeviceText(`Error: ${e?.message ? e.message : String(e)}`)),
       refreshDevices().catch(() => {}),
       loadConfig().catch((e) => setStatus(`Error loading config: ${e?.message ? e.message : String(e)}`)),
+      loadObsStatus().catch(() => {}),
     ]).catch(() => {});
   }, []);
 
   const v = (section: string, key: string) => ((cfg[section] || {})[key] || '').toString();
+
+  const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
+  const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
+  const missingSources = requiredSources.filter((s) => !s.present);
+  const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
+
+  const spotifyAudio = obsStatus?.spotify_audio_capture || null;
+  const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
 
   return (
     <>
@@ -281,7 +366,7 @@ export function SettingsPage() {
             value={v('General', 'skip_song_cost')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), skip_song_cost: e.target.value } }))}
           />
-          <label title={tooltip('General', 'request_overlay_duration')}>{humanizeKey('request_overlay_duration')}</label>
+          <label title={tooltip('General', 'request_overlay_duration')}>OBS overlay duration</label>
           <input
             type="text"
             title={tooltip('General', 'request_overlay_duration')}
@@ -290,6 +375,286 @@ export function SettingsPage() {
           />
         </div>
       </div>
+
+      {obsEnabled ? (
+        <div className="row" style={{ marginTop: 16 }}>
+          <div className="card" style={{ flex: 1, minWidth: 360 }}>
+            <h2>
+              OBS overlay status{' '}
+              <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>{obsStatus?.connected ? 'connected' : 'not connected'}</span>
+            </h2>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, alignItems: 'baseline' }}>
+              <div className="muted">Current scene</div>
+              <div>
+                <code>{obsStatus?.status?.current_scene || '(unknown)'}</code>
+              </div>
+              <div className="muted">Main scene</div>
+              <div>
+                <code>{obsStatus?.status?.main_scene || '(unknown)'}</code>
+              </div>
+            </div>
+
+            <label>Required text sources</label>
+            <div style={{ overflowX: 'auto', marginTop: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left' }}>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Source</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 110 }}>Present</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 120 }}>Input</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 150 }}>In main scene</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(requiredSources || []).map((s) => (
+                    <tr key={s.name}>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <code style={{ whiteSpace: 'nowrap' }}>{s.name}</code>
+                      </td>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
+                      </td>
+                      <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                        <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
+                      </td>
+                    </tr>
+                  ))}
+                  {!(requiredSources || []).length ? (
+                    <tr>
+                      <td colSpan={4} className="muted" style={{ padding: '8px 8px' }}>
+                        (no data)
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            <label style={{ marginTop: 14 }}>Spotify audio capture</label>
+            <div style={{ overflowX: 'auto', marginTop: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left' }}>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Item</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <code>Application Audio Capture</code>
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={spotifyAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{spotifyAudio?.present ? 'present' : 'missing'}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      Target exe
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>{spotifyAudio?.target_exe || 'Spotify.exe'}</td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      Input exists
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={spotifyAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
+                        {spotifyAudio?.input_exists ? 'yes' : 'no'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      In main scene
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={spotifyAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
+                        {spotifyAudio?.in_main_scene ? 'yes' : 'no'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted" style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      Matched input
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      {spotifyAudio?.input_name ? <code>{spotifyAudio.input_name}</code> : <span className="muted">(none)</span>}
+                      {spotifyAudio?.input_kind ? (
+                        <>
+                          {' '}<span className="muted">(</span>
+                          <code>{spotifyAudio.input_kind}</code>
+                          <span className="muted">)</span>
+                        </>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {!spotifyAudio ? (
+                    <tr>
+                      <td colSpan={2} className="muted" style={{ padding: '8px 8px' }}>
+                        (no data)
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            {showCreateSpotifyAudio ? (
+              <div className="actions" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  disabled={obsBusy}
+                  onClick={async () => {
+                    setObsBusy(true);
+                    setObsSpotifyEnsureMsg('Creating Spotify audio capture...');
+                    try {
+                      const resp = await apiJson<ObsEnsureSpotifyAudioResp>('/api/obs/ensure_spotify_audio_capture', { method: 'POST' });
+                      const r = resp.result || ({} as any);
+                      const errs = Array.isArray(r.errors) ? r.errors : [];
+                      const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
+
+                      setObsSpotifyEnsureMsg(
+                        `Spotify audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
+                          (r.input_name ? `\nInput: ${r.input_name}` : '') +
+                          (typeof r.targets_exe === 'boolean' ? `\nTargets Spotify.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
+                          errBlock
+                      );
+                    } catch (e: any) {
+                      setObsSpotifyEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                    } finally {
+                      setObsBusy(false);
+                      await loadObsStatus().catch(() => {});
+                    }
+                  }}
+                >
+                  Create Spotify audio capture
+                </button>
+              </div>
+            ) : null}
+
+            {obsSpotifyEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsSpotifyEnsureMsg}</div> : null}
+
+            <div className="actions" style={{ marginTop: 12 }}>
+              <button type="button" onClick={() => loadObsStatus().catch(() => {})} disabled={obsBusy}>
+                Refresh OBS status
+              </button>
+
+              {hasMissingSources ? (
+                <button
+                  type="button"
+                  disabled={obsBusy}
+                  onClick={async () => {
+                    setObsBusy(true);
+                    setObsEnsureMsg('Creating OBS text sources...');
+                    try {
+                      const resp = await apiJson<ObsEnsureResp>('/api/obs/ensure_sources', { method: 'POST' });
+                      const created = (resp.result?.created || []).length;
+                      const added = (resp.result?.added_to_scene || []).length;
+                      const errs = resp.result?.errors || {};
+                      const errCount = Object.keys(errs).length;
+
+                      const errText = formatObsErrors(errs);
+                      const errBlock = errText ? `\n\nErrors:\n${errText}` : '';
+
+                      setObsEnsureMsg(
+                        `Created/ensured sources. Created: ${created}, added to scene: ${added}, errors: ${errCount}.${errBlock}\n\nNow go to OBS and set the size + position of each text source.`
+                      );
+                    } catch (e: any) {
+                      setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                    } finally {
+                      setObsBusy(false);
+                      await loadObsStatus().catch(() => {});
+                    }
+                  }}
+                >
+                  Create missing text sources
+                </button>
+              ) : null}
+            </div>
+
+            {obsMsg ? <div className="muted">{obsMsg}</div> : null}
+            {obsEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsEnsureMsg}</div> : null}
+
+            <label style={{ marginTop: 14 }}>Test overlays</label>
+            <div className="actions">
+              <button
+                type="button"
+                disabled={obsBusy}
+                onClick={async () => {
+                  setObsBusy(true);
+                  setObsEnsureMsg('');
+                  try {
+                    await apiJson('/api/obs/test_overlay', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ overlay: 'SongRequester' }),
+                    });
+                    setObsEnsureMsg('Sent test message for SongRequester.');
+                  } catch (e: any) {
+                    setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                  } finally {
+                    setObsBusy(false);
+                  }
+                }}
+              >
+                Test SongRequester
+              </button>
+              <button
+                type="button"
+                disabled={obsBusy}
+                onClick={async () => {
+                  setObsBusy(true);
+                  setObsEnsureMsg('');
+                  try {
+                    await apiJson('/api/obs/test_overlay', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ overlay: 'WarningOverlay' }),
+                    });
+                    setObsEnsureMsg('Sent test message for WarningOverlay.');
+                  } catch (e: any) {
+                    setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                  } finally {
+                    setObsBusy(false);
+                  }
+                }}
+              >
+                Test WarningOverlay
+              </button>
+              <button
+                type="button"
+                disabled={obsBusy}
+                onClick={async () => {
+                  setObsBusy(true);
+                  setObsEnsureMsg('');
+                  try {
+                    await apiJson('/api/obs/test_overlay', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ overlay: 'GeneralOverlay' }),
+                    });
+                    setObsEnsureMsg('Sent test message for GeneralOverlay.');
+                  } catch (e: any) {
+                    setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                  } finally {
+                    setObsBusy(false);
+                  }
+                }}
+              >
+                Test GeneralOverlay
+              </button>
+            </div>
+            <div className="muted" style={{ marginTop: 8 }}>
+              Note: test overlay duration follows your configured OBS overlay duration setting.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="actions">

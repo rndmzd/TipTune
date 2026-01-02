@@ -187,4 +187,4 @@ These settings control how tips map to requests:
 
 - `General.song_cost`: tip token amount (or multiple) that triggers a song request
 - `General.skip_song_cost`: tip token amount (or multiple) that triggers a skip
-- `General.request_overlay_duration`: overlay duration (seconds)
+- `General.request_overlay_duration`: OBS overlay duration (seconds)

@@ -9,6 +9,47 @@ from utils.structured_logging import get_structured_logger
 
 logger = get_structured_logger('tiptune.handlers.obshandler')
 
+REQUIRED_TEXT_SOURCES = ['SongRequester', 'WarningOverlay', 'GeneralOverlay']
+
+DEFAULT_TEXT_SETTINGS_GDIPLUS: Dict[str, Any] = {
+    'align': 'left',
+    'chatlog': False,
+    'extents': False,
+    'font': {
+        'face': 'Cascadia Mono',
+        'flags': 0,
+        'size': 256,
+        'style': 'Regular',
+    },
+    'outline': True,
+    'outline_color': 4278190080,
+    'outline_size': 20,
+    'text': '',
+}
+
+def _deep_contains_text(obj: Any, needle_lower: str) -> bool:
+    if obj is None:
+        return False
+    if isinstance(obj, str):
+        return needle_lower in obj.lower()
+    if isinstance(obj, dict):
+        for v in obj.values():
+            if _deep_contains_text(v, needle_lower):
+                return True
+        return False
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            if _deep_contains_text(v, needle_lower):
+                return True
+        return False
+    return False
+
+def _first_string(*vals: Any) -> Optional[str]:
+    for v in vals:
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
 class OBSHandler:
     def __init__(self, host: str = 'localhost', port: int = 4455, password: Optional[str] = None):
         """Initialize OBS WebSocket handler.
@@ -63,6 +104,97 @@ class OBSHandler:
                            exc=exc,
                            data={"file": str(scenes_file)})
             return None
+
+    async def _send_request_with_status(self, request_type: str, request_data: Optional[Dict] = None, max_retries: int = 2) -> tuple[bool, Optional[Dict[str, Any]], Optional[int], Optional[str]]:
+        retries = 0
+
+        while retries <= max_retries:
+            try:
+                if not self.ws or not self._connected:
+                    if retries < max_retries:
+                        if await self._try_reconnect():
+                            logger.info("obs.reconnect.success",
+                                      message="Reconnected successfully")
+                        else:
+                            logger.error("obs.reconnect.error",
+                                       message="Reconnection failed")
+                            retries += 1
+                            await asyncio.sleep(1)
+                            continue
+                    else:
+                        logger.error("obs.request.error",
+                                   message="Not connected and max retries exceeded",
+                                   data={"request_type": request_type})
+                        return (False, None, None, "not_connected")
+
+                request = simpleobsws.Request(request_type, request_data)
+                response = await self.ws.call(request)
+
+                if response and response.ok():
+                    return (True, response.responseData, None, None)
+
+                code: Optional[int] = None
+                comment: Optional[str] = None
+                status = getattr(response, 'requestStatus', None) if response is not None else None
+                if isinstance(status, dict):
+                    try:
+                        code_raw = status.get('code')
+                        code = int(code_raw) if code_raw is not None else None
+                    except Exception:
+                        code = None
+                    try:
+                        comment_raw = status.get('comment')
+                        comment = str(comment_raw) if comment_raw is not None else None
+                    except Exception:
+                        comment = None
+                else:
+                    try:
+                        code_raw = getattr(status, 'code', None)
+                        code = int(code_raw) if code_raw is not None else None
+                    except Exception:
+                        code = None
+                    try:
+                        comment_raw = getattr(status, 'comment', None)
+                        comment = str(comment_raw) if comment_raw is not None else None
+                    except Exception:
+                        comment = None
+
+                if retries < max_retries:
+                    retries += 1
+                    await asyncio.sleep(1)
+                    continue
+
+                return (False, None, code, comment or "request_failed")
+
+            except simpleobsws.NotIdentifiedError:
+                logger.warning("obs.connection.lost",
+                             message="Lost connection to OBS WebSocket")
+                self._connected = False
+                if retries < max_retries:
+                    if await self._try_reconnect():
+                        logger.info("obs.reconnect.success",
+                                  message="Reconnected successfully")
+                        retries += 1
+                        continue
+                    else:
+                        logger.error("obs.reconnect.error",
+                                   message="Reconnection failed")
+                        retries += 1
+                        await asyncio.sleep(1)
+                        continue
+                return (False, None, None, "not_identified")
+            except Exception as exc:
+                logger.exception("obs.request.error",
+                               exc=exc,
+                               message="Failed to send request",
+                               data={"request_type": request_type})
+                if retries < max_retries:
+                    retries += 1
+                    await asyncio.sleep(1)
+                    continue
+                return (False, None, None, str(exc))
+
+        return (False, None, None, "request_failed")
 
     def _get_scene_name(self, scene_key: str) -> Optional[str]:
         """Get the actual scene name from scene key."""
@@ -286,6 +418,355 @@ class OBSHandler:
                         data={"scene": scene_name})
             return scene_name
         return None
+
+    async def _get_input_names(self) -> Optional[set[str]]:
+        response = await self.send_request('GetInputList')
+        if not response:
+            return None
+        inputs = response.get('inputs')
+        if not isinstance(inputs, list):
+            return None
+        names: set[str] = set()
+        for item in inputs:
+            if not isinstance(item, dict):
+                continue
+            name = item.get('inputName')
+            if isinstance(name, str) and name.strip():
+                names.add(name)
+        return names
+
+    async def _get_inputs(self) -> Optional[list[Dict[str, Any]]]:
+        response = await self.send_request('GetInputList')
+        if not response:
+            return None
+        inputs = response.get('inputs')
+        if not isinstance(inputs, list):
+            return None
+        out: list[Dict[str, Any]] = []
+        for item in inputs:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+
+    async def _get_scene_item_id_by_scene_name(self, scene_name: str, source_name: str) -> Optional[int]:
+        if not scene_name or not source_name:
+            return None
+        id_response = await self.send_request('GetSceneItemId', {
+            'sceneName': scene_name,
+            'sourceName': source_name
+        })
+        if not id_response or 'sceneItemId' not in id_response:
+            return None
+        try:
+            return int(id_response['sceneItemId'])
+        except Exception:
+            return None
+
+    async def get_text_source_status(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+        names = source_names or list(REQUIRED_TEXT_SOURCES)
+
+        current_scene = await self.get_current_scene()
+        main_scene = self._get_scene_name(scene_key) if scene_key else None
+
+        input_names = await self._get_input_names()
+        if input_names is None:
+            return None
+
+        sources = []
+        for n in names:
+            input_exists = n in input_names
+            in_main_scene = False
+            if main_scene and input_exists:
+                in_main_scene = (await self._get_scene_item_id_by_scene_name(main_scene, n)) is not None
+            sources.append({
+                'name': n,
+                'input_exists': bool(input_exists),
+                'in_main_scene': bool(in_main_scene),
+                'present': bool(input_exists and in_main_scene),
+            })
+
+        return {
+            'current_scene': current_scene,
+            'main_scene': main_scene,
+            'sources': sources,
+        }
+
+    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe') -> Optional[Dict[str, Any]]:
+        main_scene = self._get_scene_name(scene_key) if scene_key else None
+        inputs = await self._get_inputs()
+        if inputs is None:
+            return None
+
+        needle = str(exe_name or '').strip().lower()
+        if not needle:
+            return None
+
+        matched_name: Optional[str] = None
+        matched_kind: Optional[str] = None
+
+        for item in inputs:
+            name = item.get('inputName')
+            kind = item.get('inputKind')
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            should_check = True
+            if isinstance(kind, str) and kind.strip():
+                k = kind.lower()
+                should_check = ('audio' in k) or ('wasapi' in k) or ('application' in k)
+            if not should_check:
+                continue
+
+            settings_resp = await self.send_request('GetInputSettings', {'inputName': name})
+            if not settings_resp:
+                continue
+            settings = settings_resp.get('inputSettings')
+            if _deep_contains_text(settings, needle):
+                matched_name = name
+                matched_kind = settings_resp.get('inputKind') if isinstance(settings_resp.get('inputKind'), str) else (kind if isinstance(kind, str) else None)
+                break
+
+        input_exists = bool(matched_name)
+        in_main_scene = False
+        if main_scene and matched_name:
+            in_main_scene = (await self._get_scene_item_id_by_scene_name(main_scene, matched_name)) is not None
+
+        return {
+            'target_exe': exe_name,
+            'input_name': matched_name,
+            'input_kind': matched_kind,
+            'input_exists': bool(input_exists),
+            'in_main_scene': bool(in_main_scene),
+            'present': bool(input_exists and in_main_scene),
+        }
+
+    async def ensure_spotify_audio_capture(self,
+                                          scene_key: str = 'main',
+                                          exe_name: str = 'Spotify.exe',
+                                          preferred_input_name: str = 'Spotify Audio') -> Optional[Dict[str, Any]]:
+        scene_name = self._get_scene_name(scene_key) if scene_key else None
+        if not scene_name:
+            scene_name = await self.get_current_scene()
+        if not scene_name:
+            return None
+
+        status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name)
+        if status is None:
+            return None
+
+        input_name = status.get('input_name') if isinstance(status.get('input_name'), str) else None
+
+        created = False
+        configured = False
+        added_to_scene = False
+        errors: list[str] = []
+
+        if not input_name:
+            # Create a new Application Audio Capture (WASAPI process output capture)
+            base = preferred_input_name or 'Spotify Audio'
+            candidate_names = [base, f'{base} 2', f'{base} 3', 'Spotify Audio Capture']
+            created_name: Optional[str] = None
+
+            for cand in candidate_names:
+                ok, _, code, comment = await self._send_request_with_status('CreateInput', {
+                    'sceneName': scene_name,
+                    'inputName': cand,
+                    'inputKind': 'wasapi_process_output_capture',
+                    'inputSettings': {
+                        'priority': 2,
+                        'window': '',
+                    },
+                    'sceneItemEnabled': True,
+                }, max_retries=0)
+                if ok:
+                    created_name = cand
+                    created = True
+                    break
+                if code is not None or comment:
+                    errors.append(f'CreateInput {cand}: {code if code is not None else ""} {comment or ""}'.strip())
+                else:
+                    errors.append(f'CreateInput {cand}: failed')
+
+            if not created_name:
+                return {
+                    'scene': scene_name,
+                    'target_exe': exe_name,
+                    'input_name': None,
+                    'created': False,
+                    'configured': False,
+                    'added_to_scene': False,
+                    'errors': errors,
+                }
+
+            input_name = created_name
+            status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name) or status
+
+        # Ensure it's in the scene
+        scene_item_id = await self._get_scene_item_id_by_scene_name(scene_name, input_name)
+        if scene_item_id is None:
+            resp = await self.send_request('CreateSceneItem', {
+                'sceneName': scene_name,
+                'sourceName': input_name,
+            })
+            if resp and 'sceneItemId' in resp:
+                added_to_scene = True
+            else:
+                errors.append('add_to_scene_failed')
+
+        # Configure the window selector if we can find a Spotify.exe entry.
+        try:
+            props = await self.send_request('GetInputPropertiesListPropertyItems', {
+                'inputName': input_name,
+                'propertyName': 'window',
+            })
+
+            selected_window: Optional[str] = None
+            items = None
+            if isinstance(props, dict):
+                items = props.get('propertyItems')
+            if isinstance(items, list):
+                needle = str(exe_name or '').lower()
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    item_name = _first_string(it.get('itemName'), it.get('itemValue'))
+                    item_value = _first_string(it.get('itemValue'), it.get('itemName'))
+                    if item_name and needle in item_name.lower():
+                        selected_window = item_value or item_name
+                        break
+                    if item_value and needle in item_value.lower():
+                        selected_window = item_value
+                        break
+
+            if selected_window:
+                await self.send_request('SetInputSettings', {
+                    'inputName': input_name,
+                    'inputSettings': {
+                        'priority': 2,
+                        'window': selected_window,
+                    }
+                })
+                configured = True
+        except Exception as exc:
+            errors.append(str(exc))
+
+        in_main_scene = (await self._get_scene_item_id_by_scene_name(scene_name, input_name)) is not None
+        # Determine if settings actually target Spotify.exe (optional, best-effort)
+        targets_exe = False
+        try:
+            settings_resp = await self.send_request('GetInputSettings', {'inputName': input_name})
+            if settings_resp and _deep_contains_text(settings_resp.get('inputSettings'), str(exe_name or '').lower()):
+                targets_exe = True
+        except Exception:
+            targets_exe = False
+
+        return {
+            'scene': scene_name,
+            'target_exe': exe_name,
+            'input_name': input_name,
+            'created': bool(created),
+            'configured': bool(configured),
+            'added_to_scene': bool(added_to_scene),
+            'in_main_scene': bool(in_main_scene),
+            'targets_exe': bool(targets_exe),
+            'errors': errors,
+        }
+
+    async def _create_text_input(self, scene_name: str, input_name: str) -> tuple[bool, Optional[str]]:
+        if not scene_name or not input_name:
+            return (False, 'invalid_scene_or_input')
+
+        kinds = ['text_gdiplus_v3', 'text_gdiplus_v2', 'text_ft2_source']
+        failures: list[str] = []
+        for kind in kinds:
+            input_settings: Dict[str, Any] = {'text': ''}
+            if kind.startswith('text_gdiplus'):
+                input_settings = dict(DEFAULT_TEXT_SETTINGS_GDIPLUS)
+
+            ok, _, code, comment = await self._send_request_with_status('CreateInput', {
+                'sceneName': scene_name,
+                'inputName': input_name,
+                'inputKind': kind,
+                'inputSettings': input_settings,
+                'sceneItemEnabled': False,
+            }, max_retries=0)
+            if ok:
+                return (True, None)
+            if code is not None or comment:
+                failures.append(f"{kind}: {code if code is not None else ''} {comment or ''}".strip())
+            else:
+                failures.append(f"{kind}: failed")
+
+        return (False, "; ".join(failures) if failures else 'create_input_failed')
+
+    async def ensure_text_sources(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+        names = source_names or list(REQUIRED_TEXT_SOURCES)
+        scene_name = self._get_scene_name(scene_key) if scene_key else None
+        if not scene_name:
+            scene_name = await self.get_current_scene()
+        if not scene_name:
+            return None
+
+        input_names = await self._get_input_names()
+        if input_names is None:
+            return None
+
+        created: list[str] = []
+        added_to_scene: list[str] = []
+        already_present: list[str] = []
+        errors: Dict[str, str] = {}
+
+        for n in names:
+            try:
+                exists = n in input_names
+                if not exists:
+                    ok, err = await self._create_text_input(scene_name, n)
+                    if not ok:
+                        errors[n] = err or 'create_input_failed'
+                        continue
+                    created.append(n)
+                    input_names.add(n)
+
+                scene_item_id = await self._get_scene_item_id_by_scene_name(scene_name, n)
+                if scene_item_id is None:
+                    resp = await self.send_request('CreateSceneItem', {
+                        'sceneName': scene_name,
+                        'sourceName': n,
+                    })
+                    if not resp or 'sceneItemId' not in resp:
+                        errors[n] = 'add_to_scene_failed'
+                        continue
+                    try:
+                        scene_item_id = int(resp['sceneItemId'])
+                    except Exception:
+                        scene_item_id = None
+
+                    if scene_item_id is None:
+                        errors[n] = 'add_to_scene_failed'
+                        continue
+                    added_to_scene.append(n)
+
+                await self.send_request('SetSceneItemEnabled', {
+                    'sceneName': scene_name,
+                    'sceneItemId': scene_item_id,
+                    'sceneItemEnabled': False,
+                })
+                await self.send_request('SetInputSettings', {
+                    'inputName': n,
+                    'inputSettings': {'text': ''}
+                })
+
+                already_present.append(n)
+            except Exception as exc:
+                errors[n] = str(exc)
+
+        return {
+            'scene': scene_name,
+            'created': created,
+            'added_to_scene': added_to_scene,
+            'already_present': already_present,
+            'errors': errors,
+        }
 
     async def set_source_visibility(self, scene_key: str, source_name: str, visible: bool) -> bool:
         """Set the visibility of a source in a scene.

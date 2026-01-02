@@ -71,12 +71,16 @@ function EventCard(props: { item: any }) {
       <div className="cardHeader">
         <div className="cardTitle">{`${s.method}${s.subject ? ` · ${s.subject}` : ''}`}</div>
         <div className="cardMeta">
-          <span className="pill">{s.username}</span>
-          {typeof s.broadcaster === 'string' && s.broadcaster.trim() !== '' ? <span className="pill" style={{ marginLeft: 8 }}>{s.broadcaster}</span> : null}
-          {typeof s.tokens === 'number' ? <span className="pill pillStrong" style={{ marginLeft: 8 }}>{`${s.tokens} tokens`}</span> : null}
+          <span className="pill pillNeutral">{s.username}</span>
+          {typeof s.broadcaster === 'string' && s.broadcaster.trim() !== '' ? (
+            <span className="pill pillNeutral" style={{ marginLeft: 8 }}>
+              {s.broadcaster}
+            </span>
+          ) : null}
+          {typeof s.tokens === 'number' ? <span className="pill pillInfo" style={{ marginLeft: 8 }}>{`${s.tokens} tokens`}</span> : null}
           {s.time ? <span style={{ marginLeft: 10 }}>{s.time}</span> : null}
           {typeof s.id === 'string' && s.id.trim() !== '' ? (
-            <span className="pill" style={{ marginLeft: 8 }}>{`id: ${s.id.length > 12 ? `${s.id.slice(0, 8)}…` : s.id}`}</span>
+            <span className="pill pillNeutral" style={{ marginLeft: 8 }}>{`id: ${s.id.length > 12 ? `${s.id.slice(0, 8)}…` : s.id}`}</span>
           ) : null}
         </div>
       </div>

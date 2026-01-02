@@ -18,6 +18,35 @@ type SpotifyAuthStatusResp = {
 
 type SpotifyAuthStartResp = { ok: true; auth_url: string };
 
+type ObsSourceStatus = {
+  name: string;
+  input_exists: boolean;
+  in_main_scene: boolean;
+  present: boolean;
+};
+
+type ObsStatusResp = {
+  ok: true;
+  enabled: boolean;
+  connected?: boolean;
+  status?: {
+    current_scene?: string | null;
+    main_scene?: string | null;
+    sources?: ObsSourceStatus[];
+  };
+};
+
+type ObsEnsureResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    created?: string[];
+    added_to_scene?: string[];
+    already_present?: string[];
+    errors?: Record<string, string>;
+  };
+};
+
 type SetupStatusResp = {
   ok: true;
   setup_complete: boolean;
@@ -36,8 +65,15 @@ function asBool(v: unknown): boolean {
   return s === '1' || s === 'true' || s === 'yes' || s === 'on';
 }
 
-type WizardStepKey = 'spotify' | 'events' | 'openai' | 'google' | 'obs' | 'general';
-const STEPS: { key: WizardStepKey; title: string }[] = [
+function formatObsErrors(errs: Record<string, string> | undefined): string {
+  if (!errs) return '';
+  const entries = Object.entries(errs);
+  if (!entries.length) return '';
+  return entries.map(([k, v]) => `${k}: ${v}`).join('\n');
+}
+
+type WizardStepKey = 'spotify' | 'events' | 'openai' | 'google' | 'obs' | 'obs_sources' | 'general';
+const BASE_STEPS: { key: WizardStepKey; title: string }[] = [
   { key: 'spotify', title: 'Spotify' },
   { key: 'events', title: 'Events API' },
   { key: 'openai', title: 'OpenAI API' },
@@ -126,7 +162,28 @@ export function SetupPage() {
   const [spBusy, setSpBusy] = useState(false);
   const [spMsg, setSpMsg] = useState('');
 
+  const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
+  const [obsMsg, setObsMsg] = useState('');
+  const [obsEnsureMsg, setObsEnsureMsg] = useState('');
+  const [obsBusy, setObsBusy] = useState(false);
+
   const v = (section: string, key: string) => norm((cfg[section] || {})[key]);
+
+  const obsEnabled = asBool(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled);
+
+  const steps = useMemo(() => {
+    if (!obsEnabled) return BASE_STEPS;
+    const out: { key: WizardStepKey; title: string }[] = [];
+    for (const s of BASE_STEPS) {
+      out.push(s);
+      if (s.key === 'obs') out.push({ key: 'obs_sources', title: 'OBS Sources' });
+    }
+    return out;
+  }, [obsEnabled]);
+
+  useEffect(() => {
+    if (stepIdx >= steps.length) setStepIdx(Math.max(0, steps.length - 1));
+  }, [stepIdx, steps.length]);
 
   async function loadConfig() {
     const data = await apiJson<ConfigResp>('/api/config');
@@ -145,6 +202,17 @@ export function SetupPage() {
     } catch (e: any) {
       setSp(null);
       setSpMsg(`Error loading Spotify status: ${e?.message ? e.message : String(e)}`);
+    }
+  }
+
+  async function loadObsStatus() {
+    try {
+      const data = await apiJson<ObsStatusResp>('/api/obs/status');
+      setObsStatus(data);
+      setObsMsg('');
+    } catch (e: any) {
+      setObsStatus(null);
+      setObsMsg(`Error loading OBS status: ${e?.message ? e.message : String(e)}`);
     }
   }
 
@@ -192,7 +260,7 @@ export function SetupPage() {
     setStatus('Saving...');
     setSpMsg('');
 
-    const step = STEPS[stepIdx]?.key;
+    const step = steps[stepIdx]?.key;
     try {
       if (step === 'spotify') {
         await savePartial({
@@ -248,6 +316,9 @@ export function SetupPage() {
         setSecrets((s) => ({ ...s, obsPassword: '' }));
         await loadConfig();
         await loadSetupStatus().catch(() => {});
+      } else if (step === 'obs_sources') {
+        // No config to save here; this step is just to validate/create required sources.
+        setStatus('');
       } else if (step === 'general') {
         await savePartial({
           General: {
@@ -264,7 +335,7 @@ export function SetupPage() {
       }
 
       setStatus('Saved.');
-      setStepIdx((i) => Math.min(i + 1, STEPS.length - 1));
+      setStepIdx((i) => Math.min(i + 1, steps.length - 1));
     } catch (e: any) {
       setStatus(`Error: ${e?.message ? e.message : String(e)}`);
     }
@@ -288,7 +359,16 @@ export function SetupPage() {
     return () => window.clearInterval(t);
   }, []);
 
-  const currentStep = STEPS[stepIdx]?.key;
+  const currentStep = steps[stepIdx]?.key;
+
+  useEffect(() => {
+    if (currentStep !== 'obs_sources') {
+      setObsEnsureMsg('');
+      return;
+    }
+    if (!obsEnabled) return;
+    loadObsStatus().catch(() => {});
+  }, [currentStep, obsEnabled]);
 
   const setupComplete = setupStatus ? !!setupStatus.setup_complete : asBool(v('General', 'setup_complete'));
 
@@ -307,10 +387,13 @@ export function SetupPage() {
     (googleCx === '' && googleKey === '') ||
     (googleCx !== '' && googleKey !== '');
 
-  const obsEnabled = asBool(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled);
   const obsHost = norm(v('OBS', 'host'));
   const obsPort = norm(v('OBS', 'port'));
   const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '');
+
+  const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
+  const missingSources = requiredSources.filter((s) => !s.present);
+  const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
 
   const generalOk =
     norm(v('General', 'song_cost')) !== '' && norm(v('General', 'skip_song_cost')) !== '' && norm(v('General', 'request_overlay_duration')) !== '';
@@ -326,9 +409,11 @@ export function SetupPage() {
             ? googleOk
             : currentStep === 'obs'
               ? obsOk
-              : currentStep === 'general'
-                ? generalOk
-                : false;
+              : currentStep === 'obs_sources'
+                ? true
+                : currentStep === 'general'
+                  ? generalOk
+                  : false;
 
   const nextLabel = currentStep === 'general' ? 'Finish' : 'Next';
 
@@ -340,10 +425,11 @@ export function SetupPage() {
 
       <div className="card">
         <h2>
-          Setup status: <span className="pill">{setupComplete ? 'complete' : 'incomplete'}</span>
+          Setup status:{' '}
+          <span className={setupComplete ? 'pill pillSuccess' : 'pill pillWarn'}>{setupComplete ? 'complete' : 'incomplete'}</span>
         </h2>
         <div className="muted">
-          Step {stepIdx + 1} of {STEPS.length}: <span className="pill">{STEPS[stepIdx]?.title}</span>
+          Step {stepIdx + 1} of {steps.length}: <span className="pill pillInfo">{steps[stepIdx]?.title}</span>
         </div>
         <div className="actions">
           <button type="button" onClick={onBack} disabled={stepIdx === 0}>
@@ -362,7 +448,20 @@ export function SetupPage() {
       {currentStep === 'spotify' ? (
         <div className="card" style={{ marginTop: 16 }}>
           <h2>
-            Spotify: <span className="pill">{sp ? (sp.authorized ? 'authorized' : sp.configured ? 'not authorized' : 'not configured') : 'loading'}</span>
+            Spotify:{' '}
+            <span
+              className={
+                sp
+                  ? sp.authorized
+                    ? 'pill pillSuccess'
+                    : sp.configured
+                      ? 'pill pillWarn'
+                      : 'pill pillError'
+                  : 'pill pillNeutral'
+              }
+            >
+              {sp ? (sp.authorized ? 'authorized' : sp.configured ? 'not authorized' : 'not configured') : 'loading'}
+            </span>
           </h2>
 
           <label>Spotify client_id</label>
@@ -404,7 +503,7 @@ export function SetupPage() {
               Connect Spotify
             </button>
           </div>
-          {sp?.error ? <div className="muted">Error: {String(sp.error)}</div> : null}
+          {sp?.error ? <div className="muted">Error: <span className="pill pillError">{String(sp.error)}</span></div> : null}
           {spMsg ? <div className="muted">{spMsg}</div> : null}
           <div className="muted" style={{ marginTop: 8 }}>
             You can proceed after entering credentials + redirect URL. Connecting Spotify is recommended but not required to click Next.
@@ -447,6 +546,112 @@ export function SetupPage() {
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />
           <div className="muted">This is the password configured in OBS → Tools → WebSocket Server Settings.</div>
+        </div>
+      ) : null}
+
+      {currentStep === 'obs_sources' ? (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2>
+            OBS sources setup{' '}
+            <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>
+              {obsStatus?.connected ? 'connected' : 'not connected'}
+            </span>
+          </h2>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, alignItems: 'baseline' }}>
+            <div className="muted">Current scene</div>
+            <div>
+              <code>{obsStatus?.status?.current_scene || '(unknown)'}</code>
+            </div>
+            <div className="muted">Main scene</div>
+            <div>
+              <code>{obsStatus?.status?.main_scene || '(unknown)'}</code>
+            </div>
+          </div>
+
+          <label style={{ marginTop: 12 }}>Required text sources</label>
+          <div style={{ overflowX: 'auto', marginTop: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ textAlign: 'left' }}>
+                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Source</th>
+                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 110 }}>Present</th>
+                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 120 }}>Input</th>
+                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 150 }}>In main scene</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(requiredSources || []).map((s) => (
+                  <tr key={s.name}>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <code style={{ whiteSpace: 'nowrap' }}>{s.name}</code>
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
+                    </td>
+                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                      <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
+                    </td>
+                  </tr>
+                ))}
+                {!(requiredSources || []).length ? (
+                  <tr>
+                    <td colSpan={4} className="muted" style={{ padding: '8px 8px' }}>
+                      (no data)
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button type="button" onClick={() => loadObsStatus().catch(() => {})} disabled={obsBusy}>
+              Refresh OBS status
+            </button>
+
+            {hasMissingSources ? (
+              <button
+                type="button"
+                disabled={obsBusy}
+                onClick={async () => {
+                  setObsBusy(true);
+                  setObsEnsureMsg('Creating OBS text sources...');
+                  try {
+                    const resp = await apiJson<ObsEnsureResp>('/api/obs/ensure_sources', { method: 'POST' });
+                    const created = (resp.result?.created || []).length;
+                    const added = (resp.result?.added_to_scene || []).length;
+                    const errs = resp.result?.errors || {};
+                    const errCount = Object.keys(errs).length;
+                    const errText = formatObsErrors(errs);
+                    const errBlock = errText ? `\n\nErrors:\n${errText}` : '';
+                    setObsEnsureMsg(
+                      `Created/ensured sources. Created: ${created}, added to scene: ${added}, errors: ${errCount}.${errBlock}\n\nNow go to OBS and set the size + position of each text source.`
+                    );
+                  } catch (e: any) {
+                    setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                  } finally {
+                    setObsBusy(false);
+                    await loadObsStatus().catch(() => {});
+                  }
+                }}
+              >
+                Create missing text sources
+              </button>
+            ) : null}
+          </div>
+
+          {obsMsg ? <div className="muted">{obsMsg}</div> : null}
+          {obsEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsEnsureMsg}</div> : null}
+
+          {!obsStatus?.connected ? (
+            <div className="muted" style={{ marginTop: 10 }}>
+              TipTune couldn’t connect to OBS. Make sure OBS is running, obs-websocket is enabled, and your host/port/password are correct.
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -552,13 +757,13 @@ export function SetupPage() {
           />
           <div className="muted">Tip amount (in tokens) that triggers a “skip current song” action.</div>
 
-          <label>request_overlay_duration</label>
+          <label>OBS overlay duration</label>
           <input
             type="text"
             value={v('General', 'request_overlay_duration')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
           />
-          <div className="muted">How long (seconds) the request overlay stays visible in OBS.</div>
+          <div className="muted">How long (seconds) OBS overlays stay visible.</div>
         </div>
       ) : null}
     </>
