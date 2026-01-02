@@ -3,11 +3,13 @@ import configparser
 import json
 import logging
 import os
+import secrets
 import signal
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
+from urllib.parse import urlparse
 
 import httpx
 from aiohttp import web
@@ -15,7 +17,7 @@ from aiohttp import web
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
-from utils.runtime_paths import ensure_parent_dir, get_config_path, get_resource_path
+from utils.runtime_paths import ensure_parent_dir, get_config_path, get_resource_path, get_spotipy_cache_path
 from utils.structured_logging import get_structured_logger
 
 try:
@@ -205,11 +207,30 @@ def _update_ini_file(path: Path, updates: Dict[str, Dict[str, str]]) -> None:
 
 
 class WebUI:
-    def __init__(self, service: 'SongRequestService', host: str, port: int):
+    def __init__(self, service: 'SongRequestService', host: str = '127.0.0.1', port: int = 8765):
         self._service = service
         self._host = host
         self._port = int(port)
-        self._app = web.Application()
+
+        @web.middleware
+        async def _cors_middleware(request: web.Request, handler):
+            if request.method == 'OPTIONS':
+                resp = web.Response(status=200)
+            else:
+                resp = await handler(request)
+
+            origin = request.headers.get('Origin')
+            if origin:
+                resp.headers['Access-Control-Allow-Origin'] = origin
+                resp.headers['Vary'] = 'Origin'
+                resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+                resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Access-Control-Request-Private-Network'
+
+            if request.headers.get('Access-Control-Request-Private-Network') == 'true':
+                resp.headers['Access-Control-Allow-Private-Network'] = 'true'
+            return resp
+
+        self._app = web.Application(middlewares=[_cors_middleware])
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
 
@@ -237,6 +258,8 @@ class WebUI:
             web.post('/api/queue/delete', self._api_queue_delete),
             web.get('/api/spotify/devices', self._api_devices),
             web.post('/api/spotify/device', self._api_set_device),
+            web.get('/api/spotify/auth/status', self._api_spotify_auth_status),
+            web.post('/api/spotify/auth/start', self._api_spotify_auth_start),
             web.get('/api/config', self._api_get_config),
             web.post('/api/config', self._api_update_config),
             web.get('/api/events/recent', self._api_events_recent),
@@ -369,6 +392,24 @@ class WebUI:
         if not ok:
             return web.json_response({"ok": False, "error": "Failed to set device"}, status=400)
         return web.json_response({"ok": True})
+
+    async def _api_spotify_auth_status(self, _request: web.Request) -> web.Response:
+        try:
+            status = await self._service.get_spotify_auth_status()
+            return web.json_response({"ok": True, **status})
+        except Exception as exc:
+            logger.exception("webui.api.spotify.auth.status.error", exc=exc, message="Failed to get Spotify auth status")
+            return web.json_response({"ok": False, "error": str(exc)})
+
+    async def _api_spotify_auth_start(self, _request: web.Request) -> web.Response:
+        try:
+            ok, auth_url, error = await self._service.start_spotify_auth()
+            if not ok or not auth_url:
+                return web.json_response({"ok": False, "error": error or "Failed to start Spotify auth"}, status=400)
+            return web.json_response({"ok": True, "auth_url": auth_url})
+        except Exception as exc:
+            logger.exception("webui.api.spotify.auth.start.error", exc=exc, message="Failed to start Spotify auth")
+            return web.json_response({"ok": False, "error": str(exc)})
 
     async def _api_get_config(self, _request: web.Request) -> web.Response:
         try:
@@ -504,6 +545,15 @@ class SongRequestService:
 
         self._web: Optional[WebUI] = None
 
+        self._spotify_auth_lock = asyncio.Lock()
+        self._spotify_auth_in_progress: bool = False
+        self._spotify_auth_error: Optional[str] = None
+        self._spotify_auth_url: Optional[str] = None
+        self._spotify_auth_state: Optional[str] = None
+        self._spotify_auth_oauth: Any = None
+        self._spotify_auth_runner: Optional[web.AppRunner] = None
+        self._spotify_auth_site: Optional[web.BaseSite] = None
+
     async def _refresh_obs_integration_from_config(self) -> None:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
 
@@ -598,6 +648,11 @@ class SongRequestService:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
+        try:
+            await self._stop_spotify_auth_server()
+        except Exception:
+            pass
+
         if self._web:
             try:
                 await self._web.stop()
@@ -688,6 +743,259 @@ class SongRequestService:
             except Exception as exc:
                 logger.exception("local.control.error", exc=exc, message="Local control loop error")
                 await asyncio.sleep(1)
+
+    def _get_spotify_config_values(self) -> tuple[str, str, str]:
+        if not config.has_section("Spotify"):
+            return ("", "", "")
+        client_id = config.get("Spotify", "client_id", fallback="").strip()
+        client_secret = config.get("Spotify", "client_secret", fallback="").strip()
+        redirect_url = config.get("Spotify", "redirect_url", fallback="").strip()
+        return (client_id, client_secret, redirect_url)
+
+    def _build_spotify_oauth(self):
+        from spotipy import SpotifyOAuth
+
+        client_id, client_secret, redirect_url = self._get_spotify_config_values()
+        cache_path = get_spotipy_cache_path()
+        ensure_parent_dir(cache_path)
+        return SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_url,
+            scope="user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private",
+            open_browser=False,
+            cache_path=str(cache_path),
+        )
+
+    def _is_spotify_authorized(self) -> bool:
+        try:
+            client_id, client_secret, redirect_url = self._get_spotify_config_values()
+            if not client_id or not client_secret or not redirect_url:
+                return False
+            # NOTE: Avoid oauth.validate_token() here because it may attempt a token refresh
+            # over the network. This method is used by the WebUI polling endpoint
+            # (/api/spotify/auth/status) and must stay fast and non-blocking.
+            oauth = self._build_spotify_oauth()
+            token_info = oauth.cache_handler.get_cached_token()
+            return bool(token_info)
+        except Exception:
+            return False
+
+    async def get_spotify_auth_status(self) -> Dict[str, Any]:
+        client_id, client_secret, redirect_url = self._get_spotify_config_values()
+        configured = bool(client_id and client_secret and redirect_url)
+        authorized = self._is_spotify_authorized()
+
+        from helpers import spotify_client as helpers_spotify_client
+        client_ready = helpers_spotify_client is not None
+
+        async with self._spotify_auth_lock:
+            return {
+                "configured": configured,
+                "authorized": authorized,
+                "client_ready": client_ready,
+                "redirect_url": redirect_url,
+                "in_progress": bool(self._spotify_auth_in_progress),
+                "auth_url": self._spotify_auth_url,
+                "error": self._spotify_auth_error,
+            }
+
+    async def _stop_spotify_auth_server(self) -> None:
+        runner: Optional[web.AppRunner] = None
+        async with self._spotify_auth_lock:
+            runner = self._spotify_auth_runner
+            self._spotify_auth_runner = None
+            self._spotify_auth_site = None
+            self._spotify_auth_oauth = None
+            self._spotify_auth_state = None
+        if runner is not None:
+            try:
+                await runner.cleanup()
+            except Exception:
+                pass
+
+    async def _try_enable_chatdj_from_current_config(self) -> bool:
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            return True
+
+        from helpers import spotify_client as helpers_spotify_client
+        if helpers_spotify_client is None:
+            return False
+
+        openai_api_key = config.get("OpenAI", "api_key", fallback="").strip()
+        if openai_api_key in ("", "your-openai-api-key"):
+            return False
+
+        try:
+            from chatdj import AutoDJ, SongExtractor
+
+            google_api_key_raw = config.get("Search", "google_api_key", fallback="").strip()
+            google_cx_raw = config.get("Search", "google_cx", fallback="").strip()
+            google_api_key = google_api_key_raw if google_api_key_raw else None
+            google_cx = google_cx_raw if google_cx_raw else None
+
+            playback_device_id_raw = config.get("Spotify", "playback_device_id", fallback="").strip() if config.has_section("Spotify") else ""
+            playback_device_id = playback_device_id_raw if playback_device_id_raw else None
+
+            model = config.get("OpenAI", "model", fallback="gpt-5").strip() or "gpt-5"
+
+            self.actions.song_extractor = SongExtractor(
+                openai_api_key,
+                spotify_client=helpers_spotify_client,
+                google_api_key=google_api_key,
+                google_cx=google_cx,
+                model=model,
+            )
+            self.actions.auto_dj = AutoDJ(helpers_spotify_client, playback_device_id=playback_device_id)
+            self.actions.chatdj_enabled = True
+            return True
+        except Exception:
+            try:
+                self.actions.chatdj_enabled = False
+            except Exception:
+                pass
+            return False
+
+    async def _spotify_auth_callback(self, request: web.Request) -> web.Response:
+        err = request.query.get('error')
+        state = request.query.get('state')
+        code = request.query.get('code')
+
+        expected_state: Optional[str]
+        oauth: Any
+
+        async with self._spotify_auth_lock:
+            expected_state = self._spotify_auth_state
+            oauth = self._spotify_auth_oauth
+
+        if oauth is None:
+            async with self._spotify_auth_lock:
+                self._spotify_auth_in_progress = False
+                self._spotify_auth_error = "Authorization session expired. Please try again."
+            asyncio.create_task(self._stop_spotify_auth_server())
+            return web.Response(text="Authorization session expired. You can close this window and retry.", content_type='text/plain', status=400)
+
+        if isinstance(err, str) and err.strip() != "":
+            async with self._spotify_auth_lock:
+                self._spotify_auth_in_progress = False
+                self._spotify_auth_error = f"Spotify auth error: {err.strip()}"
+            asyncio.create_task(self._stop_spotify_auth_server())
+            return web.Response(text="Spotify authorization failed. You can close this window.", content_type='text/plain')
+
+        if not isinstance(code, str) or code.strip() == "":
+            async with self._spotify_auth_lock:
+                self._spotify_auth_in_progress = False
+                self._spotify_auth_error = "Missing authorization code."
+            asyncio.create_task(self._stop_spotify_auth_server())
+            return web.Response(text="Missing authorization code. You can close this window.", content_type='text/plain', status=400)
+
+        if expected_state is not None and state != expected_state:
+            async with self._spotify_auth_lock:
+                self._spotify_auth_in_progress = False
+                self._spotify_auth_error = "State mismatch during authorization."
+            asyncio.create_task(self._stop_spotify_auth_server())
+            return web.Response(text="State mismatch. You can close this window.", content_type='text/plain', status=400)
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, lambda: oauth.get_access_token(code=code, check_cache=False))
+        except Exception as exc:
+            async with self._spotify_auth_lock:
+                self._spotify_auth_in_progress = False
+                self._spotify_auth_error = str(exc)
+            asyncio.create_task(self._stop_spotify_auth_server())
+            return web.Response(text="Failed to complete Spotify authorization. You can close this window.", content_type='text/plain', status=500)
+
+        try:
+            from helpers import config as helpers_config
+            from helpers import refresh_spotify_client
+            helpers_config.read(config_path)
+            refresh_spotify_client()
+        except Exception:
+            pass
+
+        try:
+            await self._try_enable_chatdj_from_current_config()
+        except Exception:
+            pass
+
+        async with self._spotify_auth_lock:
+            self._spotify_auth_in_progress = False
+            self._spotify_auth_error = None
+
+        asyncio.create_task(self._stop_spotify_auth_server())
+        return web.Response(
+            text=(
+                "<html><head><meta charset=\"utf-8\" /><title>TipTune</title></head>"
+                "<body style=\"font-family: sans-serif;\"><h2>Spotify connected.</h2>"
+                "<div>You can close this window and return to TipTune.</div></body></html>"
+            ),
+            content_type='text/html',
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def start_spotify_auth(self) -> tuple[bool, Optional[str], Optional[str]]:
+        client_id, client_secret, redirect_url = self._get_spotify_config_values()
+        if not client_id or not client_secret or not redirect_url:
+            return (False, None, "Spotify client_id/client_secret/redirect_url must be configured first.")
+
+        parsed = urlparse(redirect_url)
+        host = (parsed.hostname or "").strip()
+        port = parsed.port
+        path = parsed.path or "/"
+        if parsed.scheme != 'http':
+            return (False, None, "Spotify redirect_url must be http://127.0.0.1:<port>/<path>.")
+        if host not in ('127.0.0.1', 'localhost'):
+            return (False, None, "Spotify redirect_url host must be 127.0.0.1 or localhost.")
+        if port is None:
+            return (False, None, "Spotify redirect_url must include an explicit port.")
+
+        async with self._spotify_auth_lock:
+            if self._spotify_auth_in_progress and self._spotify_auth_url:
+                return (True, self._spotify_auth_url, None)
+
+        await self._stop_spotify_auth_server()
+
+        oauth = self._build_spotify_oauth()
+        state = secrets.token_urlsafe(16)
+        auth_url = oauth.get_authorize_url(state=state)
+
+        async with self._spotify_auth_lock:
+            self._spotify_auth_in_progress = True
+            self._spotify_auth_error = None
+            self._spotify_auth_url = auth_url
+            self._spotify_auth_state = state
+            self._spotify_auth_oauth = oauth
+
+        callback_app = web.Application()
+        cb_paths = {path}
+        if path != '/':
+            cb_paths.add(path.rstrip('/'))
+            cb_paths.add(path.rstrip('/') + '/')
+        for p in sorted(cb_paths):
+            if p and p.startswith('/'):
+                callback_app.router.add_get(p, self._spotify_auth_callback)
+
+        runner = web.AppRunner(callback_app)
+        await runner.setup()
+        site = web.TCPSite(runner, host=host, port=int(port))
+        try:
+            await site.start()
+        except Exception as exc:
+            try:
+                await runner.cleanup()
+            except Exception:
+                pass
+            async with self._spotify_auth_lock:
+                self._spotify_auth_in_progress = False
+                self._spotify_auth_error = str(exc)
+            return (False, None, f"Failed to start local callback server: {exc}")
+
+        async with self._spotify_auth_lock:
+            self._spotify_auth_runner = runner
+            self._spotify_auth_site = site
+
+        return (True, auth_url, None)
 
     async def _handle_local_command(self, cmd: str, loop: asyncio.AbstractEventLoop) -> None:
         if cmd in ("pause", "p"):
