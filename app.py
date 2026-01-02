@@ -694,15 +694,36 @@ class SongRequestService:
         overlay_name = str(overlay or '').strip()
         duration = self._get_obs_overlay_duration_seconds()
 
+        overlay_methods: dict[str, str] = {
+            'SongRequester': 'trigger_song_requester_overlay',
+            'WarningOverlay': 'trigger_warning_overlay',
+            'GeneralOverlay': 'trigger_motor_overlay',
+        }
+
+        if overlay_name not in overlay_methods:
+            return (False, "Unknown overlay")
+
+        required_method = overlay_methods[overlay_name]
+        if not hasattr(obs, required_method):
+            return (False, f"OBS handler does not support {overlay_name}")
+
         async def _run() -> None:
-            if overlay_name == 'SongRequester':
-                await obs.trigger_song_requester_overlay('TestUser', 'Test Song - Test Artist', duration)
-            elif overlay_name == 'WarningOverlay':
-                await obs.trigger_warning_overlay('TestUser', 'This is a test warning overlay.', duration)
-            elif overlay_name == 'GeneralOverlay':
-                await obs.trigger_motor_overlay('This is a test general overlay.', overlay_type='processing', display_duration=duration)
-            else:
-                raise ValueError('Unknown overlay')
+            try:
+                if overlay_name == 'SongRequester':
+                    await obs.trigger_song_requester_overlay('TestUser', 'Test Song - Test Artist', duration)
+                elif overlay_name == 'WarningOverlay':
+                    await obs.trigger_warning_overlay('TestUser', 'This is a test warning overlay.', duration)
+                elif overlay_name == 'GeneralOverlay':
+                    await obs.trigger_motor_overlay('This is a test general overlay.', overlay_type='processing', display_duration=duration)
+                else:
+                    raise ValueError('Unknown overlay')
+            except Exception as exc:
+                logger.exception(
+                    "obs.test_overlay.error",
+                    message="Test overlay task failed",
+                    exc=exc,
+                    data={"overlay": overlay_name}
+                )
 
         try:
             asyncio.create_task(_run())
