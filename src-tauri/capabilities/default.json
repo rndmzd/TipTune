@@ -11,7 +11,7 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "binaries/TipTune",
+          "name": "TipTune",
           "sidecar": true,
           "args": true
         }

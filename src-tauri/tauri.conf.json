@@ -4,14 +4,14 @@
   "version": "0.1.0",
   "identifier": "com.tiptune.app",
   "build": {
-    "devUrl": "http://127.0.0.1:8765",
+    "devUrl": "http://127.0.0.1:5173",
     "frontendDist": ["../webui/dist"],
     "beforeDevCommand": {
-      "script": "node ./scripts/prepare-sidecar.mjs",
-      "wait": true
+      "script": "node ./scripts/prepare-sidecar.mjs && npm run webui:dev",
+      "wait": false
     },
-    "beforeBuildCommand": "node ./scripts/prepare-sidecar.mjs && npm --prefix ../webui run build",
-    "beforeBundleCommand": "node ./scripts/prepare-sidecar.mjs && npm --prefix ../webui run build"
+    "beforeBuildCommand": "node ./scripts/prepare-sidecar.mjs && npm run webui:build",
+    "beforeBundleCommand": "node ./scripts/prepare-sidecar.mjs && npm run webui:build"
   },
   "app": {
     "windows": [
