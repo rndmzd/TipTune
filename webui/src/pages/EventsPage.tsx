@@ -102,7 +102,7 @@ export function EventsPage() {
     apiJson('/api/events/recent?limit=50')
       .then((j: any) => {
         const evs = Array.isArray(j?.events) ? j.events : [];
-        setLines(evs);
+        setLines(evs.slice().reverse());
       })
       .catch(() => {});
 
@@ -110,13 +110,13 @@ export function EventsPage() {
     es.onmessage = (e) => {
       const parsed = safeParseJSON(e.data);
       setLines((prev) => {
-        const next = [...prev, parsed && typeof parsed === 'object' ? parsed : { raw: e.data }];
-        while (next.length > 300) next.shift();
+        const next = [parsed && typeof parsed === 'object' ? parsed : { raw: e.data }, ...prev];
+        while (next.length > 300) next.pop();
         return next;
       });
     };
     es.onerror = () => {
-      setLines((prev) => [...prev, { raw: '--- connection error ---' }]);
+      setLines((prev) => [{ raw: '--- connection error ---' }, ...prev]);
     };
     return () => {
       es.close();
