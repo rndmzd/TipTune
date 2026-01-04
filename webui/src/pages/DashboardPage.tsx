@@ -36,6 +36,20 @@ export function DashboardPage() {
   const hadActiveDeviceRef = useRef<boolean>(false);
   const hadSelectedDeviceAvailableRef = useRef<boolean>(true);
 
+  const [playbackPosMs, setPlaybackPosMs] = useState<number | null>(null);
+  const playbackTickRef = useRef<number | null>(null);
+  const playbackTickLastRef = useRef<number>(0);
+  const playbackIsPlayingRef = useRef<boolean>(false);
+
+  function fmtTime(ms: number): string {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n < 0) return '0:00';
+    const s = Math.floor(n / 1000);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
+  }
+
   useEffect(() => {
     selectedDeviceIdRef.current = String(queueState?.playback_device_id || '');
   }, [queueState?.playback_device_id]);
@@ -215,11 +229,58 @@ export function DashboardPage() {
     };
   }, [location.key]);
 
+  useEffect(() => {
+    const serverPos = typeof queueState?.playback_progress_ms === 'number' ? queueState!.playback_progress_ms! : null;
+    if (serverPos === null) {
+      setPlaybackPosMs(null);
+      return;
+    }
+
+    setPlaybackPosMs(serverPos);
+  }, [queueState?.playback_progress_ms, queueState?.playback_track_uri]);
+
+  useEffect(() => {
+    playbackIsPlayingRef.current = !!queueState?.playback_is_playing;
+
+    if (playbackTickRef.current != null) {
+      window.clearInterval(playbackTickRef.current);
+      playbackTickRef.current = null;
+    }
+
+    if (!queueState?.playback_is_playing) return;
+    if (typeof queueState?.playback_progress_ms !== 'number') return;
+
+    playbackTickLastRef.current = Date.now();
+    playbackTickRef.current = window.setInterval(() => {
+      if (!playbackIsPlayingRef.current) return;
+      const now = Date.now();
+      const delta = now - playbackTickLastRef.current;
+      if (delta <= 0) return;
+      playbackTickLastRef.current = now;
+      setPlaybackPosMs((prev) => {
+        if (typeof prev !== 'number') return prev;
+        return prev + delta;
+      });
+    }, 250);
+
+    return () => {
+      if (playbackTickRef.current != null) {
+        window.clearInterval(playbackTickRef.current);
+        playbackTickRef.current = null;
+      }
+    };
+  }, [queueState?.playback_is_playing, queueState?.playback_track_uri, queueState?.playback_progress_ms]);
+
   const showDeviceWarning = status === 'ok' && queueState?.enabled === true && !queueState?.playback_device_id;
   const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
   const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && !!activeDeviceWarning;
   const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && !!selectedDeviceWarning;
   const canUseQueueControls = status === 'ok' && queueState?.enabled === true;
+
+  const durationMs = typeof nowPlaying?.duration_ms === 'number' ? nowPlaying.duration_ms : null;
+  const safePosMs = typeof playbackPosMs === 'number' ? playbackPosMs : null;
+  const posClampedMs = safePosMs != null && durationMs != null ? Math.max(0, Math.min(safePosMs, durationMs)) : safePosMs;
+  const pct = durationMs && posClampedMs != null && durationMs > 0 ? Math.max(0, Math.min(1, posClampedMs / durationMs)) : null;
 
   return (
     <>
@@ -447,7 +508,26 @@ export function DashboardPage() {
           <label>Now playing</label>
           <div className="queueOut">
             {nowPlaying ? (
-              <QueueCard item={nowPlaying} indexLabel="Now" allowDelete={false} extraClass="queueCardNowPlaying" />
+              <div>
+                <QueueCard item={nowPlaying} indexLabel="Now" allowDelete={false} extraClass="queueCardNowPlaying" />
+                {durationMs && posClampedMs != null ? (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ height: 8, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          height: '100%',
+                          width: `${Math.round((pct ?? 0) * 1000) / 10}%`,
+                          background: 'rgba(138, 180, 255, 0.65)',
+                        }}
+                      />
+                    </div>
+                    <div className="muted" style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                      <span>{fmtTime(posClampedMs)}</span>
+                      <span>{fmtTime(durationMs)}</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             ) : (
               <div className="queueOut">(none)</div>
             )}
