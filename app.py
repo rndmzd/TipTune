@@ -1493,6 +1493,10 @@ class SongRequestService:
 
         paused = self.actions.auto_dj.queue_paused()
 
+        playback_progress_ms: Optional[int] = None
+        playback_is_playing: Optional[bool] = None
+        playback_track_uri: Optional[str] = None
+
         now_playing_track = getattr(self.actions.auto_dj, 'now_playing_track_uri', None)
         now_playing_item: Optional[dict] = None
         if isinstance(now_playing_track, str) and now_playing_track.strip() != "":
@@ -1505,11 +1509,34 @@ class SongRequestService:
             except Exception:
                 now_playing_item = {"uri": now_playing_track}
 
+            try:
+                pb = self.actions.auto_dj.spotify.current_playback()
+                if isinstance(pb, dict):
+                    if pb.get('progress_ms') is not None:
+                        playback_progress_ms = int(pb.get('progress_ms'))
+                    if pb.get('is_playing') is not None:
+                        playback_is_playing = bool(pb.get('is_playing'))
+                    item = pb.get('item')
+                    if isinstance(item, dict) and isinstance(item.get('uri'), str):
+                        playback_track_uri = item.get('uri')
+            except Exception:
+                playback_progress_ms = None
+                playback_is_playing = None
+                playback_track_uri = None
+
+            if isinstance(playback_track_uri, str) and playback_track_uri and playback_track_uri != now_playing_track:
+                playback_progress_ms = None
+                playback_is_playing = None
+                playback_track_uri = None
+
         queued_items = await self._enrich_queue_tracks(queued_tracks)
 
         return {
             "enabled": True,
             "paused": bool(paused),
+            "playback_progress_ms": playback_progress_ms,
+            "playback_is_playing": playback_is_playing,
+            "playback_track_uri": playback_track_uri,
             "now_playing_track": now_playing_track,
             "now_playing_item": now_playing_item,
             "queued_tracks": queued_tracks,
