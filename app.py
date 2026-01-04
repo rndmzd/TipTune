@@ -1510,7 +1510,8 @@ class SongRequestService:
                 now_playing_item = {"uri": now_playing_track}
 
             try:
-                pb = self.actions.auto_dj.spotify.current_playback()
+                loop = asyncio.get_running_loop()
+                pb = await loop.run_in_executor(None, self.actions.auto_dj.spotify.current_playback)
                 if isinstance(pb, dict):
                     if pb.get('progress_ms') is not None:
                         playback_progress_ms = int(pb.get('progress_ms'))
