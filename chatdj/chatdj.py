@@ -987,6 +987,11 @@ class AutoDJ:
             with self._queue_lock:
                 first_queued = self.queued_tracks[0] if self.queued_tracks else None
 
+            paused = self.queue_paused()
+            if paused:
+                self._print_variables(True)
+                return True
+
             if first_queued:
                 current_track = self.spotify.current_playback()['item']['uri']
                 logger.debug(f"Current playing track: {current_track}")
