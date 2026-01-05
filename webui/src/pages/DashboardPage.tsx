@@ -24,6 +24,9 @@ export function DashboardPage() {
   const [activeDeviceWarning, setActiveDeviceWarning] = useState<string>('');
   const [selectedDeviceWarning, setSelectedDeviceWarning] = useState<string>('');
 
+  const [obsNowPlayingBusy, setObsNowPlayingBusy] = useState<boolean>(false);
+  const [obsNowPlayingMsg, setObsNowPlayingMsg] = useState<string>('');
+
   const [addTrackOpen, setAddTrackOpen] = useState<boolean>(false);
   const [searchQ, setSearchQ] = useState<string>('');
   const [searchBusy, setSearchBusy] = useState<boolean>(false);
@@ -48,6 +51,24 @@ export function DashboardPage() {
     const m = Math.floor(s / 60);
     const r = s % 60;
     return `${m}:${String(r).padStart(2, '0')}`;
+  }
+
+  async function sendNowPlayingToObs() {
+    if (obsNowPlayingBusy || opBusy) return;
+    setObsNowPlayingBusy(true);
+    setObsNowPlayingMsg('');
+    try {
+      await apiJson<{ ok: true }>('/api/obs/now_playing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      setObsNowPlayingMsg('Sent to OBS.');
+    } catch (e: any) {
+      setObsNowPlayingMsg(e?.message ? String(e.message) : String(e));
+    } finally {
+      setObsNowPlayingBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -510,6 +531,12 @@ export function DashboardPage() {
             {nowPlaying ? (
               <div>
                 <QueueCard item={nowPlaying} indexLabel="Now" allowDelete={false} extraClass="queueCardNowPlaying" />
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => sendNowPlayingToObs().catch(() => {})} disabled={opBusy || obsNowPlayingBusy}>
+                    {obsNowPlayingBusy ? 'Sending…' : 'Send info to OBS'}
+                  </button>
+                  {obsNowPlayingMsg ? <div className="muted">{obsNowPlayingMsg}</div> : null}
+                </div>
                 {durationMs && posClampedMs != null ? (
                   <div style={{ marginTop: 8 }}>
                     <div style={{ height: 8, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>

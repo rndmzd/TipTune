@@ -289,6 +289,7 @@ class WebUI:
             web.get('/api/obs/status', self._api_obs_status),
             web.post('/api/obs/ensure_sources', self._api_obs_ensure_sources),
             web.post('/api/obs/ensure_spotify_audio_capture', self._api_obs_ensure_spotify_audio_capture),
+            web.post('/api/obs/now_playing', self._api_obs_now_playing),
             web.post('/api/obs/test_overlay', self._api_obs_test_overlay),
             web.get('/api/spotify/devices', self._api_devices),
             web.get('/api/spotify/search', self._api_spotify_search),
@@ -571,6 +572,12 @@ class WebUI:
             return web.json_response({"ok": False, "error": error or "Failed to trigger overlay"}, status=400)
         return web.json_response({"ok": True})
 
+    async def _api_obs_now_playing(self, _request: web.Request) -> web.Response:
+        ok, error = await self._service.trigger_obs_now_playing_overlay()
+        if not ok:
+            return web.json_response({"ok": False, "error": error or "Failed to trigger overlay"}, status=400)
+        return web.json_response({"ok": True})
+
     async def _api_events_recent(self, request: web.Request) -> web.Response:
         limit_raw = request.query.get('limit', '50')
         try:
@@ -817,6 +824,85 @@ class SongRequestService:
                     message="Test overlay task failed",
                     exc=exc,
                     data={"overlay": overlay_name}
+                )
+
+        try:
+            asyncio.create_task(_run())
+        except Exception as exc:
+            return (False, str(exc))
+
+        return (True, None)
+
+    async def trigger_obs_now_playing_overlay(self) -> tuple[bool, Optional[str]]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return (False, "OBS is disabled")
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+            return (False, "OBS is not available")
+
+        if not getattr(self.actions, 'chatdj_enabled', False) or not hasattr(self.actions, 'auto_dj'):
+            return (False, "Spotify is not available")
+
+        now_uri = getattr(self.actions.auto_dj, 'now_playing_track_uri', None)
+        if not isinstance(now_uri, str) or now_uri.strip() == "":
+            return (False, "No song is currently playing")
+
+        try:
+            enriched = await self._enrich_queue_tracks([now_uri])
+            item = enriched[0] if isinstance(enriched, list) and enriched else None
+        except Exception:
+            item = None
+
+        title = None
+        artists_text = None
+        album = None
+
+        if isinstance(item, dict):
+            v = item.get('name')
+            if isinstance(v, str) and v.strip():
+                title = v.strip()
+            v = item.get('album')
+            if isinstance(v, str) and v.strip():
+                album = v.strip()
+            v = item.get('artists')
+            if isinstance(v, list):
+                parts = [str(a).strip() for a in v if isinstance(a, str) and a.strip()]
+                if parts:
+                    artists_text = ", ".join(parts)
+
+        if not title:
+            title = "Unknown Title"
+        if not artists_text:
+            artists_text = "Unknown Artist"
+
+        msg = f"{artists_text} - {title}"
+        if album:
+            msg = msg + f"\n{album}"
+
+        duration = self._get_obs_overlay_duration_seconds()
+
+        if not hasattr(obs, 'trigger_now_playing_overlay'):
+            return (False, "OBS handler does not support now playing overlay")
+
+        async def _run() -> None:
+            try:
+                try:
+                    await obs.ensure_text_sources(scene_key='main', source_names=['NowPlayingOverlay'])
+                except Exception:
+                    pass
+                await obs.trigger_now_playing_overlay(msg, duration)
+            except Exception as exc:
+                logger.exception(
+                    "obs.now_playing_overlay.error",
+                    message="Now playing overlay task failed",
+                    exc=exc,
                 )
 
         try:
