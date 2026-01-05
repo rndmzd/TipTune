@@ -9,7 +9,7 @@ from utils.structured_logging import get_structured_logger
 
 logger = get_structured_logger('tiptune.handlers.obshandler')
 
-REQUIRED_TEXT_SOURCES = ['SongRequester', 'WarningOverlay', 'GeneralOverlay']
+REQUIRED_TEXT_SOURCES = ['SongRequester', 'WarningOverlay', 'GeneralOverlay', 'NowPlayingOverlay']
 
 DEFAULT_TEXT_SETTINGS_GDIPLUS: Dict[str, Any] = {
     'align': 'left',
@@ -1292,6 +1292,71 @@ class OBSHandler:
         await asyncio.sleep(display_duration)
         await self.hide_motor_overlay()
 
+    async def show_now_playing_overlay(self, message: str) -> bool:
+        try:
+            request_content = {
+                'inputName': 'NowPlayingOverlay',
+                'inputSettings': {
+                    'text': message
+                }
+            }
+
+            try:
+                await self.send_request('SetInputSettings', request_content)
+                text_success = True
+            except Exception:
+                text_success = False
+
+            await asyncio.sleep(1)
+            visibility_success = await self.set_source_visibility('main', 'NowPlayingOverlay', True)
+            return bool(text_success and visibility_success)
+        except Exception as exc:
+            logger.exception(
+                "obs.overlay.now_playing.show.error",
+                message="Failed to show now playing overlay",
+                exc=exc,
+            )
+            return False
+
+    async def hide_now_playing_overlay(self) -> bool:
+        try:
+            visibility_success = await self.set_source_visibility('main', 'NowPlayingOverlay', False)
+            await asyncio.sleep(1)
+
+            request_content = {
+                'inputName': 'NowPlayingOverlay',
+                'inputSettings': {
+                    'text': ''
+                }
+            }
+            try:
+                await self.send_request('SetInputSettings', request_content)
+                text_success = True
+            except Exception:
+                text_success = False
+
+            return bool(visibility_success and text_success)
+        except Exception as exc:
+            logger.exception(
+                "obs.overlay.now_playing.hide.error",
+                message="Failed to hide now playing overlay",
+                exc=exc,
+            )
+            return False
+
+    async def trigger_now_playing_overlay(self, message: str, display_duration: int = 10) -> None:
+        logger.debug(
+            "obs.overlay.now_playing.trigger",
+            message="Triggering now playing overlay",
+            data={
+                "duration": display_duration,
+            },
+        )
+
+        await self.show_now_playing_overlay(message)
+        await asyncio.sleep(display_duration)
+        await self.hide_now_playing_overlay()
+
     def trigger_motor_overlay_sync(self, message: str, overlay_type: str, display_duration: int = 3) -> None:
         """Trigger motor action overlay synchronously.
         
@@ -1301,6 +1366,9 @@ class OBSHandler:
             display_duration: How long to display the overlay in seconds
         """
         self.run_sync(self.trigger_motor_overlay(message, overlay_type, display_duration))
+
+    def trigger_now_playing_overlay_sync(self, message: str, display_duration: int = 10) -> None:
+        self.run_sync(self.trigger_now_playing_overlay(message, display_duration))
 
     async def initialize(self) -> bool:
         """Initialize the OBS handler and connect to WebSocket.
