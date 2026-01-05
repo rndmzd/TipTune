@@ -404,13 +404,17 @@ class WebUI:
         if not isinstance(uri, str) or uri.strip() == "":
             return web.json_response({"ok": False, "error": "Invalid uri"}, status=400)
 
-        index_raw = payload.get('index', 0)
-        try:
-            index = int(index_raw)
-        except Exception:
-            index = 0
+        if 'index' in payload:
+            index_raw = payload.get('index')
+            try:
+                index = int(index_raw)
+            except Exception:
+                return web.json_response({"ok": False, "error": "Invalid index"}, status=400)
 
-        ok = await self._service.insert_track_to_queue(uri, index=index)
+            ok = await self._service.insert_track_to_queue(uri, index=index)
+        else:
+            ok = await self._service.add_track_to_queue(uri)
+
         if not ok:
             return web.json_response({"ok": False, "error": "Failed to add track to queue"}, status=400)
         return web.json_response({"ok": True})
@@ -1870,6 +1874,28 @@ class SongRequestService:
             return f"spotify:track:{s}"
 
         return s
+
+    async def add_track_to_queue(self, uri: Any) -> bool:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return False
+        if not hasattr(self.actions, 'auto_dj'):
+            return False
+
+        track_uri = self._normalize_spotify_track_uri(uri)
+        if not track_uri:
+            return False
+
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, self.actions.auto_dj.add_song_to_queue, track_uri, True),
+                timeout=2,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
+        return bool(ok)
 
     async def insert_track_to_queue(self, uri: Any, index: int = 0) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):

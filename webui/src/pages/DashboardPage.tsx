@@ -20,6 +20,8 @@ export function DashboardPage() {
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
+  const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [activeDeviceName, setActiveDeviceName] = useState<string>('');
   const [activeDeviceWarning, setActiveDeviceWarning] = useState<string>('');
   const [selectedDeviceWarning, setSelectedDeviceWarning] = useState<string>('');
@@ -182,14 +184,14 @@ export function DashboardPage() {
     }
   }
 
-  async function addTrackToTop(item: QueueItem) {
+  async function addTrack(item: QueueItem) {
     if (opBusy) return;
     const uri = typeof item?.uri === 'string' && item.uri.trim() !== '' ? item.uri.trim() : '';
     if (!uri) return;
 
     setOpBusy(true);
     try {
-      await post('/api/queue/add', { uri, index: 0 });
+      await post('/api/queue/add', { uri });
     } finally {
       await refresh(true);
       setOpBusy(false);
@@ -455,7 +457,7 @@ export function DashboardPage() {
             >
               <div style={{ fontWeight: 650, marginBottom: 6 }}>Add Track</div>
               <div className="muted" style={{ marginBottom: 10 }}>
-                Search Spotify for a track, then add it to the top of the queue.
+                Search Spotify for a track, then add it to the end of the queue.
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -504,11 +506,11 @@ export function DashboardPage() {
                         <button
                           className="queueIconBtn"
                           type="button"
-                          title="Add to top of queue"
+                          title="Add to queue"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            addTrackToTop(item).catch(() => {});
+                            addTrack(item).catch(() => {});
                           }}
                           disabled={opBusy || !(typeof item?.uri === 'string' && item.uri.trim() !== '')}
                         >
@@ -564,23 +566,68 @@ export function DashboardPage() {
           <div className="queueOut">
             {queue.length ? (
               queue.map((item, i) => (
-                <QueueCard
+                <div
                   key={i}
-                  item={item as any}
-                  indexLabel={`#${i + 1}`}
-                  allowDelete={true}
-                  onDelete={() => remove(i)}
-                  rightActions={
-                    <>
-                      <button type="button" onClick={() => move(i, i - 1)} disabled={opBusy || i === 0}>
-                        Up
-                      </button>
-                      <button type="button" onClick={() => move(i, i + 1)} disabled={opBusy || i === queue.length - 1}>
-                        Down
-                      </button>
-                    </>
-                  }
-                />
+                  className="queueDragItem"
+                  draggable={!opBusy}
+                  onDragStart={(e) => {
+                    if (opBusy) return;
+                    setDragFromIndex(i);
+                    setDragOverIndex(i);
+                    e.dataTransfer.effectAllowed = 'move';
+                    try {
+                      e.dataTransfer.setData('text/plain', String(i));
+                    } catch {}
+                  }}
+                  onDragEnd={() => {
+                    setDragFromIndex(null);
+                    setDragOverIndex(null);
+                  }}
+                  onDragOver={(e) => {
+                    if (opBusy) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (dragOverIndex !== i) setDragOverIndex(i);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverIndex === i) setDragOverIndex(null);
+                  }}
+                  onDrop={(e) => {
+                    if (opBusy) return;
+                    e.preventDefault();
+                    const raw = (() => {
+                      try {
+                        return e.dataTransfer.getData('text/plain');
+                      } catch {
+                        return '';
+                      }
+                    })();
+                    const from = dragFromIndex != null ? dragFromIndex : Number.parseInt(raw, 10);
+                    setDragFromIndex(null);
+                    setDragOverIndex(null);
+                    if (!Number.isInteger(from)) return;
+                    move(from, i).catch(() => {});
+                  }}
+                >
+                  <QueueCard
+                    item={item as any}
+                    indexLabel={`#${i + 1}`}
+                    allowDelete={true}
+                    onDelete={() => remove(i)}
+                    showDragHandle={true}
+                    extraClass={[dragFromIndex === i ? 'queueCardDragging' : '', dragOverIndex === i ? 'queueCardDragOver' : ''].filter(Boolean).join(' ')}
+                    rightActions={
+                      <>
+                        <button type="button" onClick={() => move(i, i - 1)} disabled={opBusy || i === 0}>
+                          Up
+                        </button>
+                        <button type="button" onClick={() => move(i, i + 1)} disabled={opBusy || i === queue.length - 1}>
+                          Down
+                        </button>
+                      </>
+                    }
+                  />
+                </div>
               ))
             ) : (
               <div>(empty)</div>

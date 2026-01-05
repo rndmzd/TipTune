@@ -41,12 +41,19 @@ button:disabled:hover { background: #1b2a55; }
 .queueCardTitle { font-weight: 650; font-size: 13px; }
 .queueCardMeta { opacity: 0.85; font-size: 12px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .queueCardBody { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.queueDragHandle { display: inline-flex; align-items: center; justify-content: center; opacity: 0.7; }
+.queueCard:hover .queueDragHandle { opacity: 0.95; }
 .queueMessage { white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
 .queueTitleMain { font-weight: 650; font-size: 13px; }
 .queueTitleSub { opacity: 0.85; font-size: 12px; }
 .queueArt { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; border: 1px solid #2a3a66; }
 .queueIconBtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
 .queueIconBtn:hover { background: #132048; }
+
+.queueDragItem { cursor: grab; }
+.queueDragItem:active { cursor: grabbing; }
+.queueCardDragging { opacity: 0.55; }
+.queueCardDragOver { outline: 2px dashed rgba(138, 180, 255, 0.75); outline-offset: 2px; }
 
 details { margin-top: 8px; }
 summary { cursor: pointer; user-select: none; opacity: 0.9; }
