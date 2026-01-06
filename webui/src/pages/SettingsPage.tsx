@@ -678,10 +678,11 @@ export function SettingsPage() {
             Check for updates via GitHub releases.
           </div>
 
-          <label style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
+          <label style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}>
             <input
               type="checkbox"
               checked={autoCheckUpdatesEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
               onChange={(e) =>
                 setCfg((c) => ({
                   ...c,
@@ -689,7 +690,7 @@ export function SettingsPage() {
                 }))
               }
             />
-            Automatically check for updates
+            <span style={{ whiteSpace: 'nowrap' }}>Automatically check for updates</span>
           </label>
 
           {updateObj ? (

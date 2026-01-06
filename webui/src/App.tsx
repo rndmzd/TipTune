@@ -29,16 +29,25 @@ export function App() {
     if (!isTauriRuntime()) return;
 
     const run = async () => {
-      let cfg: Record<string, Record<string, string>> | null = null;
-
+      let backendReady = false;
       for (let i = 0; i < 10; i++) {
         try {
-          const resp = await apiJson<{ ok: true; config: Record<string, Record<string, string>> }>('/api/config');
-          cfg = resp?.config || {};
+          await apiJson('/api/setup/status');
+          backendReady = true;
           break;
         } catch {
           await new Promise((r) => window.setTimeout(r, 1000));
         }
+      }
+
+      if (!backendReady) return;
+
+      let cfg: Record<string, Record<string, string>> | null = null;
+      try {
+        const resp = await apiJson<{ ok: true; config: Record<string, Record<string, string>> }>('/api/config');
+        cfg = resp?.config || {};
+      } catch {
+        return;
       }
 
       if (!cfg) return;
