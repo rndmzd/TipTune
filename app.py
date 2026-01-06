@@ -2299,7 +2299,7 @@ class SongRequestService:
             "OpenAI": {"api_key", "model"},
             "Spotify": {"client_id", "client_secret", "redirect_url", "playback_device_id"},
             "Search": {"google_api_key", "google_cx"},
-            "General": {"song_cost", "skip_song_cost", "request_overlay_duration", "setup_complete"},
+            "General": {"song_cost", "skip_song_cost", "request_overlay_duration", "setup_complete", "auto_check_updates"},
             "OBS": {"enabled", "host", "port", "password"},
             "Web": {"host", "port"},
         }

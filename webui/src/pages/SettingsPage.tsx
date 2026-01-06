@@ -188,6 +188,12 @@ export function SettingsPage() {
 
   const v = (section: string, key: string) => ((cfg[section] || {})[key] || '').toString();
 
+  const autoCheckUpdatesEnabled = (() => {
+    const raw = v('General', 'auto_check_updates');
+    const s = (raw || 'true').trim().toLowerCase();
+    return !(s === 'false' || s === '0' || s === 'no');
+  })();
+
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
@@ -672,6 +678,21 @@ export function SettingsPage() {
             Check for updates via GitHub releases.
           </div>
 
+          <label style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}>
+            <input
+              type="checkbox"
+              checked={autoCheckUpdatesEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), auto_check_updates: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span style={{ whiteSpace: 'nowrap' }}>Automatically check for updates</span>
+          </label>
+
           {updateObj ? (
             <div className="muted" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>
               Update available.
@@ -714,6 +735,29 @@ export function SettingsPage() {
                   }
 
                   setUpdateObj(update);
+                  const versionLine = typeof update?.version === 'string' && update.version ? `\nVersion: ${update.version}` : '';
+                  const dateLine = typeof update?.date === 'string' && update.date ? `\nDate: ${update.date}` : '';
+
+                  if (confirm(`Update available.${versionLine}${dateLine}\n\nDownload + install now?`)) {
+                    setUpdateMsg('Downloading update...');
+                    if (typeof update.downloadAndInstall === 'function') {
+                      await update.downloadAndInstall();
+                      setUpdateMsg('Update installed. Restarting...');
+                      return;
+                    }
+
+                    if (typeof update.download === 'function') {
+                      await update.download();
+                    }
+                    if (typeof update.install === 'function') {
+                      await update.install();
+                      setUpdateMsg('Update installed. Restarting...');
+                      return;
+                    }
+
+                    throw new Error('Updater install API not available.');
+                  }
+
                   setUpdateMsg('Update found.');
                 } catch (e: any) {
                   setUpdateObj(null);
@@ -793,6 +837,7 @@ export function SettingsPage() {
                   song_cost: v('General', 'song_cost'),
                   skip_song_cost: v('General', 'skip_song_cost'),
                   request_overlay_duration: v('General', 'request_overlay_duration'),
+                  auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
                 },
                 OBS: {
                   enabled: v('OBS', 'enabled'),
