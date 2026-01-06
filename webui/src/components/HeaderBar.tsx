@@ -48,14 +48,14 @@ export function HeaderBar(props: {
           <Link className={`navBtn${isActivePath('/') ? ' navBtnActive' : ''}`} to="/?dashboard=1">
             Dashboard
           </Link>
-          <Link className={`navBtn${isActivePath('/settings') ? ' navBtnActive' : ''}`} to="/settings?dashboard=1">
-            Settings
+          <Link className={`navBtn${isActivePath('/history') ? ' navBtnActive' : ''}`} to="/history">
+            History
           </Link>
           <Link className={`navBtn${isActivePath('/events') ? ' navBtnActive' : ''}`} to="/events">
             Events
           </Link>
-          <Link className={`navBtn${isActivePath('/history') ? ' navBtnActive' : ''}`} to="/history">
-            History
+          <Link className={`navBtn${isActivePath('/settings') ? ' navBtnActive' : ''}`} to="/settings?dashboard=1">
+            Settings
           </Link>
           <Link className={`navBtn${isActivePath('/setup') ? ' navBtnActive' : ''}`} to="/setup?rerun=1">
             Setup Wizard
