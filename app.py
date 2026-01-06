@@ -1054,6 +1054,13 @@ class SongRequestService:
         self._tasks.clear()
 
         try:
+            if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self.actions.auto_dj.persist_queue_state)
+        except Exception:
+            pass
+
+        try:
             await self._stop_spotify_auth_server()
         except Exception:
             pass
@@ -1069,7 +1076,7 @@ class SongRequestService:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self.actions.auto_dj.check_queue_status, True)
             if getattr(self.actions.auto_dj, 'queued_tracks', []):
-                await loop.run_in_executor(None, self.actions.auto_dj.clear_playback_context, True)
+                await loop.run_in_executor(None, self.actions.auto_dj.clear_playback_context, False)
         except Exception:
             pass
 

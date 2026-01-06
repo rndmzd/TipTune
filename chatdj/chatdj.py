@@ -2,6 +2,7 @@ import json
 import re
 import time
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import openai
@@ -12,6 +13,7 @@ from rapidfuzz import fuzz, process
 from spotipy import Spotify, SpotifyException
 
 from utils.structured_logging import get_structured_logger
+from utils.runtime_paths import ensure_dir, get_cache_dir
 
 logger = get_structured_logger('tiptune.chatdj.chatdj')
 
@@ -400,8 +402,100 @@ class AutoDJ:
 
         self.queued_tracks = []
         self.now_playing_track_uri = None
-        self.clear_playback_context()
+        self.clear_playback_context(persist=False)
+        try:
+            self._restore_persisted_queue_state()
+        except Exception:
+            pass
         self._print_variables()
+
+    def persist_queue_state(self) -> None:
+        self._persist_queue_state()
+
+    def _queue_persist_path(self) -> Path:
+        base = get_cache_dir('TipTune')
+        ensure_dir(base)
+        return base / 'queue_state.json'
+
+    def _queue_state_snapshot(self) -> Dict[str, Any]:
+        try:
+            paused = self.queue_paused()
+        except Exception:
+            paused = False
+
+        with self._queue_lock:
+            queued_tracks = list(self.queued_tracks)
+
+        now_playing = getattr(self, 'now_playing_track_uri', None)
+        if not isinstance(now_playing, str) or now_playing.strip() == '':
+            now_playing = None
+
+        return {
+            'v': 1,
+            'ts': time.time(),
+            'paused': bool(paused),
+            'now_playing_track_uri': now_playing,
+            'queued_tracks': queued_tracks,
+        }
+
+    def _persist_queue_state(self) -> None:
+        try:
+            path = self._queue_persist_path()
+            payload = self._queue_state_snapshot()
+            tmp = path.with_suffix(path.suffix + '.tmp')
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+            tmp.replace(path)
+        except Exception as exc:
+            logger.exception("queue.persist.error", message="Failed to persist queue state", exc=exc)
+
+    def _restore_persisted_queue_state(self) -> None:
+        path = self._queue_persist_path()
+        if not path.exists():
+            return
+
+        try:
+            raw = path.read_text(encoding='utf-8', errors='replace')
+            payload = json.loads(raw)
+        except Exception:
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        queued_raw = payload.get('queued_tracks', [])
+        if not isinstance(queued_raw, list):
+            queued_raw = []
+
+        queued_tracks: list[str] = []
+        for item in queued_raw:
+            if isinstance(item, str) and item.strip() != '':
+                queued_tracks.append(item)
+
+        paused = bool(payload.get('paused', False))
+        now_playing = payload.get('now_playing_track_uri', None)
+        if not isinstance(now_playing, str) or now_playing.strip() == '':
+            now_playing = None
+
+        with self._queue_lock:
+            self.queued_tracks = list(queued_tracks)
+
+        self.now_playing_track_uri = now_playing
+        if paused:
+            try:
+                self._queue_unpaused.clear()
+            except Exception:
+                pass
+        else:
+            try:
+                self._queue_unpaused.set()
+            except Exception:
+                pass
+
+        if queued_tracks:
+            try:
+                self.playing_first_track = True
+            except Exception:
+                pass
 
     def get_queued_tracks_snapshot(self) -> List[Any]:
         try:
@@ -428,6 +522,7 @@ class AutoDJ:
                     return True
                 item = self.queued_tracks.pop(fi)
                 self.queued_tracks.insert(ti, item)
+            self._persist_queue_state()
             self._print_variables(True)
             return True
         except Exception as exc:
@@ -446,6 +541,7 @@ class AutoDJ:
                 if idx < 0 or idx >= n:
                     return False
                 _ = self.queued_tracks.pop(idx)
+            self._persist_queue_state()
             self._print_variables(True)
             return True
         except Exception as exc:
@@ -851,6 +947,7 @@ class AutoDJ:
     def pause_queue(self, silent: bool = False) -> bool:
         try:
             self._queue_unpaused.clear()
+            self._persist_queue_state()
             if not silent:
                 logger.info(
                     "queue.pause",
@@ -865,6 +962,7 @@ class AutoDJ:
     def unpause_queue(self, silent: bool = False) -> bool:
         try:
             self._queue_unpaused.set()
+            self._persist_queue_state()
             if not silent:
                 logger.info(
                     "queue.unpause",
@@ -887,6 +985,8 @@ class AutoDJ:
             with self._queue_lock:
                 self.queued_tracks.append(track_uri)
                 qlen = len(self.queued_tracks)
+
+            self._persist_queue_state()
 
             if not self.playback_active() and qlen == 1:
                 self.playing_first_track = True
@@ -922,6 +1022,8 @@ class AutoDJ:
                     idx = n
                 self.queued_tracks.insert(idx, track_uri)
                 qlen = len(self.queued_tracks)
+
+            self._persist_queue_state()
 
             if not self.playback_active() and qlen == 1:
                 self.playing_first_track = True
@@ -1005,6 +1107,7 @@ class AutoDJ:
                             return False
                         popped_track = self.queued_tracks.pop(0)
                         self.now_playing_track_uri = popped_track
+                    self._persist_queue_state()
                     logger.debug("queue.check.popped",
                                 message=f"Popped track: {popped_track}")
                     self.spotify.start_playback(device_id=self.playback_device, uris=[popped_track])
@@ -1044,6 +1147,7 @@ class AutoDJ:
                             self.now_playing_track_uri = popped_track
                         else:
                             popped_track = None
+                    self._persist_queue_state()
                     logger.debug("queue.check.popped",
                                 message=f"Popped track: {popped_track}")
             self._print_variables(True)
@@ -1060,7 +1164,7 @@ class AutoDJ:
             return False
 
 
-    def clear_playback_context(self) -> bool:
+    def clear_playback_context(self, persist: bool = True) -> bool:
         try:
             logger.info("Clearing playback context.")
             if self.playback_active():
@@ -1110,6 +1214,8 @@ class AutoDJ:
 
             with self._queue_lock:
                 self.queued_tracks.clear()
+            if persist:
+                self._persist_queue_state()
             self._print_variables(True)
             return True
 
