@@ -391,6 +391,7 @@ class AutoDJ:
 
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
+        self._last_start_playback_ts = 0.0
 
         self._queue_unpaused = threading.Event()
         self._queue_unpaused.set()
@@ -961,6 +962,42 @@ class AutoDJ:
                     self._print_variables(False)
                     return False
                 if qlen > 0:
+                    if self.now_playing_track_uri and not paused:
+                        try:
+                            pb = self.spotify.current_playback()
+                            item = pb.get('item') if isinstance(pb, dict) else None
+                            item_uri = item.get('uri') if isinstance(item, dict) else None
+                            progress_ms = pb.get('progress_ms') if isinstance(pb, dict) else None
+                        except Exception:
+                            pb = None
+                            item_uri = None
+                            progress_ms = None
+
+                        if item_uri == self.now_playing_track_uri and isinstance(progress_ms, (int, float)) and progress_ms < 15000:
+                            if not silent:
+                                logger.debug(
+                                    "queue.check.transient_inactive",
+                                    message="Playback reported inactive, but current track appears to be starting; not advancing queue.",
+                                    data={"progress_ms": progress_ms, "track_uri": item_uri, "queued_tracks": qlen},
+                                )
+                            self._print_variables(False)
+                            return False
+
+                    try:
+                        since = time.time() - float(getattr(self, '_last_start_playback_ts', 0.0) or 0.0)
+                    except Exception:
+                        since = 9999.0
+
+                    if self.now_playing_track_uri and since < 12.0:
+                        if not silent:
+                            logger.debug(
+                                "queue.check.cooldown",
+                                message="Playback recently started; waiting before starting next track.",
+                                data={"seconds_since_start": since, "queued_tracks": qlen},
+                            )
+                        self._print_variables(False)
+                        return False
+
                     logger.info("queue.check.start",
                                 message="Queue populated but playback is not active. Starting playback.")
                     with self._queue_lock:
@@ -971,6 +1008,10 @@ class AutoDJ:
                     logger.debug("queue.check.popped",
                                 message=f"Popped track: {popped_track}")
                     self.spotify.start_playback(device_id=self.playback_device, uris=[popped_track])
+                    try:
+                        self._last_start_playback_ts = time.time()
+                    except Exception:
+                        self._last_start_playback_ts = 0.0
                     logger.debug("queue.check.playing_first_track",
                                 message="Clearing playing_first_track flag.")
                     self.playing_first_track = False

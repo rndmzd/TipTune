@@ -18,7 +18,7 @@ from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
 from utils.runtime_paths import ensure_parent_dir, get_config_path, get_resource_path, get_spotipy_cache_path
-from utils.structured_logging import get_structured_logger
+from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -33,6 +33,36 @@ config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+
+
+def _setup_logging() -> None:
+    root = logging.getLogger()
+    if root.handlers:
+        return
+
+    level_name = str(os.getenv('TIPTUNE_LOG_LEVEL', 'INFO') or 'INFO').strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root.setLevel(level)
+
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(level)
+    sh.setFormatter(StructuredLogFormatter())
+    root.addHandler(sh)
+
+    log_path = os.getenv('TIPTUNE_LOG_PATH')
+    if isinstance(log_path, str) and log_path.strip():
+        try:
+            p = Path(log_path.strip())
+            ensure_parent_dir(p)
+            fh = logging.FileHandler(p, encoding='utf-8')
+            fh.setLevel(level)
+            fh.setFormatter(StructuredLogFormatter())
+            root.addHandler(fh)
+        except Exception:
+            pass
+
+
+_setup_logging()
 
 
 async def _watch_parent_process() -> None:

@@ -77,6 +77,7 @@ export function QueueCard(props: {
   extraClass?: string;
   rightActions?: React.ReactNode;
   showDragHandle?: boolean;
+  onDragHandlePointerDown?: (e: React.PointerEvent<HTMLSpanElement>) => void;
 }) {
   const isObj = props.item && typeof props.item === 'object';
   const obj = isObj ? (props.item as QueueItem) : null;
@@ -102,7 +103,13 @@ export function QueueCard(props: {
       <div className="queueCardHeader">
         <div className="queueCardHeaderLeft">
           {props.showDragHandle ? (
-            <span className="queueDragHandle" title="Drag to reorder">
+            <span
+              className="queueDragHandle"
+              title="Drag to reorder"
+              onPointerDown={(e) => {
+                props.onDragHandlePointerDown?.(e);
+              }}
+            >
               <GripIcon size={16} />
             </span>
           ) : null}
