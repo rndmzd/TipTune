@@ -179,6 +179,11 @@ export function HistoryPage() {
     setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
     setErr('');
     try {
+      const ok = window.confirm('Clear history? This will remove all saved history items.');
+      if (!ok) {
+        setStatus('ok');
+        return;
+      }
       await apiJson<{ ok: true }>(`/api/history/clear`, { method: 'POST' });
       await refresh();
     } catch (e: any) {
