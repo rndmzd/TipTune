@@ -22,6 +22,53 @@ function toDurationLabel(ms: unknown): string | null {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
+function TrashIcon(props: { size?: number }) {
+  const size = typeof props.size === 'number' && Number.isFinite(props.size) && props.size > 0 ? props.size : 16;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}
+
+function GripIcon(props: { size?: number }) {
+  const size = typeof props.size === 'number' && Number.isFinite(props.size) && props.size > 0 ? props.size : 16;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="9" cy="5" r="1.5" />
+      <circle cx="15" cy="5" r="1.5" />
+      <circle cx="9" cy="12" r="1.5" />
+      <circle cx="15" cy="12" r="1.5" />
+      <circle cx="9" cy="19" r="1.5" />
+      <circle cx="15" cy="19" r="1.5" />
+    </svg>
+  );
+}
+
 export function QueueCard(props: {
   item: QueueItem | string;
   indexLabel: string;
@@ -29,6 +76,8 @@ export function QueueCard(props: {
   onDelete?: () => void;
   extraClass?: string;
   rightActions?: React.ReactNode;
+  showDragHandle?: boolean;
+  onDragHandlePointerDown?: (e: React.PointerEvent<HTMLSpanElement>) => void;
 }) {
   const isObj = props.item && typeof props.item === 'object';
   const obj = isObj ? (props.item as QueueItem) : null;
@@ -53,6 +102,17 @@ export function QueueCard(props: {
     <div className={props.extraClass ? `queueCard ${props.extraClass}` : 'queueCard'}>
       <div className="queueCardHeader">
         <div className="queueCardHeaderLeft">
+          {props.showDragHandle ? (
+            <span
+              className="queueDragHandle"
+              title="Drag to reorder"
+              onPointerDown={(e) => {
+                props.onDragHandlePointerDown?.(e);
+              }}
+            >
+              <GripIcon size={16} />
+            </span>
+          ) : null}
           <div className="queueCardTitle">{props.indexLabel}</div>
         </div>
         <div className="queueCardMeta">
@@ -67,7 +127,7 @@ export function QueueCard(props: {
                 props.onDelete?.();
               }}
             >
-              ×
+              <TrashIcon size={16} />
             </button>
           ) : null}
 

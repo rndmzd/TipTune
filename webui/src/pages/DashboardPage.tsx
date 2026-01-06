@@ -20,6 +20,14 @@ export function DashboardPage() {
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
+  const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const dragFromIndexRef = useRef<number | null>(null);
+  const dragOverIndexRef = useRef<number | null>(null);
+  const dragPointerActiveRef = useRef<boolean>(false);
+  const queueOutRef = useRef<HTMLDivElement | null>(null);
+  const dragLastClientYRef = useRef<number | null>(null);
+  const dragAutoScrollRafRef = useRef<number | null>(null);
   const [activeDeviceName, setActiveDeviceName] = useState<string>('');
   const [activeDeviceWarning, setActiveDeviceWarning] = useState<string>('');
   const [selectedDeviceWarning, setSelectedDeviceWarning] = useState<string>('');
@@ -70,6 +78,96 @@ export function DashboardPage() {
       setObsNowPlayingBusy(false);
     }
   }
+
+  useEffect(() => {
+    dragOverIndexRef.current = dragOverIndex;
+  }, [dragOverIndex]);
+
+  useEffect(() => {
+    function onPointerMove(ev: PointerEvent) {
+      if (!dragPointerActiveRef.current) return;
+      if (opBusy) return;
+
+      dragLastClientYRef.current = ev.clientY;
+
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as any;
+      const target = el?.closest ? el.closest('[data-queue-index]') : null;
+      const idxRaw = target ? (target as HTMLElement).getAttribute('data-queue-index') : null;
+      const idx = idxRaw != null ? Number.parseInt(String(idxRaw), 10) : null;
+      const next = Number.isInteger(idx) ? (idx as number) : null;
+
+      setDragOverIndex((prev) => (prev === next ? prev : next));
+
+      if (dragAutoScrollRafRef.current == null) {
+        const step = () => {
+          if (!dragPointerActiveRef.current) {
+            dragAutoScrollRafRef.current = null;
+            return;
+          }
+          const scroller = queueOutRef.current;
+          const y = dragLastClientYRef.current;
+          if (scroller && typeof y === 'number') {
+            const rect = scroller.getBoundingClientRect();
+            const threshold = 48;
+            const maxSpeed = 14;
+
+            const distTop = y - rect.top;
+            const distBottom = rect.bottom - y;
+
+            let speed = 0;
+            if (distTop >= 0 && distTop < threshold) {
+              const t = Math.max(0, Math.min(1, (threshold - distTop) / threshold));
+              speed = -Math.round(1 + t * maxSpeed);
+            } else if (distBottom >= 0 && distBottom < threshold) {
+              const t = Math.max(0, Math.min(1, (threshold - distBottom) / threshold));
+              speed = Math.round(1 + t * maxSpeed);
+            }
+
+            if (speed !== 0) {
+              scroller.scrollTop += speed;
+            }
+          }
+
+          dragAutoScrollRafRef.current = window.requestAnimationFrame(step);
+        };
+
+        dragAutoScrollRafRef.current = window.requestAnimationFrame(step);
+      }
+    }
+
+    function onPointerUp() {
+      if (!dragPointerActiveRef.current) return;
+      dragPointerActiveRef.current = false;
+
+      const from = dragFromIndexRef.current;
+      const to = dragOverIndexRef.current;
+
+      dragFromIndexRef.current = null;
+      dragOverIndexRef.current = null;
+      dragLastClientYRef.current = null;
+      setDragFromIndex(null);
+      setDragOverIndex(null);
+
+      if (dragAutoScrollRafRef.current != null) {
+        window.cancelAnimationFrame(dragAutoScrollRafRef.current);
+        dragAutoScrollRafRef.current = null;
+      }
+
+      if (opBusy) return;
+      if (!Number.isInteger(from)) return;
+      if (!Number.isInteger(to)) return;
+      move(from as number, to as number).catch(() => {});
+    }
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+  }, [opBusy, queue.length]);
 
   useEffect(() => {
     selectedDeviceIdRef.current = String(queueState?.playback_device_id || '');
@@ -182,14 +280,14 @@ export function DashboardPage() {
     }
   }
 
-  async function addTrackToTop(item: QueueItem) {
+  async function addTrack(item: QueueItem) {
     if (opBusy) return;
     const uri = typeof item?.uri === 'string' && item.uri.trim() !== '' ? item.uri.trim() : '';
     if (!uri) return;
 
     setOpBusy(true);
     try {
-      await post('/api/queue/add', { uri, index: 0 });
+      await post('/api/queue/add', { uri });
     } finally {
       await refresh(true);
       setOpBusy(false);
@@ -405,7 +503,7 @@ export function DashboardPage() {
                 await post('/api/queue/pause');
                 await refresh(true);
               }}
-              disabled={opBusy}
+              disabled={opBusy || paused}
             >
               Pause
             </button>
@@ -415,7 +513,7 @@ export function DashboardPage() {
                 await post('/api/queue/resume');
                 await refresh(true);
               }}
-              disabled={opBusy}
+              disabled={opBusy || !paused}
             >
               Resume
             </button>
@@ -455,7 +553,7 @@ export function DashboardPage() {
             >
               <div style={{ fontWeight: 650, marginBottom: 6 }}>Add Track</div>
               <div className="muted" style={{ marginBottom: 10 }}>
-                Search Spotify for a track, then add it to the top of the queue.
+                Search Spotify for a track, then add it to the end of the queue.
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -502,13 +600,13 @@ export function DashboardPage() {
                       allowDelete={false}
                       rightActions={
                         <button
-                          className="queueIconBtn"
+                          className="queueIconBtn queueIconBtnLarge"
                           type="button"
-                          title="Add to top of queue"
+                          title="Add to queue"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            addTrackToTop(item).catch(() => {});
+                            addTrack(item).catch(() => {});
                           }}
                           disabled={opBusy || !(typeof item?.uri === 'string' && item.uri.trim() !== '')}
                         >
@@ -561,26 +659,46 @@ export function DashboardPage() {
           </div>
 
           <label>Up next</label>
-          <div className="queueOut">
+          <div className="queueOut" ref={queueOutRef}>
             {queue.length ? (
               queue.map((item, i) => (
-                <QueueCard
+                <div
                   key={i}
-                  item={item as any}
-                  indexLabel={`#${i + 1}`}
-                  allowDelete={true}
-                  onDelete={() => remove(i)}
-                  rightActions={
-                    <>
-                      <button type="button" onClick={() => move(i, i - 1)} disabled={opBusy || i === 0}>
-                        Up
-                      </button>
-                      <button type="button" onClick={() => move(i, i + 1)} disabled={opBusy || i === queue.length - 1}>
-                        Down
-                      </button>
-                    </>
-                  }
-                />
+                  className="queueDragItem"
+                  data-queue-index={i}
+                >
+                  <QueueCard
+                    item={item as any}
+                    indexLabel={`#${i + 1}`}
+                    allowDelete={true}
+                    onDelete={() => remove(i)}
+                    showDragHandle={true}
+                    onDragHandlePointerDown={(e) => {
+                      if (opBusy) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      dragPointerActiveRef.current = true;
+                      dragFromIndexRef.current = i;
+                      dragOverIndexRef.current = i;
+                      setDragFromIndex(i);
+                      setDragOverIndex(i);
+                      try {
+                        (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+                      } catch {}
+                    }}
+                    extraClass={[dragFromIndex === i ? 'queueCardDragging' : '', dragOverIndex === i ? 'queueCardDragOver' : ''].filter(Boolean).join(' ')}
+                    rightActions={
+                      <>
+                        <button type="button" onClick={() => move(i, i - 1)} disabled={opBusy || i === 0}>
+                          Up
+                        </button>
+                        <button type="button" onClick={() => move(i, i + 1)} disabled={opBusy || i === queue.length - 1}>
+                          Down
+                        </button>
+                      </>
+                    }
+                  />
+                </div>
               ))
             ) : (
               <div>(empty)</div>

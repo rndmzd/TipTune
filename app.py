@@ -18,7 +18,7 @@ from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
 from utils.runtime_paths import ensure_parent_dir, get_config_path, get_resource_path, get_spotipy_cache_path
-from utils.structured_logging import get_structured_logger
+from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -33,6 +33,36 @@ config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+
+
+def _setup_logging() -> None:
+    root = logging.getLogger()
+    if root.handlers:
+        return
+
+    level_name = str(os.getenv('TIPTUNE_LOG_LEVEL', 'INFO') or 'INFO').strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root.setLevel(level)
+
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(level)
+    sh.setFormatter(StructuredLogFormatter())
+    root.addHandler(sh)
+
+    log_path = os.getenv('TIPTUNE_LOG_PATH')
+    if isinstance(log_path, str) and log_path.strip():
+        try:
+            p = Path(log_path.strip())
+            ensure_parent_dir(p)
+            fh = logging.FileHandler(p, encoding='utf-8')
+            fh.setLevel(level)
+            fh.setFormatter(StructuredLogFormatter())
+            root.addHandler(fh)
+        except Exception:
+            pass
+
+
+_setup_logging()
 
 
 async def _watch_parent_process() -> None:
@@ -404,13 +434,17 @@ class WebUI:
         if not isinstance(uri, str) or uri.strip() == "":
             return web.json_response({"ok": False, "error": "Invalid uri"}, status=400)
 
-        index_raw = payload.get('index', 0)
-        try:
-            index = int(index_raw)
-        except Exception:
-            index = 0
+        if 'index' in payload:
+            index_raw = payload.get('index')
+            try:
+                index = int(index_raw)
+            except Exception:
+                return web.json_response({"ok": False, "error": "Invalid index"}, status=400)
 
-        ok = await self._service.insert_track_to_queue(uri, index=index)
+            ok = await self._service.insert_track_to_queue(uri, index=index)
+        else:
+            ok = await self._service.add_track_to_queue(uri)
+
         if not ok:
             return web.json_response({"ok": False, "error": "Failed to add track to queue"}, status=400)
         return web.json_response({"ok": True})
@@ -1870,6 +1904,28 @@ class SongRequestService:
             return f"spotify:track:{s}"
 
         return s
+
+    async def add_track_to_queue(self, uri: Any) -> bool:
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            return False
+        if not hasattr(self.actions, 'auto_dj'):
+            return False
+
+        track_uri = self._normalize_spotify_track_uri(uri)
+        if not track_uri:
+            return False
+
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, self.actions.auto_dj.add_song_to_queue, track_uri, True),
+                timeout=2,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
+        return bool(ok)
 
     async def insert_track_to_queue(self, uri: Any, index: int = 0) -> bool:
         if not getattr(self.actions, 'chatdj_enabled', False):
