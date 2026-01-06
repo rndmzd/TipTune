@@ -310,6 +310,7 @@ class WebUI:
             web.get('/settings', self._page_app),
             web.get('/setup', self._page_app),
             web.get('/events', self._page_app),
+            web.get('/history', self._page_app),
             web.get('/api/queue', self._api_queue),
             web.post('/api/queue/add', self._api_queue_add),
             web.post('/api/queue/pause', self._api_pause),
@@ -331,6 +332,7 @@ class WebUI:
             web.post('/api/config', self._api_update_config),
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
+            web.get('/api/history/recent', self._api_history_recent),
         ])
 
         # SPA fallback for client-side routes
@@ -564,6 +566,14 @@ class WebUI:
             return web.json_response({"ok": False, "error": error or "update failed"}, status=400)
         return web.json_response({"ok": True})
 
+    async def _api_history_recent(self, request: web.Request) -> web.Response:
+        limit_raw = request.query.get('limit', '50')
+        try:
+            limit = max(1, min(500, int(limit_raw)))
+        except Exception:
+            limit = 50
+        return web.json_response({"ok": True, "history": self._service.get_recent_request_history(limit=limit)})
+
     async def _api_obs_status(self, _request: web.Request) -> web.Response:
         try:
             data = await self._service.get_obs_status()
@@ -733,6 +743,9 @@ class SongRequestService:
         self._events_recent: list[dict] = []
         self._events_recent_max = 500
         self._events_subscribers: set[asyncio.Queue] = set()
+
+        self._request_history_recent: list[dict] = []
+        self._request_history_recent_max = 500
 
         self._track_cache: Dict[str, Dict[str, Any]] = {}
         self._track_cache_ttl_seconds = 6 * 60 * 60
@@ -1511,6 +1524,14 @@ class SongRequestService:
             request_count = max(1, self.checks.get_request_count(tip_amount))
 
             if tip_message == "":
+                self.publish_request_history_item({
+                    "ts": time.time(),
+                    "username": username,
+                    "tip_amount": tip_amount,
+                    "tip_message": tip_message,
+                    "status": "failed",
+                    "error": "blank tip message",
+                })
                 await self.actions.trigger_warning_overlay(
                     username,
                     "Couldn't identify a song in your tip, because the tip note was blank. It may have been removed due to blocked words.",
@@ -1534,6 +1555,19 @@ class SongRequestService:
                     song_uri = await self.actions.find_song_spotify(song_info)
 
                 if not song_uri:
+                    self.publish_request_history_item({
+                        "ts": time.time(),
+                        "username": username,
+                        "tip_amount": tip_amount,
+                        "tip_message": tip_message,
+                        "request_count": request_count,
+                        "song": getattr(song_info, 'song', None),
+                        "artist": getattr(song_info, 'artist', None),
+                        "spotify_uri": getattr(song_info, 'spotify_uri', None),
+                        "resolved_uri": None,
+                        "status": "failed",
+                        "error": "spotify track not found",
+                    })
                     await self.actions.trigger_warning_overlay(
                         username,
                         "Couldn't find song on Spotify. Did you include artist and song name?",
@@ -1542,6 +1576,19 @@ class SongRequestService:
                     continue
 
                 if not await self.actions.available_in_market(song_uri):
+                    self.publish_request_history_item({
+                        "ts": time.time(),
+                        "username": username,
+                        "tip_amount": tip_amount,
+                        "tip_message": tip_message,
+                        "request_count": request_count,
+                        "song": getattr(song_info, 'song', None),
+                        "artist": getattr(song_info, 'artist', None),
+                        "spotify_uri": getattr(song_info, 'spotify_uri', None),
+                        "resolved_uri": song_uri,
+                        "status": "failed",
+                        "error": "not available in market",
+                    })
                     await self.actions.trigger_warning_overlay(
                         username,
                         "Requested song not available in US market.",
@@ -1551,6 +1598,20 @@ class SongRequestService:
 
                 song_details = f"{song_info.artist} - {song_info.song}".strip()
                 await self.actions.add_song_to_queue(song_uri, username, song_details)
+
+                self.publish_request_history_item({
+                    "ts": time.time(),
+                    "username": username,
+                    "tip_amount": tip_amount,
+                    "tip_message": tip_message,
+                    "request_count": request_count,
+                    "song": getattr(song_info, 'song', None),
+                    "artist": getattr(song_info, 'artist', None),
+                    "spotify_uri": getattr(song_info, 'spotify_uri', None),
+                    "resolved_uri": song_uri,
+                    "song_details": song_details,
+                    "status": "added",
+                })
 
         except Exception as exc:
             logger.exception("event.tip.error", exc=exc, message="Error processing tip event")
@@ -1582,6 +1643,13 @@ class SongRequestService:
             except Exception:
                 pass
 
+    def publish_request_history_item(self, item: Dict[str, Any]) -> None:
+        if not isinstance(item, dict):
+            return
+        self._request_history_recent.append(item)
+        if len(self._request_history_recent) > self._request_history_recent_max:
+            self._request_history_recent = self._request_history_recent[-self._request_history_recent_max:]
+
     def register_events_subscriber(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._events_subscribers.add(q)
@@ -1597,6 +1665,11 @@ class SongRequestService:
         if limit <= 0:
             return []
         return self._events_recent[-limit:]
+
+    def get_recent_request_history(self, limit: int = 50) -> list[dict]:
+        if limit <= 0:
+            return []
+        return self._request_history_recent[-limit:]
 
     async def get_queue_state(self) -> Dict[str, Any]:
         if not getattr(self.actions, 'chatdj_enabled', False):
