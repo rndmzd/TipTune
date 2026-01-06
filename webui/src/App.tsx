@@ -4,6 +4,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SetupPage } from './pages/SetupPage';
 import { EventsPage } from './pages/EventsPage';
+import { HistoryPage } from './pages/HistoryPage';
 
 export function App() {
   return (
@@ -12,6 +13,7 @@ export function App() {
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/events" element={<EventsPage />} />
+      <Route path="/history" element={<HistoryPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
