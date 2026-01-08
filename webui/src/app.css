@@ -82,3 +82,23 @@ summary { cursor: pointer; user-select: none; opacity: 0.9; }
 .page-events .pill.pillSuccess { border-color: rgba(25, 135, 84, 0.55); background: rgba(25, 135, 84, 0.14); }
 .page-events .pill.pillWarn { border-color: rgba(255, 193, 7, 0.55); background: rgba(255, 193, 7, 0.14); }
 .page-events .pill.pillError { border-color: rgba(220, 53, 69, 0.65); background: rgba(220, 53, 69, 0.16); }
+
+.markdown { line-height: 1.55; font-size: 14px; }
+.markdown h1 { font-size: 22px; margin: 0 0 14px 0; }
+.markdown h2 { font-size: 16px; margin: 18px 0 10px 0; }
+.markdown h3 { font-size: 14px; margin: 16px 0 8px 0; }
+.markdown p { margin: 10px 0; }
+.markdown ul, .markdown ol { margin: 10px 0 10px 22px; }
+.markdown li { margin: 4px 0; }
+.markdown hr { border: 0; border-top: 1px solid #2a3a66; margin: 14px 0; }
+.markdown code { background: #0b1020; border: 1px solid #2a3a66; padding: 1px 6px; border-radius: 6px; font-size: 0.95em; }
+.markdown pre { white-space: pre-wrap; word-break: break-word; background: #0b1020; border: 1px solid #2a3a66; padding: 10px; border-radius: 8px; overflow: auto; }
+.markdown pre code { background: transparent; border: 0; padding: 0; }
+.markdown blockquote { margin: 10px 0; padding: 0 12px; border-left: 3px solid rgba(138, 180, 255, 0.45); opacity: 0.95; }
+.markdown table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+.markdown th, .markdown td { border: 1px solid #2a3a66; padding: 6px 8px; text-align: left; vertical-align: top; }
+.markdown thead th { background: rgba(35, 54, 111, 0.35); }
+
+.helpOut { max-height: 70vh; overflow: auto; padding-bottom: 64px; }
+.helpBackTop { position: fixed; right: 18px; bottom: 18px; z-index: 50; }
+.helpBackTopHidden { opacity: 0; pointer-events: none; }
