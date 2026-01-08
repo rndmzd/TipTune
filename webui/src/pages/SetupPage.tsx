@@ -72,6 +72,24 @@ function formatObsErrors(errs: Record<string, string> | undefined): string {
   return entries.map(([k, v]) => `${k}: ${v}`).join('\n');
 }
 
+function humanizeKey(raw: string) {
+  const cleaned = (raw || '')
+    .replace(/[_\-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+
+  const words = cleaned.split(/\s+/g).filter(Boolean);
+  const upper = new Set(['url', 'api', 'id', 'obs', 'cx', 'ai']);
+
+  return words
+    .map((w) => {
+      const lw = w.toLowerCase();
+      if (upper.has(lw)) return lw.toUpperCase();
+      return lw.charAt(0).toUpperCase() + lw.slice(1);
+    })
+    .join(' ');
+}
+
 type WizardStepKey = 'spotify' | 'events' | 'openai' | 'google' | 'obs' | 'obs_sources' | 'general';
 const BASE_STEPS: { key: WizardStepKey; title: string }[] = [
   { key: 'spotify', title: 'Spotify' },
@@ -467,7 +485,7 @@ export function SetupPage() {
             </span>
           </h2>
 
-          <label>Spotify client_id</label>
+          <label>{humanizeKey('client_id')}</label>
           <input
             type="text"
             value={v('Spotify', 'client_id')}
@@ -475,7 +493,7 @@ export function SetupPage() {
           />
           <div className="muted">Get this from your Spotify Developer Dashboard: create an app and copy the Client ID.</div>
 
-          <label>Spotify client_secret (secret)</label>
+          <label>{humanizeKey('client_secret')} (secret)</label>
           <input
             type="password"
             placeholder="(leave blank to keep existing)"
@@ -484,7 +502,7 @@ export function SetupPage() {
           />
           <div className="muted">In the same Spotify app page, click “Show Client Secret” and copy it.</div>
 
-          <label>Spotify redirect_url</label>
+          <label>{humanizeKey('redirect_url')}</label>
           <input
             type="text"
             value={v('Spotify', 'redirect_url')}
@@ -518,7 +536,7 @@ export function SetupPage() {
         <div className="card" style={{ marginTop: 16 }}>
           <h2>OBS</h2>
 
-          <label>OBS enabled</label>
+          <label>{humanizeKey('enabled')}</label>
           <select
             value={(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled).toLowerCase()}
             onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
@@ -527,21 +545,21 @@ export function SetupPage() {
             <option value="false">false</option>
           </select>
 
-          <label>OBS host</label>
+          <label>{humanizeKey('host')}</label>
           <input
             type="text"
             value={v('OBS', 'host')}
             onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), host: e.target.value } }))}
           />
 
-          <label>OBS port</label>
+          <label>{humanizeKey('port')}</label>
           <input
             type="text"
             value={v('OBS', 'port')}
             onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), port: e.target.value } }))}
           />
 
-          <label>OBS password (secret)</label>
+          <label>{humanizeKey('password')} (secret)</label>
           <input
             type="password"
             placeholder="(leave blank to keep existing)"
@@ -662,7 +680,7 @@ export function SetupPage() {
         <div className="card" style={{ marginTop: 16 }}>
           <h2>Events API</h2>
 
-          <label>Events API URL (secret)</label>
+          <label>URL (secret)</label>
           <input
             type="password"
             placeholder="(leave blank to keep existing)"
@@ -676,7 +694,7 @@ export function SetupPage() {
             </code>
           </div>
 
-          <label>max_requests_per_minute</label>
+          <label>{humanizeKey('max_requests_per_minute')}</label>
           <input
             type="text"
             value={v('Events API', 'max_requests_per_minute')}
@@ -694,7 +712,7 @@ export function SetupPage() {
         <div className="card" style={{ marginTop: 16 }}>
           <h2>OpenAI API</h2>
 
-          <label>OpenAI API key (secret)</label>
+          <label>API key (secret)</label>
           <input
             type="password"
             placeholder="(leave blank to keep existing)"
@@ -717,7 +735,7 @@ export function SetupPage() {
         <div className="card" style={{ marginTop: 16 }}>
           <h2>Google</h2>
 
-          <label>Google API key (secret)</label>
+          <label>{humanizeKey('google_api_key')} (secret)</label>
           <input
             type="password"
             placeholder="(leave blank to keep existing)"
@@ -728,7 +746,7 @@ export function SetupPage() {
             In Google Cloud Console, create/choose a project → APIs & Services → Credentials → Create credentials → API key.
           </div>
 
-          <label>Google Custom Search Engine ID (cx)</label>
+          <label>{humanizeKey('google_cx')}</label>
           <input
             type="text"
             value={v('Search', 'google_cx')}
@@ -744,7 +762,7 @@ export function SetupPage() {
         <div className="card" style={{ marginTop: 16 }}>
           <h2>General Settings</h2>
 
-          <label>song_cost</label>
+          <label>{humanizeKey('song_cost')}</label>
           <input
             type="text"
             value={v('General', 'song_cost')}
@@ -752,7 +770,7 @@ export function SetupPage() {
           />
           <div className="muted">Tip amount (in tokens) per song request.</div>
 
-          <label>skip_song_cost</label>
+          <label>{humanizeKey('skip_song_cost')}</label>
           <input
             type="text"
             value={v('General', 'skip_song_cost')}
@@ -760,7 +778,7 @@ export function SetupPage() {
           />
           <div className="muted">Tip amount (in tokens) that triggers a “skip current song” action.</div>
 
-          <label>multi_request_tips</label>
+          <label>{humanizeKey('multi_request_tips')}</label>
           <select
             value={(v('General', 'multi_request_tips') || DEFAULT_CFG.General.multi_request_tips).toLowerCase()}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), multi_request_tips: e.target.value } }))}
