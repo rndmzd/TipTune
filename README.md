@@ -11,6 +11,11 @@ This repo contains:
 
 ---
 
+## Documentation
+
+- [Quick Start](docs/QUICK_START.md)
+- [User Manual](docs/USER_MANUAL.md)
+
 ## Getting TipTune
 
 - **Desktop app (recommended)**
