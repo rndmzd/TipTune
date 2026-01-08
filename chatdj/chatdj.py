@@ -1066,21 +1066,33 @@ class AutoDJ:
                 if qlen > 0:
                     if self.now_playing_track_uri and not paused:
                         try:
-                            pb = self.spotify.current_playback()
-                            item = pb.get('item') if isinstance(pb, dict) else None
-                            item_uri = item.get('uri') if isinstance(item, dict) else None
-                            progress_ms = pb.get('progress_ms') if isinstance(pb, dict) else None
+                            is_playing, item_uri, progress_ms, duration_ms = self._get_playback_snapshot()
                         except Exception:
-                            pb = None
+                            is_playing = False
                             item_uri = None
                             progress_ms = None
+                            duration_ms = None
 
-                        if item_uri == self.now_playing_track_uri and isinstance(progress_ms, (int, float)) and progress_ms < 15000:
+                        try:
+                            since_start = time.time() - float(getattr(self, '_last_start_playback_ts', 0.0) or 0.0)
+                        except Exception:
+                            since_start = 9999.0
+
+                        # Spotify Desktop can sometimes report is_playing=false while keeping the same item URI,
+                        # and even resetting progress_ms near 0 after a track ends. Only treat low progress as a
+                        # transient "starting" state if we very recently started playback ourselves.
+                        if (
+                            (not is_playing)
+                            and since_start < 20.0
+                            and item_uri == self.now_playing_track_uri
+                            and isinstance(progress_ms, (int, float))
+                            and progress_ms < 15000
+                        ):
                             if not silent:
                                 logger.debug(
                                     "queue.check.transient_inactive",
                                     message="Playback reported inactive, but current track appears to be starting; not advancing queue.",
-                                    data={"progress_ms": progress_ms, "track_uri": item_uri, "queued_tracks": qlen},
+                                    data={"progress_ms": progress_ms, "track_uri": item_uri, "queued_tracks": qlen, "since_start": since_start},
                                 )
                             self._print_variables(False)
                             return False
@@ -1137,7 +1149,7 @@ class AutoDJ:
                 return True
 
             if first_queued:
-                current_track = self.spotify.current_playback()['item']['uri']
+                is_playing, current_track, progress_ms, duration_ms = self._get_playback_snapshot()
                 logger.debug(f"Current playing track: {current_track}")
                 if current_track == first_queued:
                     logger.info(f"Now playing queued track: {current_track}")
@@ -1260,11 +1272,37 @@ class AutoDJ:
 
     def playback_active(self) -> bool:
         try:
-            playback_state = self.spotify.current_playback()
-            if playback_state and playback_state.get('is_playing'):
+            is_playing, item_uri, progress_ms, duration_ms = self._get_playback_snapshot()
+
+            now_uri = getattr(self, 'now_playing_track_uri', None)
+            if (
+                is_playing
+                and isinstance(now_uri, str)
+                and now_uri.strip() != ''
+                and isinstance(item_uri, str)
+                and item_uri == now_uri
+                and isinstance(progress_ms, int)
+                and isinstance(duration_ms, int)
+                and duration_ms > 0
+            ):
+                remaining_ms = duration_ms - progress_ms
+                if remaining_ms <= 2500:
+                    logger.debug(
+                        "spotify.playback.status",
+                        message="Playback near end; treating as inactive so queue can advance",
+                        data={
+                            "track_uri": item_uri,
+                            "progress_ms": progress_ms,
+                            "duration_ms": duration_ms,
+                            "remaining_ms": remaining_ms,
+                        },
+                    )
+                    return False
+
+            if is_playing:
                 logger.debug("spotify.playback.status",
                            message="Playback is active",
-                           data={"is_playing": True})
+                           data={"is_playing": True, "track_uri": item_uri})
                 return True
             return False
         except SpotifyException as exc:
@@ -1272,6 +1310,45 @@ class AutoDJ:
                            message="Error checking playback state",
                            exc=exc)
             return False
+        except Exception as exc:
+            logger.exception("spotify.playback.error",
+                           message="Error checking playback state",
+                           exc=exc)
+            return False
+
+    def _get_playback_snapshot(self) -> tuple[bool, Optional[str], Optional[int], Optional[int]]:
+        try:
+            pb = self.spotify.current_playback()
+        except Exception:
+            pb = None
+
+        if not isinstance(pb, dict):
+            return (False, None, None, None)
+
+        is_playing = bool(pb.get('is_playing'))
+
+        progress_ms: Optional[int] = None
+        try:
+            if pb.get('progress_ms') is not None:
+                progress_ms = int(pb.get('progress_ms'))
+        except Exception:
+            progress_ms = None
+
+        item_uri: Optional[str] = None
+        duration_ms: Optional[int] = None
+        item = pb.get('item')
+        if isinstance(item, dict):
+            uri = item.get('uri')
+            if isinstance(uri, str) and uri.strip() != '':
+                item_uri = uri
+
+            try:
+                if item.get('duration_ms') is not None:
+                    duration_ms = int(item.get('duration_ms'))
+            except Exception:
+                duration_ms = None
+
+        return (is_playing, item_uri, progress_ms, duration_ms)
 
     def skip_song(self, silent=False) -> bool:
         try:
