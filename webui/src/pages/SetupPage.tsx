@@ -99,6 +99,7 @@ const DEFAULT_CFG: Record<string, Record<string, string>> = {
   },
   General: {
     request_overlay_duration: '10',
+    multi_request_tips: 'true',
   },
 };
 
@@ -134,6 +135,7 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
     General: {
       ...general,
       request_overlay_duration: norm(general.request_overlay_duration) || DEFAULT_CFG.General.request_overlay_duration,
+      multi_request_tips: norm(general.multi_request_tips) || DEFAULT_CFG.General.multi_request_tips,
     },
   };
 }
@@ -323,6 +325,7 @@ export function SetupPage() {
         await savePartial({
           General: {
             song_cost: v('General', 'song_cost'),
+            multi_request_tips: v('General', 'multi_request_tips') || DEFAULT_CFG.General.multi_request_tips,
             skip_song_cost: v('General', 'skip_song_cost'),
             request_overlay_duration: v('General', 'request_overlay_duration'),
             setup_complete: 'true',
@@ -756,6 +759,16 @@ export function SetupPage() {
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), skip_song_cost: e.target.value } }))}
           />
           <div className="muted">Tip amount (in tokens) that triggers a “skip current song” action.</div>
+
+          <label>multi_request_tips</label>
+          <select
+            value={(v('General', 'multi_request_tips') || DEFAULT_CFG.General.multi_request_tips).toLowerCase()}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), multi_request_tips: e.target.value } }))}
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+          <div className="muted">If true, multiples of song_cost can request multiple songs in one tip.</div>
 
           <label>OBS overlay duration</label>
           <input

@@ -103,6 +103,7 @@ function tooltip(section: string, key: string) {
     'Search.google_api_key': 'Google API key used for web search features. Leave blank to keep the currently saved key.',
     'Search.google_cx': 'Google Custom Search Engine (CSE) ID used for web search results.',
     'General.song_cost': 'Default token cost to request a song.',
+    'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
   };
@@ -192,6 +193,12 @@ export function SettingsPage() {
     const raw = v('General', 'auto_check_updates');
     const s = (raw || 'true').trim().toLowerCase();
     return !(s === 'false' || s === '0' || s === 'no');
+  })();
+
+  const multiRequestTipsEnabled = (() => {
+    const raw = v('General', 'multi_request_tips');
+    const s = (raw || 'true').trim().toLowerCase();
+    return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
   })();
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
@@ -374,6 +381,23 @@ export function SettingsPage() {
             value={v('General', 'song_cost')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), song_cost: e.target.value } }))}
           />
+          <label
+            title={tooltip('General', 'multi_request_tips')}
+            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
+          >
+            <input
+              type="checkbox"
+              checked={multiRequestTipsEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), multi_request_tips: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span style={{ whiteSpace: 'nowrap' }}>{humanizeKey('multi_request_tips')}</span>
+          </label>
           <label title={tooltip('General', 'skip_song_cost')}>{humanizeKey('skip_song_cost')}</label>
           <input
             type="text"
@@ -835,6 +859,7 @@ export function SettingsPage() {
                 },
                 General: {
                   song_cost: v('General', 'song_cost'),
+                  multi_request_tips: multiRequestTipsEnabled ? 'true' : 'false',
                   skip_song_cost: v('General', 'skip_song_cost'),
                   request_overlay_duration: v('General', 'request_overlay_duration'),
                   auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
