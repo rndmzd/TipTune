@@ -312,6 +312,7 @@ class WebUI:
             web.get('/help', self._page_app),
             web.get('/events', self._page_app),
             web.get('/history', self._page_app),
+            web.get('/stats', self._page_app),
             web.get('/api/queue', self._api_queue),
             web.post('/api/queue/add', self._api_queue_add),
             web.post('/api/queue/pause', self._api_pause),
@@ -1540,6 +1541,8 @@ class SongRequestService:
             if not isinstance(tip_amount, int) or tip_amount <= 0:
                 return
 
+            tip_ts = time.time()
+
             is_song_request = self.checks.is_song_request(tip_amount)
             is_skip_request = self.checks.is_skip_song_request(tip_amount)
 
@@ -1561,6 +1564,7 @@ class SongRequestService:
             if tip_message == "":
                 self.publish_request_history_item({
                     "ts": time.time(),
+                    "tip_ts": tip_ts,
                     "username": username,
                     "tip_amount": tip_amount,
                     "tip_message": tip_message,
@@ -1592,6 +1596,7 @@ class SongRequestService:
                 if not song_uri:
                     self.publish_request_history_item({
                         "ts": time.time(),
+                        "tip_ts": tip_ts,
                         "username": username,
                         "tip_amount": tip_amount,
                         "tip_message": tip_message,
@@ -1613,6 +1618,7 @@ class SongRequestService:
                 if not await self.actions.available_in_market(song_uri):
                     self.publish_request_history_item({
                         "ts": time.time(),
+                        "tip_ts": tip_ts,
                         "username": username,
                         "tip_amount": tip_amount,
                         "tip_message": tip_message,
@@ -1636,6 +1642,7 @@ class SongRequestService:
 
                 self.publish_request_history_item({
                     "ts": time.time(),
+                    "tip_ts": tip_ts,
                     "username": username,
                     "tip_amount": tip_amount,
                     "tip_message": tip_message,
