@@ -407,7 +407,44 @@ export function DashboardPage() {
         title="TipTune"
       />
 
-      <div className="row">
+      <div className="row" style={{ flexDirection: 'column', flexWrap: 'nowrap' }}>
+        <div className="card">
+          <h2>Now Playing</h2>
+
+          <div className="queueOut">
+            {nowPlaying ? (
+              <div>
+                <QueueCard item={nowPlaying} indexLabel="Now" allowDelete={false} extraClass="queueCardNowPlaying" />
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => sendNowPlayingToObs().catch(() => {})} disabled={opBusy || obsNowPlayingBusy}>
+                    {obsNowPlayingBusy ? 'Sending…' : 'Send info to OBS'}
+                  </button>
+                  {obsNowPlayingMsg ? <div className="muted">{obsNowPlayingMsg}</div> : null}
+                </div>
+                {durationMs && posClampedMs != null ? (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ height: 8, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          height: '100%',
+                          width: `${Math.round((pct ?? 0) * 1000) / 10}%`,
+                          background: 'rgba(138, 180, 255, 0.65)',
+                        }}
+                      />
+                    </div>
+                    <div className="muted" style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                      <span>{fmtTime(posClampedMs)}</span>
+                      <span>{fmtTime(durationMs)}</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="queueOut">(none)</div>
+            )}
+          </div>
+        </div>
+
         <div className="card">
           <h2>Queue</h2>
 
@@ -623,40 +660,6 @@ export function DashboardPage() {
           ) : null}
 
           {status === 'error' ? <div className="muted">Error: {err}</div> : null}
-
-          <label>Now playing</label>
-          <div className="queueOut">
-            {nowPlaying ? (
-              <div>
-                <QueueCard item={nowPlaying} indexLabel="Now" allowDelete={false} extraClass="queueCardNowPlaying" />
-                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <button type="button" onClick={() => sendNowPlayingToObs().catch(() => {})} disabled={opBusy || obsNowPlayingBusy}>
-                    {obsNowPlayingBusy ? 'Sending…' : 'Send info to OBS'}
-                  </button>
-                  {obsNowPlayingMsg ? <div className="muted">{obsNowPlayingMsg}</div> : null}
-                </div>
-                {durationMs && posClampedMs != null ? (
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ height: 8, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          height: '100%',
-                          width: `${Math.round((pct ?? 0) * 1000) / 10}%`,
-                          background: 'rgba(138, 180, 255, 0.65)',
-                        }}
-                      />
-                    </div>
-                    <div className="muted" style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{fmtTime(posClampedMs)}</span>
-                      <span>{fmtTime(durationMs)}</span>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="queueOut">(none)</div>
-            )}
-          </div>
 
           <label>Up next</label>
           <div className="queueOut" ref={queueOutRef}>
