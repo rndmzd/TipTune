@@ -7,6 +7,7 @@ import { SetupPage } from './pages/SetupPage';
 import { HelpPage } from './pages/HelpPage';
 import { EventsPage } from './pages/EventsPage';
 import { HistoryPage } from './pages/HistoryPage';
+import { StatsPage } from './pages/StatsPage';
 import { apiJson } from './api';
 
 function isTauriRuntime(): boolean {
@@ -99,6 +100,7 @@ export function App() {
       <Route path="/help" element={<HelpPage />} />
       <Route path="/events" element={<EventsPage />} />
       <Route path="/history" element={<HistoryPage />} />
+      <Route path="/stats" element={<StatsPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
