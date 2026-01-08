@@ -1066,21 +1066,33 @@ class AutoDJ:
                 if qlen > 0:
                     if self.now_playing_track_uri and not paused:
                         try:
-                            pb = self.spotify.current_playback()
-                            item = pb.get('item') if isinstance(pb, dict) else None
-                            item_uri = item.get('uri') if isinstance(item, dict) else None
-                            progress_ms = pb.get('progress_ms') if isinstance(pb, dict) else None
+                            is_playing, item_uri, progress_ms, duration_ms = self._get_playback_snapshot()
                         except Exception:
-                            pb = None
+                            is_playing = False
                             item_uri = None
                             progress_ms = None
+                            duration_ms = None
 
-                        if item_uri == self.now_playing_track_uri and isinstance(progress_ms, (int, float)) and progress_ms < 15000:
+                        try:
+                            since_start = time.time() - float(getattr(self, '_last_start_playback_ts', 0.0) or 0.0)
+                        except Exception:
+                            since_start = 9999.0
+
+                        # Spotify Desktop can sometimes report is_playing=false while keeping the same item URI,
+                        # and even resetting progress_ms near 0 after a track ends. Only treat low progress as a
+                        # transient "starting" state if we very recently started playback ourselves.
+                        if (
+                            (not is_playing)
+                            and since_start < 20.0
+                            and item_uri == self.now_playing_track_uri
+                            and isinstance(progress_ms, (int, float))
+                            and progress_ms < 15000
+                        ):
                             if not silent:
                                 logger.debug(
                                     "queue.check.transient_inactive",
                                     message="Playback reported inactive, but current track appears to be starting; not advancing queue.",
-                                    data={"progress_ms": progress_ms, "track_uri": item_uri, "queued_tracks": qlen},
+                                    data={"progress_ms": progress_ms, "track_uri": item_uri, "queued_tracks": qlen, "since_start": since_start},
                                 )
                             self._print_variables(False)
                             return False
