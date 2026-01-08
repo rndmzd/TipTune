@@ -17,7 +17,7 @@ from aiohttp import web
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
-from utils.runtime_paths import ensure_parent_dir, get_config_path, get_resource_path, get_spotipy_cache_path
+from utils.runtime_paths import ensure_dir, ensure_parent_dir, get_cache_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
@@ -333,6 +333,7 @@ class WebUI:
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
             web.get('/api/history/recent', self._api_history_recent),
+            web.post('/api/history/clear', self._api_history_clear),
         ])
 
         # SPA fallback for client-side routes
@@ -572,7 +573,16 @@ class WebUI:
             limit = max(1, min(500, int(limit_raw)))
         except Exception:
             limit = 50
-        return web.json_response({"ok": True, "history": self._service.get_recent_request_history(limit=limit)})
+        history = await self._service.get_recent_request_history(limit=limit)
+        return web.json_response({"ok": True, "history": history})
+
+    async def _api_history_clear(self, _request: web.Request) -> web.Response:
+        try:
+            self._service.clear_request_history()
+        except Exception as exc:
+            logger.exception("webui.api.history_clear.error", exc=exc, message="Failed to clear history")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": True})
 
     async def _api_obs_status(self, _request: web.Request) -> web.Response:
         try:
@@ -746,6 +756,11 @@ class SongRequestService:
 
         self._request_history_recent: list[dict] = []
         self._request_history_recent_max = 500
+
+        cache_dir = get_cache_dir()
+        ensure_dir(cache_dir)
+        self._request_history_path: Path = cache_dir / 'request_history.json'
+        self._load_request_history_from_disk()
 
         self._track_cache: Dict[str, Dict[str, Any]] = {}
         self._track_cache_ttl_seconds = 6 * 60 * 60
@@ -1656,6 +1671,17 @@ class SongRequestService:
         self._request_history_recent.append(item)
         if len(self._request_history_recent) > self._request_history_recent_max:
             self._request_history_recent = self._request_history_recent[-self._request_history_recent_max:]
+        try:
+            self._persist_request_history_to_disk()
+        except Exception:
+            pass
+
+    def clear_request_history(self) -> None:
+        self._request_history_recent = []
+        try:
+            self._persist_request_history_to_disk()
+        except Exception:
+            pass
 
     def register_events_subscriber(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -1673,10 +1699,93 @@ class SongRequestService:
             return []
         return self._events_recent[-limit:]
 
-    def get_recent_request_history(self, limit: int = 50) -> list[dict]:
+    async def get_recent_request_history(self, limit: int = 50) -> list[dict]:
         if limit <= 0:
             return []
-        return self._request_history_recent[-limit:]
+        items = self._request_history_recent[-limit:]
+        try:
+            return await self._enrich_history_items(items)
+        except Exception:
+            return items
+
+    def _load_request_history_from_disk(self) -> None:
+        try:
+            raw = read_text_if_exists(self._request_history_path)
+            if raw is None:
+                return
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list):
+                return
+            out: list[dict] = []
+            for it in parsed:
+                if isinstance(it, dict):
+                    out.append(it)
+            if len(out) > self._request_history_recent_max:
+                out = out[-self._request_history_recent_max:]
+            self._request_history_recent = out
+        except Exception:
+            return
+
+    def _persist_request_history_to_disk(self) -> None:
+        try:
+            ensure_parent_dir(self._request_history_path)
+            tmp = self._request_history_path.with_suffix(self._request_history_path.suffix + '.tmp')
+            payload = json.dumps(self._request_history_recent, ensure_ascii=False)
+            tmp.write_text(payload, encoding='utf-8')
+            tmp.replace(self._request_history_path)
+        except Exception:
+            raise
+
+    async def _enrich_history_items(self, items: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        if not items:
+            return out
+
+        track_uris: list[str] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            uri = it.get('resolved_uri')
+            if isinstance(uri, str) and uri.strip() != "":
+                track_uris.append(uri.strip())
+
+        seen: set[str] = set()
+        to_fetch: list[str] = []
+        max_fetch = 10
+
+        for uri in track_uris:
+            if uri in seen:
+                continue
+            seen.add(uri)
+            cache_key = f"track:{uri}"
+            cached = self._cache_get_track(cache_key)
+            if cached is not None:
+                continue
+            to_fetch.append(uri)
+            if len(to_fetch) >= max_fetch:
+                break
+
+        for uri in to_fetch:
+            cache_key = f"track:{uri}"
+            try:
+                meta = await self._fetch_spotify_track_meta(uri)
+                if isinstance(meta, dict) and meta:
+                    self._cache_put_track(cache_key, meta)
+            except Exception:
+                pass
+
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            enriched = dict(it)
+            uri = enriched.get('resolved_uri')
+            if isinstance(uri, str) and uri.strip() != "":
+                cache_key = f"track:{uri.strip()}"
+                meta = self._cache_get_track(cache_key)
+                if isinstance(meta, dict) and meta:
+                    enriched['spotify_track'] = meta
+            out.append(enriched)
+        return out
 
     async def get_queue_state(self) -> Dict[str, Any]:
         if not getattr(self.actions, 'chatdj_enabled', False):

@@ -28,6 +28,17 @@ function summarize(item: any) {
   const resolvedUri = item && typeof item === 'object' ? (item as any).resolved_uri : null;
   const error = item && typeof item === 'object' ? (item as any).error : null;
 
+  const spotifyTrack = item && typeof item === 'object' ? (item as any).spotify_track : null;
+  const spotifyName = spotifyTrack && typeof spotifyTrack === 'object' ? (spotifyTrack as any).name : null;
+  const spotifyArtistsRaw = spotifyTrack && typeof spotifyTrack === 'object' ? (spotifyTrack as any).artists : null;
+  const spotifyAlbum = spotifyTrack && typeof spotifyTrack === 'object' ? (spotifyTrack as any).album : null;
+  const spotifyAlbumImageUrl =
+    spotifyTrack && typeof spotifyTrack === 'object' ? (spotifyTrack as any).album_image_url : null;
+
+  const spotifyArtists = Array.isArray(spotifyArtistsRaw)
+    ? spotifyArtistsRaw.filter((v: any) => typeof v === 'string' && v.trim() !== '').join(', ')
+    : null;
+
   return {
     time,
     username,
@@ -39,45 +50,68 @@ function summarize(item: any) {
     songDetails,
     resolvedUri,
     error,
+    spotifyName,
+    spotifyArtists,
+    spotifyAlbum,
+    spotifyAlbumImageUrl,
   };
 }
 
 function HistoryCard(props: { item: any }) {
   const s = useMemo(() => summarize(props.item), [props.item]);
 
-  const titleParts: string[] = [];
-  if (typeof s.status === 'string' && s.status.trim() !== '') titleParts.push(s.status);
-  if (typeof s.songDetails === 'string' && s.songDetails.trim() !== '') {
-    titleParts.push(s.songDetails);
-  } else {
-    const a = typeof s.artist === 'string' ? s.artist.trim() : '';
-    const t = typeof s.song === 'string' ? s.song.trim() : '';
-    const combined = [a, t].filter(Boolean).join(' - ');
-    if (combined) titleParts.push(combined);
-  }
+  const t = typeof s.spotifyName === 'string' && s.spotifyName.trim() !== '' ? s.spotifyName.trim() : null;
+  const a = typeof s.spotifyArtists === 'string' && s.spotifyArtists.trim() !== '' ? s.spotifyArtists.trim() : null;
+  const album = typeof s.spotifyAlbum === 'string' && s.spotifyAlbum.trim() !== '' ? s.spotifyAlbum.trim() : null;
 
-  const title = titleParts.length ? titleParts.join(' · ') : 'request';
+  const fallbackArtist = typeof s.artist === 'string' && s.artist.trim() !== '' ? s.artist.trim() : null;
+  const fallbackSong = typeof s.song === 'string' && s.song.trim() !== '' ? s.song.trim() : null;
+  const fallbackSongDetails = typeof s.songDetails === 'string' && s.songDetails.trim() !== '' ? s.songDetails.trim() : null;
+
+  const songName = t || fallbackSong || (fallbackSongDetails ? fallbackSongDetails.split(' - ').slice(1).join(' - ') : null) || 'request';
+  const artistName = a || fallbackArtist || (fallbackSongDetails ? fallbackSongDetails.split(' - ')[0] : null);
+  const subtitle = [artistName, album].filter(Boolean).join(' · ');
 
   const statusClass =
     s.status === 'added' ? 'pill pillInfo' : s.status === 'failed' ? 'pill pillWarn' : 'pill pillNeutral';
 
   return (
     <div className="card">
-      <div className="cardHeader">
-        <div className="cardTitle">{title}</div>
-        <div className="cardMeta">
-          {typeof s.username === 'string' && s.username.trim() !== '' ? (
-            <span className="pill pillNeutral">{s.username}</span>
+      <div className="cardHeader" style={{ display: 'flex', alignItems: 'center' }}>
+        <div style={{ width: 48, height: 48, flex: '0 0 auto', background: '#00000010', borderRadius: 8, overflow: 'hidden' }}>
+          {typeof s.spotifyAlbumImageUrl === 'string' && s.spotifyAlbumImageUrl.trim() !== '' ? (
+            <img
+              src={s.spotifyAlbumImageUrl}
+              alt=""
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
           ) : null}
-          {typeof s.tipAmount === 'number' ? (
-            <span className="pill pillNeutral" style={{ marginLeft: 8 }}>{`${s.tipAmount} tokens`}</span>
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0, marginLeft: 12 }}>
+          <div className="cardTitle" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {songName}
+          </div>
+          {subtitle ? (
+            <div className="muted" style={{ marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {subtitle}
+            </div>
           ) : null}
-          {typeof s.status === 'string' && s.status.trim() !== '' ? (
-            <span className={statusClass} style={{ marginLeft: 8 }}>
-              {s.status}
-            </span>
-          ) : null}
-          {s.time ? <span style={{ marginLeft: 10 }}>{s.time}</span> : null}
+
+          <div className="cardMeta" style={{ marginTop: 6 }}>
+            {typeof s.username === 'string' && s.username.trim() !== '' ? (
+              <span className="pill pillNeutral">{s.username}</span>
+            ) : null}
+            {typeof s.tipAmount === 'number' ? (
+              <span className="pill pillNeutral" style={{ marginLeft: 8 }}>{`${s.tipAmount} tokens`}</span>
+            ) : null}
+            {typeof s.status === 'string' && s.status.trim() !== '' ? (
+              <span className={statusClass} style={{ marginLeft: 8 }}>
+                {s.status}
+              </span>
+            ) : null}
+            {s.time ? <span style={{ marginLeft: 10 }}>{s.time}</span> : null}
+          </div>
         </div>
       </div>
       <div className="cardBody">
@@ -94,10 +128,6 @@ function HistoryCard(props: { item: any }) {
             <pre>{s.resolvedUri}</pre>
           </details>
         ) : null}
-        <details>
-          <summary>Details</summary>
-          <pre>{JSON.stringify(props.item, null, 2)}</pre>
-        </details>
       </div>
     </div>
   );
@@ -105,11 +135,31 @@ function HistoryCard(props: { item: any }) {
 
 type HistoryRecentResp = { ok: true; history: any[] };
 
+function makeExportFilename(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `tiptune-history-${stamp}.json`;
+}
+
+function downloadJson(filename: string, payload: any) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function HistoryPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [err, setErr] = useState<string>('');
   const [items, setItems] = useState<any[]>([]);
   const [limit, setLimit] = useState<number>(100);
+  const [exporting, setExporting] = useState<boolean>(false);
 
   async function refresh() {
     setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
@@ -125,6 +175,38 @@ export function HistoryPage() {
     }
   }
 
+  async function clearHistory() {
+    setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
+    setErr('');
+    try {
+      const ok = window.confirm('Clear history? This will remove all saved history items.');
+      if (!ok) {
+        setStatus('ok');
+        return;
+      }
+      await apiJson<{ ok: true }>(`/api/history/clear`, { method: 'POST' });
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message ? String(e.message) : String(e));
+      setStatus('error');
+    }
+  }
+
+  async function exportHistory() {
+    setErr('');
+    setExporting(true);
+    try {
+      const j = await apiJson<HistoryRecentResp>(`/api/history/recent?limit=500`);
+      const hist = Array.isArray(j?.history) ? j.history : [];
+      downloadJson(makeExportFilename(), { exported_at: new Date().toISOString(), history: hist });
+    } catch (e: any) {
+      setErr(e?.message ? String(e.message) : String(e));
+      setStatus('error');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   useEffect(() => {
     refresh().catch(() => {});
   }, []);
@@ -137,8 +219,11 @@ export function HistoryPage() {
         <button type="button" onClick={() => refresh()}>
           Refresh
         </button>
-        <button type="button" onClick={() => setItems([])} style={{ marginLeft: 8 }}>
+        <button type="button" onClick={() => clearHistory()} style={{ marginLeft: 8 }}>
           Clear
+        </button>
+        <button type="button" onClick={() => exportHistory()} style={{ marginLeft: 8 }} disabled={exporting}>
+          {exporting ? 'Exporting…' : 'Export'}
         </button>
         <span className="muted" style={{ marginLeft: 10 }}>
           Recent song request processing results.
