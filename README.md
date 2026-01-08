@@ -106,7 +106,25 @@ TipTune uses these sections/keys (see `config.ini.example`):
 - `[Web]` (optional)
   - `host`, `port`
 - `[General]` (required)
-  - `song_cost`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`
+  - `song_cost`, `multi_request_tips`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`
+
+### Multi-song tips
+
+By default, TipTune allows **multiple song requests in a single tip** when the tip amount is a multiple of `General.song_cost`.
+
+This is controlled by:
+
+- `General.multi_request_tips=true|false`
+
+Behavior:
+
+- If `multi_request_tips=true`:
+  - A tip of `song_cost` requests 1 song.
+  - A tip of `2*song_cost` requests 2 songs.
+  - TipTune computes: `request_count = tip_amount // song_cost` (minimum 1).
+- If `multi_request_tips=false`:
+  - Only an **exact** `tip_amount == song_cost` triggers a single song request.
+  - Multiples (like `2*song_cost`) do **not** trigger song requests.
 
 ---
 

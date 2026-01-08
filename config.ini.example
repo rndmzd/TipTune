@@ -22,6 +22,7 @@ google_cx =
 [General]
 # General application settings
 song_cost = 27
+multi_request_tips = true
 skip_song_cost = 51
 request_overlay_duration = 10
 
