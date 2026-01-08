@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { DashboardPage } from './pages/DashboardPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SetupPage } from './pages/SetupPage';
+import { HelpPage } from './pages/HelpPage';
 import { EventsPage } from './pages/EventsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { apiJson } from './api';
@@ -95,6 +96,7 @@ export function App() {
       <Route path="/" element={<DashboardPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/setup" element={<SetupPage />} />
+      <Route path="/help" element={<HelpPage />} />
       <Route path="/events" element={<EventsPage />} />
       <Route path="/history" element={<HistoryPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />

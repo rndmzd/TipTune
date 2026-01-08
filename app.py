@@ -309,6 +309,7 @@ class WebUI:
             web.get('/', self._page_app),
             web.get('/settings', self._page_app),
             web.get('/setup', self._page_app),
+            web.get('/help', self._page_app),
             web.get('/events', self._page_app),
             web.get('/history', self._page_app),
             web.get('/api/queue', self._api_queue),
@@ -328,6 +329,7 @@ class WebUI:
             web.get('/api/spotify/auth/status', self._api_spotify_auth_status),
             web.post('/api/spotify/auth/start', self._api_spotify_auth_start),
             web.get('/api/setup/status', self._api_setup_status),
+            web.get('/api/help/user-manual', self._api_help_user_manual),
             web.get('/api/config', self._api_get_config),
             web.post('/api/config', self._api_update_config),
             web.get('/api/events/recent', self._api_events_recent),
@@ -355,7 +357,7 @@ class WebUI:
 
     async def _page_app(self, request: web.Request) -> web.Response:
         force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
-        if request.path != '/setup' and not force_dashboard and not _is_setup_complete():
+        if request.path not in ('/setup', '/help') and not force_dashboard and not _is_setup_complete():
             raise web.HTTPFound('/setup')
 
         if self._spa_index.exists():
@@ -368,6 +370,17 @@ class WebUI:
             "Then restart TipTune.\n"
         )
         return web.Response(text=msg, content_type='text/plain', status=503, headers={"Cache-Control": "no-store"})
+
+    async def _api_help_user_manual(self, _request: web.Request) -> web.Response:
+        try:
+            path = get_resource_path('docs', 'USER_MANUAL.md')
+            md = read_text_if_exists(path)
+            if md is None:
+                return web.json_response({"ok": False, "error": "User manual not found"}, status=404)
+            return web.json_response({"ok": True, "markdown": md})
+        except Exception as exc:
+            logger.exception("webui.api.help.user_manual.error", exc=exc, message="Failed to load user manual")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
     async def _api_queue(self, _request: web.Request) -> web.Response:
         try:

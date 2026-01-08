@@ -171,17 +171,27 @@ If a tip matches **both**, TipTune treats it as a **song request** (song request
 
 ### Request count (multiple requests in one tip)
 
-For song requests, TipTune computes:
+For song requests, TipTune computes the number of requested songs.
 
-- `request_count = tip_amount // General.song_cost` (minimum 1)
+Behavior depends on `General.multi_request_tips`:
+
+- If `General.multi_request_tips=true` (default):
+  - `request_count = tip_amount // General.song_cost` (minimum 1)
+  - A tip that is a multiple of `song_cost` can request multiple songs.
+- If `General.multi_request_tips=false`:
+  - Only an exact `tip_amount == General.song_cost` triggers a song request.
+  - Multiples (like `2 * song_cost`) do not increase request count.
 
 That `request_count` determines how many songs TipTune attempts to extract from the tip message.
 
-Example (defaults):
+Example:
 
-- If `song_cost=27`:
+- If `song_cost=27` and `multi_request_tips=true`:
   - A `27` token tip requests **1 song**.
   - A `54` token tip requests **2 songs**.
+- If `song_cost=27` and `multi_request_tips=false`:
+  - A `27` token tip requests **1 song**.
+  - A `54` token tip requests **1 song**.
 
 ### Tip message parsing rules
 
@@ -334,8 +344,17 @@ Used to improve song metadata when the artist is missing.
 
 - `General.song_cost`
 - `General.skip_song_cost`
+- `General.multi_request_tips`
 - `General.request_overlay_duration` (seconds)
 - `General.auto_check_updates` (UI toggle)
+
+`General.multi_request_tips` controls whether a single tip can request multiple songs when the tip amount is a multiple of `song_cost`.
+
+- When `true` (default):
+  - Example: if `song_cost=27`, then `54` tokens requests **2 songs**.
+- When `false`:
+  - Example: if `song_cost=27`, then only `27` tokens requests **1 song**.
+  - `54` tokens does **not** request 2 songs.
 
 ---
 
@@ -445,7 +464,7 @@ See `config.ini.example` for the template.
 - `[Web]`
   - `host`, `port`
 - `[General]`
-  - `song_cost`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`
+  - `song_cost`, `skip_song_cost`, `multi_request_tips`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`
 
 ---
 
