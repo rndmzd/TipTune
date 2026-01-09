@@ -86,10 +86,10 @@ pub fn run() {
                     while let Some(event) = rx.recv().await {
                         match event {
                             CommandEvent::Stdout(line) => {
-                                println!("[sidecar stdout] {}", line);
+                                println!("[sidecar stdout] {}", String::from_utf8_lossy(&line));
                             }
                             CommandEvent::Stderr(line) => {
-                                eprintln!("[sidecar stderr] {}", line);
+                                eprintln!("[sidecar stderr] {}", String::from_utf8_lossy(&line));
                             }
                             CommandEvent::Error(err) => {
                                 eprintln!("[sidecar error] {}", err);
