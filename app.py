@@ -2515,17 +2515,25 @@ async def main() -> None:
     asyncio.create_task(_watch_parent_process())
 
     service = SongRequestService()
-    await service.start()
+    try:
+        await service.start()
 
-    signals = (signal.SIGTERM, signal.SIGINT)
-    for s in signals:
+        signals = (signal.SIGTERM, signal.SIGINT)
+        for s in signals:
+            try:
+                loop.add_signal_handler(s, lambda s=s: shutdown_event.set())
+            except NotImplementedError:
+                pass
+
+        await shutdown_event.wait()
+    except Exception as exc:
+        logger.exception("app.main.error", exc=exc, message="TipTune sidecar crashed during startup")
+        raise
+    finally:
         try:
-            loop.add_signal_handler(s, lambda s=s: shutdown_event.set())
-        except NotImplementedError:
+            await service.stop()
+        except Exception:
             pass
-
-    await shutdown_event.wait()
-    await service.stop()
 
 
 if __name__ == '__main__':
