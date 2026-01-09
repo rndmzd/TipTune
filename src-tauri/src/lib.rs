@@ -2,13 +2,16 @@
 use std::sync::Mutex;
 
 #[cfg(not(mobile))]
+use std::{env, fs};
+
+#[cfg(not(mobile))]
 use tauri::{Manager, RunEvent, WindowEvent};
 
 #[cfg(not(mobile))]
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 #[cfg(all(not(mobile), windows))]
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[cfg(not(mobile))]
 struct SidecarState(Mutex<Option<CommandChild>>);
@@ -22,6 +25,8 @@ fn kill_sidecar(app: &tauri::AppHandle) {
                 let pid = child.pid();
                 let _ = Command::new("taskkill")
                     .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .status();
             }
 
@@ -43,12 +48,35 @@ pub fn run() {
             {
                 use tauri_plugin_shell::process::CommandEvent;
 
+                let mut sidecar_log_path: Option<std::path::PathBuf> = None;
+                if let Ok(data_dir) = app.path().app_data_dir() {
+                    let _ = fs::create_dir_all(&data_dir);
+                    sidecar_log_path = Some(data_dir.join("tiptune-sidecar.log"));
+                }
+
                 let sidecar_command = app
                     .shell()
                     .sidecar("TipTune")?
                     .env("TIPTUNE_PARENT_PID", std::process::id().to_string())
                     .env("TIPTUNE_WEB_HOST", "127.0.0.1")
                     .env("TIPTUNE_WEB_PORT", "8765");
+
+                let sidecar_command = if env::var("TIPTUNE_LOG_LEVEL").is_err() {
+                    sidecar_command.env("TIPTUNE_LOG_LEVEL", "INFO")
+                } else {
+                    sidecar_command
+                };
+
+                let sidecar_command = if env::var("TIPTUNE_LOG_PATH").is_err() {
+                    if let Some(p) = &sidecar_log_path {
+                        sidecar_command.env("TIPTUNE_LOG_PATH", p.to_string_lossy().to_string())
+                    } else {
+                        sidecar_command
+                    }
+                } else {
+                    sidecar_command
+                };
+
                 let (mut rx, child) = sidecar_command.spawn()?;
 
                 app.manage(SidecarState(Mutex::new(Some(child))));
@@ -57,10 +85,17 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     while let Some(event) = rx.recv().await {
                         match event {
-                            CommandEvent::Stdout(_) => {}
-                            CommandEvent::Stderr(_) => {}
-                            CommandEvent::Error(_) => {}
-                            CommandEvent::Terminated(_) => {
+                            CommandEvent::Stdout(line) => {
+                                println!("[sidecar stdout] {}", line);
+                            }
+                            CommandEvent::Stderr(line) => {
+                                eprintln!("[sidecar stderr] {}", line);
+                            }
+                            CommandEvent::Error(err) => {
+                                eprintln!("[sidecar error] {}", err);
+                            }
+                            CommandEvent::Terminated(payload) => {
+                                eprintln!("[sidecar terminated] {:?}", payload);
                                 kill_sidecar(&app_handle);
                                 break;
                             }
