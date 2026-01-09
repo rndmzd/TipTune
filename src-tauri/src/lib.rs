@@ -46,7 +46,9 @@ pub fn run() {
                 let sidecar_command = app
                     .shell()
                     .sidecar("TipTune")?
-                    .env("TIPTUNE_PARENT_PID", std::process::id().to_string());
+                    .env("TIPTUNE_PARENT_PID", std::process::id().to_string())
+                    .env("TIPTUNE_WEB_HOST", "127.0.0.1")
+                    .env("TIPTUNE_WEB_PORT", "8765");
                 let (mut rx, child) = sidecar_command.spawn()?;
 
                 app.manage(SidecarState(Mutex::new(Some(child))));

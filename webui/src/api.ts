@@ -18,12 +18,22 @@ export async function apiJson<T>(
   opts?: RequestInit,
   timeoutMs?: number,
 ): Promise<T> {
+  const base = getApiBase();
   const ctrl = new AbortController();
   const ms = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
   const tmr = window.setTimeout(() => ctrl.abort(), ms);
 
   try {
-    const r = await fetch(getApiBase() + path, { ...(opts ?? {}), signal: ctrl.signal });
+    let r: Response;
+    try {
+      r = await fetch(base + path, { ...(opts ?? {}), signal: ctrl.signal });
+    } catch (e: any) {
+      const isAbort = e?.name === 'AbortError';
+      const hint = base
+        ? `Unable to reach TipTune backend at ${base}. Make sure the TipTune sidecar is running and that port is not blocked.`
+        : 'Unable to reach TipTune backend. Make sure the TipTune server is running.';
+      throw new Error(isAbort ? `Request timed out. ${hint}` : `${e?.message ? e.message : 'Failed to fetch'}. ${hint}`);
+    }
     const t = await r.text();
 
     let j: any;
