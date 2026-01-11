@@ -257,6 +257,17 @@ export function SetupPage() {
     setSpBusy(true);
     setSpMsg('Starting Spotify login...');
     try {
+      await savePartial({
+        Spotify: {
+          client_id: v('Spotify', 'client_id'),
+          client_secret: secrets.spotifySecret,
+          redirect_url: v('Spotify', 'redirect_url'),
+        },
+      });
+      setSecrets((s) => ({ ...s, spotifySecret: '' }));
+      await loadConfig();
+      await refreshSpotifyStatus().catch(() => {});
+
       const data = await apiJson<SpotifyAuthStartResp>('/api/spotify/auth/start', { method: 'POST' });
       await openExternalUrl(data.auth_url);
       setSpMsg('Browser opened. Complete Spotify login, then return here.');
@@ -520,7 +531,7 @@ export function SetupPage() {
             <button type="button" onClick={() => refreshSpotifyStatus().catch(() => {})} disabled={spBusy}>
               Refresh
             </button>
-            <button type="button" onClick={() => startSpotifyAuth().catch(() => {})} disabled={spBusy || !sp?.configured || !!sp?.in_progress}>
+            <button type="button" onClick={() => startSpotifyAuth().catch(() => {})} disabled={spBusy || !spotifyOk || !!sp?.in_progress}>
               Connect Spotify
             </button>
           </div>
