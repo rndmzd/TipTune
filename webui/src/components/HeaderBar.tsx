@@ -38,13 +38,13 @@ export function HeaderBar(props: {
     };
   }, []);
 
-  const hideNav = setupComplete === false;
+  const showGatedNav = setupComplete === true;
 
   return (
     <div className="headerBar">
       <h1 className="headerTitle">{props.title}</h1>
       <div className="headerNav">
-        {hideNav ? null : (
+        {showGatedNav ? (
           <>
             <Link className={`navBtn${isActivePath('/') ? ' navBtnActive' : ''}`} to="/?dashboard=1">
               Dashboard
@@ -58,14 +58,15 @@ export function HeaderBar(props: {
             <Link className={`navBtn${isActivePath('/events') ? ' navBtnActive' : ''}`} to="/events">
               Events
             </Link>
-            <Link className={`navBtn${isActivePath('/settings') ? ' navBtnActive' : ''}`} to="/settings?dashboard=1">
-              Settings
-            </Link>
-            <Link className={`navBtn${isActivePath('/setup') ? ' navBtnActive' : ''}`} to="/setup?rerun=1">
-              Setup Wizard
-            </Link>
           </>
-        )}
+        ) : null}
+
+        <Link className={`navBtn${isActivePath('/settings') ? ' navBtnActive' : ''}`} to="/settings?dashboard=1">
+          Settings
+        </Link>
+        <Link className={`navBtn${isActivePath('/setup') ? ' navBtnActive' : ''}`} to="/setup?rerun=1">
+          Setup Wizard
+        </Link>
         <Link className={`navBtn${isActivePath('/help') ? ' navBtnActive' : ''}`} to="/help">
           Help
         </Link>
