@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
 import { DashboardPage } from './pages/DashboardPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -23,6 +23,8 @@ function autoCheckUpdatesEnabled(cfg: Record<string, Record<string, string>>): b
 
 export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
+  const location = useLocation();
+  const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (didAutoCheckRef.current) return;
@@ -92,15 +94,48 @@ export function App() {
     run().catch(() => {});
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson<{ ok: true; setup_complete: boolean }>('/api/setup/status');
+        if (cancelled) return;
+        setSetupComplete(!!data.setup_complete);
+      } catch {
+        if (cancelled) return;
+        setSetupComplete(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const forceDashboard = (() => {
+    try {
+      const params = new URLSearchParams(location.search || '');
+      const v = (params.get('dashboard') || '').trim().toLowerCase();
+      return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+    } catch {
+      return false;
+    }
+  })();
+
+  const shouldGate =
+    setupComplete === false &&
+    !forceDashboard &&
+    location.pathname !== '/setup' &&
+    location.pathname !== '/help';
+
   return (
     <Routes>
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/settings" element={<SettingsPage />} />
+      <Route path="/" element={shouldGate ? <Navigate to="/setup" replace /> : <DashboardPage />} />
+      <Route path="/settings" element={shouldGate ? <Navigate to="/setup" replace /> : <SettingsPage />} />
+      <Route path="/events" element={shouldGate ? <Navigate to="/setup" replace /> : <EventsPage />} />
+      <Route path="/history" element={shouldGate ? <Navigate to="/setup" replace /> : <HistoryPage />} />
+      <Route path="/stats" element={shouldGate ? <Navigate to="/setup" replace /> : <StatsPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/help" element={<HelpPage />} />
-      <Route path="/events" element={<EventsPage />} />
-      <Route path="/history" element={<HistoryPage />} />
-      <Route path="/stats" element={<StatsPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
