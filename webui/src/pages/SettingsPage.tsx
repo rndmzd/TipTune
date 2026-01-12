@@ -4,6 +4,8 @@ import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 
+declare const __APP_VERSION__: string;
+
 type DevicesResp = { ok: true; devices: Device[] };
 type QueueResp = { ok: true; queue: QueueState };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
@@ -134,6 +136,8 @@ export function SettingsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceId, setDeviceId] = useState<string>('');
 
+  const [runtimeAppVersion, setRuntimeAppVersion] = useState<string>('');
+
   const [cfg, setCfg] = useState<Record<string, Record<string, string>>>({});
   const [setupStatus, setSetupStatus] = useState<SetupStatusResp | null>(null);
   const [spotifyStatus, setSpotifyStatus] = useState<SpotifyAuthStatusResp | null>(null);
@@ -214,6 +218,27 @@ export function SettingsPage() {
     ]).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const mod: any = await import('@tauri-apps/api/app');
+        const getVersionFn = mod?.getVersion;
+        if (typeof getVersionFn !== 'function') return;
+        const v = await getVersionFn();
+        if (cancelled) return;
+        if (typeof v === 'string') setRuntimeAppVersion(v);
+      } catch {
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const v = (section: string, key: string) => ((cfg[section] || {})[key] || '').toString();
 
   const autoCheckUpdatesEnabled = (() => {
@@ -240,6 +265,8 @@ export function SettingsPage() {
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
   const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
+
+  const appVersion = runtimeAppVersion || (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '');
 
   return (
     <>
@@ -732,6 +759,10 @@ export function SettingsPage() {
           <h2>App Updates</h2>
           <div className="muted" style={{ marginTop: -6 }}>
             Check for updates via GitHub releases.
+          </div>
+
+          <div className="muted" style={{ marginTop: 8 }}>
+            Current version: {appVersion || '(unknown)'}
           </div>
 
           <label style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}>
