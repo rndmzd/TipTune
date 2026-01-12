@@ -25,6 +25,8 @@ song_cost = 27
 multi_request_tips = true
 skip_song_cost = 51
 request_overlay_duration = 10
+debug_log_to_file = false
+debug_log_path =
 
 [OBS]
 # OBS WebSocket configuration

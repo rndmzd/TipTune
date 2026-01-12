@@ -37,29 +37,105 @@ shutdown_event: asyncio.Event = asyncio.Event()
 
 def _setup_logging() -> None:
     root = logging.getLogger()
-    if root.handlers:
-        return
+
+    def _truthy(raw: Any) -> bool:
+        s = str(raw or '').strip().lower()
+        return s in ('1', 'true', 'yes', 'y', 'on')
 
     level_name = str(os.getenv('TIPTUNE_LOG_LEVEL', 'INFO') or 'INFO').strip().upper()
-    level = getattr(logging, level_name, logging.INFO)
-    root.setLevel(level)
+    console_level = getattr(logging, level_name, logging.INFO)
 
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(level)
-    sh.setFormatter(StructuredLogFormatter())
-    root.addHandler(sh)
+    file_enabled = False
+    file_path: Optional[str] = None
 
-    log_path = os.getenv('TIPTUNE_LOG_PATH')
-    if isinstance(log_path, str) and log_path.strip():
+    env_log_path = os.getenv('TIPTUNE_LOG_PATH')
+    if isinstance(env_log_path, str) and env_log_path.strip():
+        file_enabled = True
+        file_path = env_log_path.strip()
+    else:
         try:
-            p = Path(log_path.strip())
-            ensure_parent_dir(p)
-            fh = logging.FileHandler(p, encoding='utf-8')
-            fh.setLevel(level)
-            fh.setFormatter(StructuredLogFormatter())
-            root.addHandler(fh)
+            file_enabled = _truthy(config.get('General', 'debug_log_to_file', fallback='false'))
+        except Exception:
+            file_enabled = False
+
+        if file_enabled:
+            cfg_path = ''
+            try:
+                cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
+            except Exception:
+                cfg_path = ''
+
+            if cfg_path:
+                file_path = cfg_path
+            else:
+                default_path = os.getenv('TIPTUNE_DEFAULT_LOG_PATH')
+                if isinstance(default_path, str) and default_path.strip():
+                    file_path = default_path.strip()
+                else:
+                    file_path = str(get_cache_dir() / 'tiptune-debug.log')
+
+    root.setLevel(logging.DEBUG if file_enabled else console_level)
+
+    formatter = StructuredLogFormatter()
+
+    sh: Optional[logging.StreamHandler] = None
+    for h in root.handlers:
+        if type(h) is logging.StreamHandler and getattr(h, 'stream', None) is sys.stdout:
+            sh = h
+            break
+    if sh is None:
+        sh = logging.StreamHandler(sys.stdout)
+        root.addHandler(sh)
+    sh.setLevel(console_level)
+    sh.setFormatter(formatter)
+
+    file_handlers: list[logging.FileHandler] = []
+    for h in list(root.handlers):
+        if isinstance(h, logging.FileHandler):
+            file_handlers.append(h)
+
+    if not file_enabled:
+        for fh in file_handlers:
+            try:
+                root.removeHandler(fh)
+                fh.close()
+            except Exception:
+                pass
+        return
+
+    if not isinstance(file_path, str) or not file_path.strip():
+        return
+
+    desired_path = os.path.abspath(file_path.strip())
+    keep: Optional[logging.FileHandler] = None
+    for fh in file_handlers:
+        try:
+            existing_path = os.path.abspath(getattr(fh, 'baseFilename', '') or '')
+        except Exception:
+            existing_path = ''
+
+        if existing_path and existing_path == desired_path:
+            keep = fh
+            continue
+
+        try:
+            root.removeHandler(fh)
+            fh.close()
         except Exception:
             pass
+
+    if keep is None:
+        try:
+            p = Path(file_path.strip())
+            ensure_parent_dir(p)
+            keep = logging.FileHandler(p, encoding='utf-8')
+            root.addHandler(keep)
+        except Exception:
+            keep = None
+
+    if keep is not None:
+        keep.setLevel(logging.DEBUG)
+        keep.setFormatter(formatter)
 
 
 _setup_logging()
@@ -2435,7 +2511,7 @@ class SongRequestService:
             "OpenAI": {"api_key", "model"},
             "Spotify": {"client_id", "redirect_url", "playback_device_id"},
             "Search": {"google_api_key", "google_cx"},
-            "General": {"song_cost", "skip_song_cost", "multi_request_tips", "request_overlay_duration", "setup_complete", "auto_check_updates"},
+            "General": {"song_cost", "skip_song_cost", "multi_request_tips", "request_overlay_duration", "setup_complete", "auto_check_updates", "debug_log_to_file", "debug_log_path"},
             "OBS": {"enabled", "host", "port", "password"},
             "Web": {"host", "port"},
         }
@@ -2468,6 +2544,11 @@ class SongRequestService:
 
         try:
             config.read(config_path)
+        except Exception:
+            pass
+
+        try:
+            _setup_logging()
         except Exception:
             pass
 

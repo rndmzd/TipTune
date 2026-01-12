@@ -61,21 +61,21 @@ pub fn run() {
                     .env("TIPTUNE_WEB_HOST", "127.0.0.1")
                     .env("TIPTUNE_WEB_PORT", "8765");
 
-                let sidecar_command = if env::var("TIPTUNE_LOG_LEVEL").is_err() {
+                let mut sidecar_command = if env::var("TIPTUNE_LOG_LEVEL").is_err() {
                     sidecar_command.env("TIPTUNE_LOG_LEVEL", "INFO")
                 } else {
                     sidecar_command
                 };
 
-                let sidecar_command = if env::var("TIPTUNE_LOG_PATH").is_err() {
+                // In `tauri dev` the CLI watches the project directory.
+                // If the sidecar writes logs into the repo, it can trigger an infinite rebuild/restart loop.
+                // In debug builds, always force the sidecar log file into the app data dir.
+                if env::var("TIPTUNE_DEFAULT_LOG_PATH").is_err() {
                     if let Some(p) = &sidecar_log_path {
-                        sidecar_command.env("TIPTUNE_LOG_PATH", p.to_string_lossy().to_string())
-                    } else {
-                        sidecar_command
+                        sidecar_command = sidecar_command
+                            .env("TIPTUNE_DEFAULT_LOG_PATH", p.to_string_lossy().to_string());
                     }
-                } else {
-                    sidecar_command
-                };
+                }
 
                 let (mut rx, child) = sidecar_command.spawn()?;
 

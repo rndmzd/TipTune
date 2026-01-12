@@ -120,6 +120,8 @@ function tooltip(section: string, key: string) {
     'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
+    'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
+    'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
   };
 
   return tips[k] || '';
@@ -249,6 +251,12 @@ export function SettingsPage() {
     const raw = v('General', 'multi_request_tips');
     const s = (raw || 'true').trim().toLowerCase();
     return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
+  })();
+
+  const debugLogToFileEnabled = (() => {
+    const raw = v('General', 'debug_log_to_file');
+    const s = (raw || 'false').trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
   })();
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
@@ -459,6 +467,32 @@ export function SettingsPage() {
             title={tooltip('General', 'request_overlay_duration')}
             value={v('General', 'request_overlay_duration')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
+          />
+
+          <label
+            title={tooltip('General', 'debug_log_to_file')}
+            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
+          >
+            <input
+              type="checkbox"
+              checked={debugLogToFileEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), debug_log_to_file: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span style={{ whiteSpace: 'nowrap' }}>Write debug logs to file</span>
+          </label>
+
+          <label title={tooltip('General', 'debug_log_path')}>{humanizeKey('debug_log_path')}</label>
+          <input
+            type="text"
+            title={tooltip('General', 'debug_log_path')}
+            value={v('General', 'debug_log_path')}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: e.target.value } }))}
           />
         </div>
       </div>
@@ -914,6 +948,8 @@ export function SettingsPage() {
                   skip_song_cost: v('General', 'skip_song_cost'),
                   request_overlay_duration: v('General', 'request_overlay_duration'),
                   auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
+                  debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
+                  debug_log_path: v('General', 'debug_log_path'),
                 },
                 OBS: {
                   enabled: v('OBS', 'enabled'),
