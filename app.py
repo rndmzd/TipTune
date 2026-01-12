@@ -961,6 +961,9 @@ class SongRequestService:
         self._yt_now_playing: Optional[dict] = None
         self._yt_started_ts: Optional[float] = None
 
+        self._yt_queue_path: Path = cache_dir / 'yt_queue_state.json'
+        self._load_yt_queue_state_from_disk()
+
     def _active_source(self) -> str:
         return _active_music_source()
 
@@ -985,6 +988,106 @@ class SongRequestService:
             return False
         except Exception:
             return False
+
+    def _load_yt_queue_state_from_disk(self) -> None:
+        try:
+            raw = read_text_if_exists(self._yt_queue_path)
+            if raw is None:
+                return
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                return
+
+            queued = payload.get('queued_items')
+            now_item = payload.get('now_playing_item')
+            paused = payload.get('paused')
+
+            if isinstance(queued, list):
+                self._yt_queue = [dict(x) for x in queued if isinstance(x, dict)]
+            if isinstance(now_item, dict):
+                self._yt_now_playing = dict(now_item)
+            if paused is not None:
+                self._yt_paused = bool(paused)
+        except Exception:
+            return
+
+    def _persist_yt_queue_state_to_disk(self) -> None:
+        try:
+            ensure_parent_dir(self._yt_queue_path)
+            payload = {
+                'ts': time.time(),
+                'paused': bool(self._yt_paused),
+                'now_playing_item': self._yt_now_playing,
+                'queued_items': self._yt_queue,
+            }
+            tmp = self._yt_queue_path.with_suffix(self._yt_queue_path.suffix + '.tmp')
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
+            os.replace(tmp, self._yt_queue_path)
+        except Exception:
+            return
+
+    def _yt_extract_video_meta(self, video_url: str) -> Optional[dict]:
+        if YoutubeDL is None:
+            return None
+        if not self._is_allowed_youtube_url(video_url):
+            return None
+
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False) or {}
+        if not isinstance(info, dict):
+            return None
+        return info
+
+    async def _yt_enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        enriched = dict(item)
+        uri = enriched.get('uri')
+        if not isinstance(uri, str) or uri.strip() == '':
+            return enriched
+        uri = uri.strip()
+
+        if 'external_url' not in enriched:
+            enriched['external_url'] = uri
+
+        if isinstance(enriched.get('name'), str) and enriched.get('name').strip() != '':
+            return enriched
+
+        loop = asyncio.get_running_loop()
+        try:
+            info = await asyncio.wait_for(loop.run_in_executor(None, lambda: self._yt_extract_video_meta(uri)), timeout=10)
+        except Exception:
+            info = None
+
+        if not isinstance(info, dict):
+            return enriched
+
+        title = info.get('title')
+        if isinstance(title, str) and title.strip() != '':
+            enriched['name'] = title.strip()
+
+        uploader = info.get('uploader') or info.get('channel')
+        if isinstance(uploader, str) and uploader.strip() != '':
+            enriched['artists'] = [uploader.strip()]
+
+        duration = info.get('duration')
+        try:
+            if duration is not None:
+                d = int(duration)
+                if d > 0:
+                    enriched['duration_ms'] = d * 1000
+        except Exception:
+            pass
+
+        thumb = info.get('thumbnail')
+        if isinstance(thumb, str) and thumb.strip() != '':
+            enriched['album_image_url'] = thumb.strip()
+
+        return enriched
 
     def _yt_fetch_best_audio_url(self, video_url: str) -> tuple[str, Optional[str]]:
         if YoutubeDL is None:
@@ -1115,6 +1218,7 @@ class SongRequestService:
                 return out
 
     async def _yt_start_next_if_needed(self) -> bool:
+        started = False
         async with self._yt_lock:
             if self._yt_paused:
                 return False
@@ -1125,7 +1229,13 @@ class SongRequestService:
             nxt = self._yt_queue.pop(0)
             self._yt_now_playing = nxt
             self._yt_started_ts = time.time()
-            return True
+            started = True
+        if started:
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
+        return started
 
     async def advance_queue(self) -> bool:
         if self._active_source() != 'youtube':
@@ -1133,6 +1243,10 @@ class SongRequestService:
         async with self._yt_lock:
             self._yt_now_playing = None
             self._yt_started_ts = None
+        try:
+            self._persist_yt_queue_state_to_disk()
+        except Exception:
+            pass
         return await self._yt_start_next_if_needed()
 
     def _get_obs_overlay_duration_seconds(self) -> int:
@@ -2447,7 +2561,11 @@ class SongRequestService:
         if self._active_source() == 'youtube':
             async with self._yt_lock:
                 self._yt_paused = True
-            ok = True
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
+            return True
         else:
             if not getattr(self.actions, 'chatdj_enabled', False):
                 return False
@@ -2467,6 +2585,10 @@ class SongRequestService:
         if self._active_source() == 'youtube':
             async with self._yt_lock:
                 self._yt_paused = False
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
             await self._yt_start_next_if_needed()
             ok = True
         else:
@@ -2491,6 +2613,10 @@ class SongRequestService:
                     return False
                 item = self._yt_queue.pop(from_index)
                 self._yt_queue.insert(to_index, item)
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
             return True
 
         if not getattr(self.actions, 'chatdj_enabled', False):
@@ -2547,8 +2673,17 @@ class SongRequestService:
             if 'external_url' not in item:
                 item['external_url'] = track_uri
 
+            try:
+                item = await self._yt_enrich_item(item)
+            except Exception:
+                pass
+
             async with self._yt_lock:
                 self._yt_queue.append(item)
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
             await self._yt_start_next_if_needed()
             return True
 
@@ -2594,6 +2729,10 @@ class SongRequestService:
             if 'external_url' not in item:
                 item['external_url'] = track_uri
             try:
+                item = await self._yt_enrich_item(item)
+            except Exception:
+                pass
+            try:
                 idx = int(index)
             except Exception:
                 idx = 0
@@ -2602,6 +2741,10 @@ class SongRequestService:
             async with self._yt_lock:
                 idx = min(idx, len(self._yt_queue))
                 self._yt_queue.insert(idx, item)
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
             await self._yt_start_next_if_needed()
             return True
 
@@ -2835,6 +2978,10 @@ class SongRequestService:
                 if index < 0 or index >= len(self._yt_queue):
                     return False
                 self._yt_queue.pop(index)
+            try:
+                self._persist_yt_queue_state_to_disk()
+            except Exception:
+                pass
             return True
 
         if not getattr(self.actions, 'chatdj_enabled', False):

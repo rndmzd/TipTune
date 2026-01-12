@@ -424,6 +424,35 @@ export function DashboardPage() {
   const posClampedMs = safePosMs != null && durationMs != null ? Math.max(0, Math.min(safePosMs, durationMs)) : safePosMs;
   const pct = durationMs && posClampedMs != null && durationMs > 0 ? Math.max(0, Math.min(1, posClampedMs / durationMs)) : null;
 
+  useEffect(() => {
+    if (!isYouTube) return;
+    if (paused) return;
+    const uri = typeof nowPlaying?.uri === 'string' ? nowPlaying.uri.trim() : '';
+    if (!uri) return;
+
+    const a = youtubeAudioRef.current;
+    if (!a) return;
+
+    try {
+      a.load();
+    } catch {
+    }
+
+    const t = window.setTimeout(() => {
+      try {
+        const p = a.play();
+        if (p && typeof (p as any).catch === 'function') {
+          (p as any).catch(() => {});
+        }
+      } catch {
+      }
+    }, 50);
+
+    return () => {
+      window.clearTimeout(t);
+    };
+  }, [isYouTube, paused, nowPlaying?.uri]);
+
   return (
     <>
       <HeaderBar
@@ -466,9 +495,22 @@ export function DashboardPage() {
                   <div style={{ marginTop: 10 }}>
                     <audio
                       ref={youtubeAudioRef}
+                      autoPlay
                       controls
-                      preload="none"
+                      preload="auto"
                       src={`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`}
+                      onCanPlay={() => {
+                        if (paused) return;
+                        try {
+                          const a = youtubeAudioRef.current;
+                          if (!a) return;
+                          const p = a.play();
+                          if (p && typeof (p as any).catch === 'function') {
+                            (p as any).catch(() => {});
+                          }
+                        } catch {
+                        }
+                      }}
                       onEnded={() => {
                         nextTrack().catch(() => {});
                       }}
