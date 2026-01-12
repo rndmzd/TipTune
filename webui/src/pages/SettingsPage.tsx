@@ -8,6 +8,19 @@ type DevicesResp = { ok: true; devices: Device[] };
 type QueueResp = { ok: true; queue: QueueState };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 
+type SetupStatusResp = {
+  ok: true;
+  setup_complete: boolean;
+  events_configured: boolean;
+  openai_configured: boolean;
+  google_configured: boolean;
+};
+
+type SpotifyAuthStatusResp = {
+  ok: true;
+  configured: boolean;
+};
+
 type ObsSourceStatus = {
   name: string;
   input_exists: boolean;
@@ -122,6 +135,8 @@ export function SettingsPage() {
   const [deviceId, setDeviceId] = useState<string>('');
 
   const [cfg, setCfg] = useState<Record<string, Record<string, string>>>({});
+  const [setupStatus, setSetupStatus] = useState<SetupStatusResp | null>(null);
+  const [spotifyStatus, setSpotifyStatus] = useState<SpotifyAuthStatusResp | null>(null);
   const [secrets, setSecrets] = useState({
     eventsUrl: '',
     openaiKey: '',
@@ -167,6 +182,16 @@ export function SettingsPage() {
     setCfg(data.config || {});
   }
 
+  async function loadSetupStatus() {
+    const data = await apiJson<SetupStatusResp>('/api/setup/status');
+    setSetupStatus(data);
+  }
+
+  async function loadSpotifyStatus() {
+    const data = await apiJson<SpotifyAuthStatusResp>('/api/spotify/auth/status');
+    setSpotifyStatus(data);
+  }
+
   async function loadObsStatus() {
     try {
       const data = await apiJson<ObsStatusResp>('/api/obs/status');
@@ -183,6 +208,8 @@ export function SettingsPage() {
       refreshCurrentDevice().catch((e) => setCurrentDeviceText(`Error: ${e?.message ? e.message : String(e)}`)),
       refreshDevices().catch(() => {}),
       loadConfig().catch((e) => setStatus(`Error loading config: ${e?.message ? e.message : String(e)}`)),
+      loadSetupStatus().catch(() => {}),
+      loadSpotifyStatus().catch(() => {}),
       loadObsStatus().catch(() => {}),
     ]).catch(() => {});
   }, []);
@@ -205,6 +232,11 @@ export function SettingsPage() {
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
   const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
+
+  const eventsPlaceholder = setupStatus?.events_configured ? '(leave blank to keep)' : '';
+  const openaiPlaceholder = setupStatus?.openai_configured ? '(leave blank to keep)' : '';
+  const spotifySecretPlaceholder = spotifyStatus?.configured ? '(leave blank to keep)' : '';
+  const googleKeyPlaceholder = setupStatus?.google_configured ? '(leave blank to keep)' : '';
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
   const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
@@ -255,7 +287,7 @@ export function SettingsPage() {
           <label title={tooltip('Events API', 'url')}>URL (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep)"
+            placeholder={eventsPlaceholder}
             title={tooltip('Events API', 'url')}
             value={secrets.eventsUrl}
             onChange={(e) => setSecrets((s) => ({ ...s, eventsUrl: e.target.value }))}
@@ -274,7 +306,7 @@ export function SettingsPage() {
           <label title={tooltip('OpenAI', 'api_key')}>API key (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep)"
+            placeholder={openaiPlaceholder}
             title={tooltip('OpenAI', 'api_key')}
             value={secrets.openaiKey}
             onChange={(e) => setSecrets((s) => ({ ...s, openaiKey: e.target.value }))}
@@ -302,7 +334,7 @@ export function SettingsPage() {
           <label title={tooltip('Spotify', 'client_secret')}>{humanizeKey('client_secret')} (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep)"
+            placeholder={spotifySecretPlaceholder}
             title={tooltip('Spotify', 'client_secret')}
             value={secrets.spotifySecret}
             onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
@@ -344,7 +376,7 @@ export function SettingsPage() {
           <label title={tooltip('OBS', 'password')}>{humanizeKey('password')} (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep)"
+            placeholder=""
             title={tooltip('OBS', 'password')}
             value={secrets.obsPassword}
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
@@ -358,7 +390,7 @@ export function SettingsPage() {
           <label title={tooltip('Search', 'google_api_key')}>{humanizeKey('google_api_key')} (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep)"
+            placeholder={googleKeyPlaceholder}
             title={tooltip('Search', 'google_api_key')}
             value={secrets.googleKey}
             onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
