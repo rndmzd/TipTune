@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 
 import { DashboardPage } from './pages/DashboardPage';
@@ -24,7 +24,6 @@ function autoCheckUpdatesEnabled(cfg: Record<string, Record<string, string>>): b
 export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
   const location = useLocation();
-  const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (didAutoCheckRef.current) return;
@@ -94,46 +93,57 @@ export function App() {
     run().catch(() => {});
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  function GatedRoute(props: { element: JSX.Element }) {
+    const loc = useLocation();
+    const [allowed, setAllowed] = useState<boolean | null>(null);
+
+    const forceDashboard = useMemo(() => {
       try {
-        const data = await apiJson<{ ok: true; setup_complete: boolean }>('/api/setup/status');
-        if (cancelled) return;
-        setSetupComplete(!!data.setup_complete);
+        const params = new URLSearchParams(loc.search || '');
+        const v = (params.get('dashboard') || '').trim().toLowerCase();
+        return v === '1' || v === 'true' || v === 'yes' || v === 'on';
       } catch {
-        if (cancelled) return;
-        setSetupComplete(true);
+        return false;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    }, [loc.search]);
 
-  const forceDashboard = (() => {
-    try {
-      const params = new URLSearchParams(location.search || '');
-      const v = (params.get('dashboard') || '').trim().toLowerCase();
-      return v === '1' || v === 'true' || v === 'yes' || v === 'on';
-    } catch {
-      return false;
-    }
-  })();
+    useEffect(() => {
+      let cancelled = false;
 
-  const shouldGate =
-    setupComplete === false &&
-    !forceDashboard &&
-    location.pathname !== '/setup' &&
-    location.pathname !== '/help';
+      if (forceDashboard) {
+        setAllowed(true);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      (async () => {
+        try {
+          const data = await apiJson<{ ok: true; setup_complete: boolean }>('/api/setup/status');
+          if (cancelled) return;
+          setAllowed(!!data.setup_complete);
+        } catch {
+          if (cancelled) return;
+          setAllowed(true);
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [loc.pathname, loc.search, forceDashboard]);
+
+    if (allowed === null) return null;
+    return allowed ? props.element : <Navigate to="/setup" replace />;
+  }
 
   return (
     <Routes>
-      <Route path="/" element={shouldGate ? <Navigate to="/setup" replace /> : <DashboardPage />} />
-      <Route path="/settings" element={shouldGate ? <Navigate to="/setup" replace /> : <SettingsPage />} />
-      <Route path="/events" element={shouldGate ? <Navigate to="/setup" replace /> : <EventsPage />} />
-      <Route path="/history" element={shouldGate ? <Navigate to="/setup" replace /> : <HistoryPage />} />
-      <Route path="/stats" element={shouldGate ? <Navigate to="/setup" replace /> : <StatsPage />} />
+      <Route path="/" element={<GatedRoute element={<DashboardPage />} />} />
+      <Route path="/settings" element={<GatedRoute element={<SettingsPage />} />} />
+      <Route path="/events" element={<GatedRoute element={<EventsPage />} />} />
+      <Route path="/history" element={<GatedRoute element={<HistoryPage />} />} />
+      <Route path="/stats" element={<GatedRoute element={<StatsPage />} />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/help" element={<HelpPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
