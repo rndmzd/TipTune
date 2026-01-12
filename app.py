@@ -186,6 +186,15 @@ def _is_setup_complete(cfg: Optional[configparser.ConfigParser] = None) -> bool:
         return False
 
 
+def _is_setup_complete_fresh() -> bool:
+    try:
+        fresh_config = configparser.ConfigParser()
+        fresh_config.read(config_path)
+        return _is_setup_complete(fresh_config)
+    except Exception:
+        return False
+
+
 def _update_ini_file(path: Path, updates: Dict[str, Dict[str, str]]) -> None:
     if not path.exists():
         example_path = path.with_name(path.name + '.example')
@@ -358,7 +367,7 @@ class WebUI:
 
     async def _page_app(self, request: web.Request) -> web.Response:
         force_dashboard = _as_bool(request.query.get('dashboard'), default=False)
-        if request.path not in ('/setup', '/help') and not force_dashboard and not _is_setup_complete():
+        if request.path not in ('/setup', '/help') and not force_dashboard and not _is_setup_complete_fresh():
             raise web.HTTPFound('/setup')
 
         if self._spa_index.exists():

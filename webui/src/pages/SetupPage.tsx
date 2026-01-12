@@ -507,7 +507,7 @@ export function SetupPage() {
           <label>{humanizeKey('client_secret')} (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep existing)"
+            placeholder={spotifyConfiguredFromStatus ? '(leave blank to keep existing)' : ''}
             value={secrets.spotifySecret}
             onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
           />
@@ -573,7 +573,7 @@ export function SetupPage() {
           <label>{humanizeKey('password')} (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep existing)"
+            placeholder=""
             value={secrets.obsPassword}
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />
@@ -694,7 +694,7 @@ export function SetupPage() {
           <label>URL (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep existing)"
+            placeholder={setupStatus?.events_configured ? '(leave blank to keep existing)' : ''}
             value={secrets.eventsUrl}
             onChange={(e) => setSecrets((s) => ({ ...s, eventsUrl: e.target.value }))}
           />
@@ -726,7 +726,7 @@ export function SetupPage() {
           <label>API key (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep existing)"
+            placeholder={setupStatus?.openai_configured ? '(leave blank to keep existing)' : ''}
             value={secrets.openaiKey}
             onChange={(e) => setSecrets((s) => ({ ...s, openaiKey: e.target.value }))}
           />
@@ -749,7 +749,7 @@ export function SetupPage() {
           <label>{humanizeKey('google_api_key')} (secret)</label>
           <input
             type="password"
-            placeholder="(leave blank to keep existing)"
+            placeholder={setupStatus?.google_configured ? '(leave blank to keep existing)' : ''}
             value={secrets.googleKey}
             onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
           />
