@@ -36,7 +36,7 @@ debug_log_path =
 enabled = true
 host = 127.0.0.1
 port = 4455
-password = your-obs-password
+password =
 
 [Web]
 host = 127.0.0.1

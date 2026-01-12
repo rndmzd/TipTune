@@ -439,6 +439,7 @@ class WebUI:
             web.post('/api/queue/move', self._api_queue_move),
             web.post('/api/queue/delete', self._api_queue_delete),
             web.get('/api/obs/status', self._api_obs_status),
+            web.post('/api/obs/scenes', self._api_obs_scenes),
             web.post('/api/obs/ensure_sources', self._api_obs_ensure_sources),
             web.post('/api/obs/ensure_spotify_audio_capture', self._api_obs_ensure_spotify_audio_capture),
             web.post('/api/obs/now_playing', self._api_obs_now_playing),
@@ -775,6 +776,37 @@ class WebUI:
         except Exception as exc:
             logger.exception("webui.api.obs_status.error", exc=exc, message="Failed to get OBS status")
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def _api_obs_scenes(self, request: web.Request) -> web.Response:
+        try:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+
+            host = request.query.get('host')
+            port_raw = request.query.get('port')
+            password = payload.get('password') if isinstance(payload, dict) else None
+
+            if isinstance(host, str):
+                host = host.strip()
+            if not isinstance(host, str) or host == "":
+                host = None
+
+            port: Optional[int] = None
+            if isinstance(port_raw, str) and port_raw.strip():
+                try:
+                    port = int(port_raw.strip())
+                except Exception:
+                    port = None
+
+            scenes = await self._service.list_obs_scenes(host=host, port=port, password=password)
+            if scenes is None:
+                return web.json_response({"ok": False, "error": "OBS not available", "scenes": []}, status=400)
+            return web.json_response({"ok": True, "scenes": scenes})
+        except Exception as exc:
+            logger.exception("webui.api.obs_scenes.error", exc=exc, message="Failed to list OBS scenes")
+            return web.json_response({"ok": False, "error": str(exc), "scenes": []}, status=500)
 
     async def _api_obs_ensure_sources(self, _request: web.Request) -> web.Response:
         try:
@@ -1282,13 +1314,14 @@ class SongRequestService:
         if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
             return {"enabled": True, "connected": False}
 
-        status = await obs.get_text_source_status(scene_key='main')
+        scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
+        status = await obs.get_text_source_status(scene_key='main', scene_name=scene_name or None)
         if status is None:
             return {"enabled": True, "connected": False}
 
         spotify_audio_capture = None
         try:
-            spotify_audio_capture = await obs.get_spotify_audio_capture_status(scene_key='main', exe_name='Spotify.exe')
+            spotify_audio_capture = await obs.get_spotify_audio_capture_status(scene_key='main', exe_name='Spotify.exe', scene_name=scene_name or None)
         except Exception:
             spotify_audio_capture = None
 
@@ -1307,7 +1340,8 @@ class SongRequestService:
         obs = getattr(self.actions, 'obs', None)
         if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
             return None
-        return await obs.ensure_text_sources(scene_key='main')
+        scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
+        return await obs.ensure_text_sources(scene_key='main', scene_name=scene_name or None)
 
     async def ensure_obs_spotify_audio_capture(self) -> Optional[Dict[str, Any]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
@@ -1323,7 +1357,54 @@ class SongRequestService:
         if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
             return None
 
-        return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name='Spotify.exe', preferred_input_name='Spotify Audio')
+        scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
+        return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name='Spotify.exe', preferred_input_name='Spotify Audio', scene_name=scene_name or None)
+
+    async def list_obs_scenes(self, host: Optional[str] = None, port: Optional[int] = None, password: Any = None) -> Optional[list[str]]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return None
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        use_host = host
+        use_port = port
+        use_password = password
+
+        if use_host is None:
+            use_host = config.get("OBS", "host", fallback="localhost").strip() if config.has_section("OBS") else "localhost"
+        if use_port is None:
+            try:
+                use_port = int(config.getint("OBS", "port", fallback=4455)) if config.has_section("OBS") else 4455
+            except Exception:
+                use_port = 4455
+        if not isinstance(use_port, int) or use_port <= 0:
+            use_port = 4455
+
+        if isinstance(use_password, str) and use_password.strip() == "":
+            use_password = None
+        if not isinstance(use_password, str):
+            use_password = None
+
+        try:
+            from handlers.obshandler import OBSHandler
+        except Exception:
+            return None
+
+        temp = OBSHandler(host=str(use_host), port=int(use_port), password=use_password)
+        try:
+            ok = await temp.connect()
+            if not ok:
+                return None
+            return await temp.list_scene_names()
+        finally:
+            try:
+                await temp.disconnect()
+            except Exception:
+                pass
 
     async def trigger_obs_test_overlay(self, overlay: Any) -> tuple[bool, Optional[str]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
@@ -1441,7 +1522,8 @@ class SongRequestService:
         async def _run() -> None:
             try:
                 try:
-                    await obs.ensure_text_sources(scene_key='main', source_names=['NowPlayingOverlay'])
+                    scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
+                    await obs.ensure_text_sources(scene_key='main', source_names=['NowPlayingOverlay'], scene_name=scene_name or None)
                 except Exception:
                     pass
                 await obs.trigger_now_playing_overlay(msg, duration)
@@ -3156,7 +3238,7 @@ class SongRequestService:
             "Search": {"google_api_key", "google_cx"},
             "Music": {"source"},
             "General": {"song_cost", "skip_song_cost", "multi_request_tips", "request_overlay_duration", "setup_complete", "auto_check_updates", "debug_log_to_file", "debug_log_path"},
-            "OBS": {"enabled", "host", "port", "password"},
+            "OBS": {"enabled", "host", "port", "password", "scene_name"},
             "Web": {"host", "port"},
         }
 

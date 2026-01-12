@@ -47,6 +47,12 @@ type ObsEnsureResp = {
   };
 };
 
+type ObsScenesResp = {
+  ok: boolean;
+  scenes?: string[];
+  error?: string;
+};
+
 type SetupStatusResp = {
   ok: true;
   setup_complete: boolean;
@@ -195,6 +201,9 @@ export function SetupPage() {
   const [obsEnsureMsg, setObsEnsureMsg] = useState('');
   const [obsBusy, setObsBusy] = useState(false);
 
+  const [obsScenes, setObsScenes] = useState<string[]>([]);
+  const [obsScenesMsg, setObsScenesMsg] = useState('');
+
   const v = (section: string, key: string) => norm((cfg[section] || {})[key]);
 
   const obsEnabled = asBool(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled);
@@ -241,6 +250,28 @@ export function SetupPage() {
     } catch (e: any) {
       setObsStatus(null);
       setObsMsg(`Error loading OBS status: ${e?.message ? e.message : String(e)}`);
+    }
+  }
+
+  async function loadObsScenes() {
+    setObsScenesMsg('Loading scenes...');
+    try {
+      const host = norm(v('OBS', 'host'));
+      const port = norm(v('OBS', 'port'));
+      const qs = `?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
+      const resp = await apiJson<ObsScenesResp>(`/api/obs/scenes${qs}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: secrets.obsPassword }),
+      });
+
+      const scenes = Array.isArray(resp.scenes) ? resp.scenes.filter((s) => typeof s === 'string' && norm(s) !== '') : [];
+      scenes.sort((a, b) => a.localeCompare(b));
+      setObsScenes(scenes);
+      setObsScenesMsg(scenes.length ? '' : 'No scenes returned from OBS.');
+    } catch (e: any) {
+      setObsScenes([]);
+      setObsScenesMsg(`Error loading scenes: ${e?.message ? e.message : String(e)}`);
     }
   }
 
@@ -346,11 +377,17 @@ export function SetupPage() {
             host: v('OBS', 'host'),
             port: v('OBS', 'port'),
             password: secrets.obsPassword,
+            scene_name: v('OBS', 'scene_name'),
           },
         });
         setSecrets((s) => ({ ...s, obsPassword: '' }));
         await loadConfig();
         await loadSetupStatus().catch(() => {});
+
+        // After saving connection info, try to load scene list for the dropdown.
+        if (obsEnabled) {
+          await loadObsScenes().catch(() => {});
+        }
       } else if (step === 'obs_sources') {
         // No config to save here; this step is just to validate/create required sources.
         setStatus('');
@@ -409,6 +446,21 @@ export function SetupPage() {
     loadObsStatus().catch(() => {});
   }, [currentStep, obsEnabled]);
 
+  useEffect(() => {
+    if (currentStep !== 'obs') {
+      setObsScenesMsg('');
+      setObsScenes([]);
+      return;
+    }
+    if (!obsEnabled) return;
+    // If a scene name is already set, and we have host/port, try to preload dropdown.
+    const host = norm(v('OBS', 'host'));
+    const port = norm(v('OBS', 'port'));
+    if (host && port) {
+      loadObsScenes().catch(() => {});
+    }
+  }, [currentStep, obsEnabled]);
+
   const setupComplete = setupStatus ? !!setupStatus.setup_complete : asBool(v('General', 'setup_complete'));
 
   const spotifyOk =
@@ -426,7 +478,8 @@ export function SetupPage() {
 
   const obsHost = norm(v('OBS', 'host'));
   const obsPort = norm(v('OBS', 'port'));
-  const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '');
+  const obsSceneName = norm(v('OBS', 'scene_name'));
+  const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '' && obsSceneName !== '');
 
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
@@ -574,6 +627,28 @@ export function SetupPage() {
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />
           <div className="muted">This is the password configured in OBS → Tools → WebSocket Server Settings.</div>
+
+          <label style={{ marginTop: 12 }}>Overlay scene</label>
+          <select
+            value={obsSceneName}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), scene_name: e.target.value } }))}
+            disabled={!obsEnabled}
+          >
+            <option value="">(select a scene)</option>
+            {(obsScenes || []).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <div className="muted">Pick the scene where TipTune overlays (text sources) should be created/managed.</div>
+
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button type="button" onClick={() => loadObsScenes().catch(() => {})} disabled={!obsEnabled}>
+              Refresh scenes
+            </button>
+          </div>
+          {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
         </div>
       ) : null}
 
