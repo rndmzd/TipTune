@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "updater:default",
+    "dialog:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [

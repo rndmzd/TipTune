@@ -109,7 +109,6 @@ function tooltip(section: string, key: string) {
     'OpenAI.api_key': 'OpenAI API key used to enable AI features (such as ChatDJ). Leave blank to keep the currently saved key.',
     'OpenAI.model': 'OpenAI model name to use for AI features (for example gpt-5-mini).',
     'Spotify.client_id': 'Spotify application Client ID from your Spotify Developer Dashboard.',
-    'Spotify.client_secret': 'Spotify application Client Secret from your Spotify Developer Dashboard. Leave blank to keep the currently saved secret.',
     'Spotify.redirect_url': 'Redirect/callback URL registered in your Spotify app. Must match exactly for authentication to work.',
     'OBS.enabled': 'Enable or disable OBS integration for scene/overlay control.',
     'OBS.host': 'Hostname or IP address where obs-websocket is running (often 127.0.0.1).',
@@ -121,6 +120,8 @@ function tooltip(section: string, key: string) {
     'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
+    'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
+    'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
   };
 
   return tips[k] || '';
@@ -144,7 +145,6 @@ export function SettingsPage() {
   const [secrets, setSecrets] = useState({
     eventsUrl: '',
     openaiKey: '',
-    spotifySecret: '',
     googleKey: '',
     obsPassword: '',
   });
@@ -160,6 +160,32 @@ export function SettingsPage() {
   const [updateBusy, setUpdateBusy] = useState<boolean>(false);
   const [updateMsg, setUpdateMsg] = useState<string>('');
   const [updateObj, setUpdateObj] = useState<any>(null);
+
+  async function browseDebugLogPath() {
+    if (!isTauriRuntime()) return;
+    try {
+      const mod: any = await import('@tauri-apps/plugin-dialog');
+      const saveFn = mod?.save;
+      if (typeof saveFn !== 'function') {
+        throw new Error('Dialog API not available.');
+      }
+
+      const current = v('General', 'debug_log_path');
+      const defaultPath = current && current.trim() ? current.trim() : 'tiptune-debug.log';
+
+      const selected = await saveFn({
+        title: 'Choose debug log file',
+        defaultPath,
+        filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+      });
+
+      if (typeof selected === 'string' && selected.trim()) {
+        setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: selected } }));
+      }
+    } catch (e: any) {
+      setStatus(`Error: ${e?.message ? e.message : String(e)}`);
+    }
+  }
 
   async function refreshCurrentDevice() {
     const data = await apiJson<QueueResp>('/api/queue');
@@ -253,6 +279,12 @@ export function SettingsPage() {
     return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
   })();
 
+  const debugLogToFileEnabled = (() => {
+    const raw = v('General', 'debug_log_to_file');
+    const s = (raw || 'false').trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  })();
+
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
@@ -260,7 +292,6 @@ export function SettingsPage() {
 
   const eventsPlaceholder = setupStatus?.events_configured ? '(leave blank to keep)' : '';
   const openaiPlaceholder = setupStatus?.openai_configured ? '(leave blank to keep)' : '';
-  const spotifySecretPlaceholder = spotifyStatus?.configured ? '(leave blank to keep)' : '';
   const googleKeyPlaceholder = setupStatus?.google_configured ? '(leave blank to keep)' : '';
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
@@ -357,14 +388,6 @@ export function SettingsPage() {
             title={tooltip('Spotify', 'client_id')}
             value={v('Spotify', 'client_id')}
             onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
-          />
-          <label title={tooltip('Spotify', 'client_secret')}>{humanizeKey('client_secret')} (secret)</label>
-          <input
-            type="password"
-            placeholder={spotifySecretPlaceholder}
-            title={tooltip('Spotify', 'client_secret')}
-            value={secrets.spotifySecret}
-            onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
           />
           <label title={tooltip('Spotify', 'redirect_url')}>{humanizeKey('redirect_url')}</label>
           <input
@@ -471,6 +494,40 @@ export function SettingsPage() {
             value={v('General', 'request_overlay_duration')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
           />
+
+          <label
+            title={tooltip('General', 'debug_log_to_file')}
+            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
+          >
+            <input
+              type="checkbox"
+              checked={debugLogToFileEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), debug_log_to_file: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span style={{ whiteSpace: 'nowrap' }}>Write debug logs to file</span>
+          </label>
+
+          <label title={tooltip('General', 'debug_log_path')}>{humanizeKey('debug_log_path')}</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              title={tooltip('General', 'debug_log_path')}
+              value={v('General', 'debug_log_path')}
+              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: e.target.value } }))}
+              style={{ flex: 1 }}
+            />
+            {isTauriRuntime() ? (
+              <button type="button" onClick={() => browseDebugLogPath().catch(() => {})}>
+                Browse…
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -913,7 +970,6 @@ export function SettingsPage() {
                 },
                 Spotify: {
                   client_id: v('Spotify', 'client_id'),
-                  client_secret: secrets.spotifySecret,
                   redirect_url: v('Spotify', 'redirect_url'),
                 },
                 Search: {
@@ -926,6 +982,8 @@ export function SettingsPage() {
                   skip_song_cost: v('General', 'skip_song_cost'),
                   request_overlay_duration: v('General', 'request_overlay_duration'),
                   auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
+                  debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
+                  debug_log_path: v('General', 'debug_log_path'),
                 },
                 OBS: {
                   enabled: v('OBS', 'enabled'),
@@ -943,7 +1001,7 @@ export function SettingsPage() {
                 });
 
                 setStatus('Saved.');
-                setSecrets({ eventsUrl: '', openaiKey: '', spotifySecret: '', googleKey: '', obsPassword: '' });
+                setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
                 await loadConfig();
               } catch (e: any) {
                 setStatus(`Error: ${e?.message ? e.message : String(e)}`);

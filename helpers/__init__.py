@@ -1,7 +1,7 @@
 import configparser
 from pathlib import Path
 
-from spotipy import Spotify, SpotifyOAuth
+from spotipy import Spotify, SpotifyPKCE
 
 from utils.structured_logging import get_structured_logger
 from utils.runtime_paths import ensure_parent_dir, get_config_path, get_spotipy_cache_path
@@ -32,18 +32,16 @@ def refresh_spotify_client() -> None:
             return
 
         client_id = config.get("Spotify", "client_id", fallback="").strip()
-        client_secret = config.get("Spotify", "client_secret", fallback="").strip()
         redirect_url = config.get("Spotify", "redirect_url", fallback="").strip()
 
-        if not client_id or not client_secret or not redirect_url:
+        if not client_id or not redirect_url:
             return
 
         cache_path = get_spotipy_cache_path()
         ensure_parent_dir(cache_path)
 
-        sp_oauth = SpotifyOAuth(
+        sp_oauth = SpotifyPKCE(
             client_id=client_id,
-            client_secret=client_secret,
             redirect_uri=redirect_url,
             scope="user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private",
             open_browser=False,
