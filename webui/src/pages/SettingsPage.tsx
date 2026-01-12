@@ -161,6 +161,32 @@ export function SettingsPage() {
   const [updateMsg, setUpdateMsg] = useState<string>('');
   const [updateObj, setUpdateObj] = useState<any>(null);
 
+  async function browseDebugLogPath() {
+    if (!isTauriRuntime()) return;
+    try {
+      const mod: any = await import('@tauri-apps/plugin-dialog');
+      const saveFn = mod?.save;
+      if (typeof saveFn !== 'function') {
+        throw new Error('Dialog API not available.');
+      }
+
+      const current = v('General', 'debug_log_path');
+      const defaultPath = current && current.trim() ? current.trim() : 'tiptune-debug.log';
+
+      const selected = await saveFn({
+        title: 'Choose debug log file',
+        defaultPath,
+        filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
+      });
+
+      if (typeof selected === 'string' && selected.trim()) {
+        setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: selected } }));
+      }
+    } catch (e: any) {
+      setStatus(`Error: ${e?.message ? e.message : String(e)}`);
+    }
+  }
+
   async function refreshCurrentDevice() {
     const data = await apiJson<QueueResp>('/api/queue');
     const st = data.queue ?? {};
@@ -488,12 +514,20 @@ export function SettingsPage() {
           </label>
 
           <label title={tooltip('General', 'debug_log_path')}>{humanizeKey('debug_log_path')}</label>
-          <input
-            type="text"
-            title={tooltip('General', 'debug_log_path')}
-            value={v('General', 'debug_log_path')}
-            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: e.target.value } }))}
-          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              title={tooltip('General', 'debug_log_path')}
+              value={v('General', 'debug_log_path')}
+              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: e.target.value } }))}
+              style={{ flex: 1 }}
+            />
+            {isTauriRuntime() ? (
+              <button type="button" onClick={() => browseDebugLogPath().catch(() => {})}>
+                Browse…
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
