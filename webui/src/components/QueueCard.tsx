@@ -94,6 +94,10 @@ export function QueueCard(props: {
       : trackId
         ? `https://open.spotify.com/track/${trackId}`
         : null;
+  const externalUrl =
+    isObj && typeof obj?.external_url === 'string' && obj.external_url.trim() !== ''
+      ? obj.external_url
+      : null;
   const artUrl = isObj && typeof obj?.album_image_url === 'string' && obj.album_image_url.trim() !== '' ? obj.album_image_url : null;
 
   const label = name ? name : trackId ? `spotify:track:${trackId}` : uri || '(unknown)';
@@ -134,6 +138,10 @@ export function QueueCard(props: {
           {spotifyUrl ? (
             <a href={spotifyUrl} target="_blank" rel="noreferrer noopener">
               Open in Spotify
+            </a>
+          ) : externalUrl ? (
+            <a href={externalUrl} target="_blank" rel="noreferrer noopener">
+              Open
             </a>
           ) : null}
 

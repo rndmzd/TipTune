@@ -116,6 +116,7 @@ function tooltip(section: string, key: string) {
     'OBS.password': 'Password configured for obs-websocket. Leave blank to keep the currently saved password.',
     'Search.google_api_key': 'Google API key used for web search features. Leave blank to keep the currently saved key.',
     'Search.google_cx': 'Google Custom Search Engine (CSE) ID used for web search results.',
+    'Music.source': 'Select which music source TipTune will use to fulfill song requests and searches.',
     'General.song_cost': 'Default token cost to request a song.',
     'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
@@ -456,6 +457,16 @@ export function SettingsPage() {
 
         <div className="card" style={{ flex: 1, minWidth: 360 }}>
           <h2>General</h2>
+          <label title={tooltip('Music', 'source')}>Music source</label>
+          <select
+            title={tooltip('Music', 'source')}
+            value={v('Music', 'source') || 'spotify'}
+            onChange={(e) => setCfg((c) => ({ ...c, Music: { ...(c.Music || {}), source: e.target.value } }))}
+          >
+            <option value="spotify">Spotify</option>
+            <option value="youtube">YouTube</option>
+          </select>
+
           <label title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>
           <input
             type="text"
@@ -975,6 +986,9 @@ export function SettingsPage() {
                 Search: {
                   google_api_key: secrets.googleKey,
                   google_cx: v('Search', 'google_cx'),
+                },
+                Music: {
+                  source: v('Music', 'source') || 'spotify',
                 },
                 General: {
                   song_cost: v('General', 'song_cost'),

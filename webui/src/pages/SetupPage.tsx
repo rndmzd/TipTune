@@ -104,6 +104,9 @@ const DEFAULT_CFG: Record<string, Record<string, string>> = {
   Spotify: {
     redirect_url: 'http://127.0.0.1:8888/callback',
   },
+  Music: {
+    source: 'spotify',
+  },
   'Events API': {
     max_requests_per_minute: '1000',
   },
@@ -125,6 +128,7 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
   const cfg = inputCfg || {};
 
   const spotify = cfg.Spotify || {};
+  const music = cfg.Music || {};
   const events = cfg['Events API'] || {};
   const openai = cfg.OpenAI || {};
   const obs = cfg.OBS || {};
@@ -135,6 +139,10 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
     Spotify: {
       ...spotify,
       redirect_url: norm(spotify.redirect_url) || DEFAULT_CFG.Spotify.redirect_url,
+    },
+    Music: {
+      ...music,
+      source: norm(music.source) || DEFAULT_CFG.Music.source,
     },
     'Events API': {
       ...events,
@@ -347,6 +355,9 @@ export function SetupPage() {
         setStatus('');
       } else if (step === 'general') {
         await savePartial({
+          Music: {
+            source: v('Music', 'source') || DEFAULT_CFG.Music.source,
+          },
           General: {
             song_cost: v('General', 'song_cost'),
             multi_request_tips: v('General', 'multi_request_tips') || DEFAULT_CFG.General.multi_request_tips,
@@ -756,6 +767,12 @@ export function SetupPage() {
       {currentStep === 'general' ? (
         <div className="card" style={{ marginTop: 16 }}>
           <h2>General Settings</h2>
+
+          <label>Music source</label>
+          <select value={v('Music', 'source') || DEFAULT_CFG.Music.source} onChange={(e) => setCfg((c) => ({ ...c, Music: { ...(c.Music || {}), source: e.target.value } }))}>
+            <option value="spotify">Spotify</option>
+            <option value="youtube">YouTube</option>
+          </select>
 
           <label>{humanizeKey('song_cost')}</label>
           <input

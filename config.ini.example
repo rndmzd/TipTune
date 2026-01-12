@@ -19,6 +19,9 @@ playback_device_id =
 google_api_key =
 google_cx =
 
+[Music]
+source = spotify
+
 [General]
 # General application settings
 song_cost = 27

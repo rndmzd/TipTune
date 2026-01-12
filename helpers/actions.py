@@ -39,17 +39,11 @@ class Actions:
                 if openai_api_key in ("", "your-openai-api-key"):
                     logger.warning("actions.chatdj.disabled", message="OpenAI API key not configured")
                     self.chatdj_enabled = False
-                elif spotify_client is None:
-                    logger.warning("actions.chatdj.disabled", message="Spotify client not configured")
-                    self.chatdj_enabled = False
                 else:
                     google_api_key_raw = config.get("Search", "google_api_key", fallback="").strip()
                     google_cx_raw = config.get("Search", "google_cx", fallback="").strip()
                     google_api_key = google_api_key_raw if google_api_key_raw else None
                     google_cx = google_cx_raw if google_cx_raw else None
-
-                    playback_device_id_raw = config.get("Spotify", "playback_device_id", fallback="").strip()
-                    playback_device_id = playback_device_id_raw if playback_device_id_raw else None
 
                     model = config.get("OpenAI", "model", fallback="gpt-5").strip() or "gpt-5"
 
@@ -61,10 +55,17 @@ class Actions:
                             google_cx=google_cx,
                             model=model
                         )
-                        self.auto_dj = AutoDJ(spotify_client, playback_device_id=playback_device_id)
                     except Exception as exc:
                         logger.exception("actions.chatdj.init.error", message="Failed to initialize ChatDJ", exc=exc)
                         self.chatdj_enabled = False
+                    else:
+                        if spotify_client is not None:
+                            playback_device_id_raw = config.get("Spotify", "playback_device_id", fallback="").strip()
+                            playback_device_id = playback_device_id_raw if playback_device_id_raw else None
+                            try:
+                                self.auto_dj = AutoDJ(spotify_client, playback_device_id=playback_device_id)
+                            except Exception as exc:
+                                logger.exception("actions.chatdj.init.error", message="Failed to initialize Spotify AutoDJ", exc=exc)
 
         if self.obs_integration_enabled:
             logger.debug("actions.obs.init", message="Initializing OBS integration")
@@ -111,6 +112,8 @@ class Actions:
         """Return the spotify_uri provided in the song_info."""
         if not self.chatdj_enabled:
             return None
+        if not hasattr(self, 'auto_dj'):
+            return None
 
         logger.debug("spotify.search.start",
                     message="Starting Spotify song search",
@@ -137,6 +140,8 @@ class Actions:
         """Check if a song is available in the user's market."""
         if not self.chatdj_enabled:
             return False
+        if not hasattr(self, 'auto_dj'):
+            return False
 
         try:
             logger.debug("spotify.market.check.start", message="Checking market availability", data={"uri": song_uri})
@@ -157,6 +162,8 @@ class Actions:
     async def add_song_to_queue(self, uri: str, requester_name: str, song_details: str) -> bool:
         """Add a song to the playback queue and trigger the song requester overlay."""
         if not self.chatdj_enabled:
+            return False
+        if not hasattr(self, 'auto_dj'):
             return False
 
         logger.debug("spotify.queue.add.start",
@@ -188,6 +195,8 @@ class Actions:
     async def skip_song(self) -> bool:
         """Skip the currently playing song."""
         if not self.chatdj_enabled:
+            return False
+        if not hasattr(self, 'auto_dj'):
             return False
 
         logger.debug("spotify.playback.skip.start", message="Attempting to skip current song")

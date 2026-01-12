@@ -52,6 +52,8 @@ export function DashboardPage() {
   const playbackTickLastRef = useRef<number>(0);
   const playbackIsPlayingRef = useRef<boolean>(false);
 
+  const youtubeAudioRef = useRef<HTMLAudioElement | null>(null);
+
   function fmtTime(ms: number): string {
     const n = Number(ms);
     if (!Number.isFinite(n) || n < 0) return '0:00';
@@ -201,6 +203,12 @@ export function DashboardPage() {
   }
 
   async function refreshDevices() {
+    if (String(queueState?.source || 'spotify') !== 'spotify') {
+      setActiveDeviceName('');
+      setActiveDeviceWarning('');
+      setSelectedDeviceWarning('');
+      return;
+    }
     try {
       const data = await apiJson<DevicesResp>('/api/spotify/devices');
       const devices = Array.isArray(data.devices) ? data.devices : [];
@@ -254,6 +262,17 @@ export function DashboardPage() {
     });
   }
 
+  async function nextTrack() {
+    if (opBusy) return;
+    setOpBusy(true);
+    try {
+      await post('/api/queue/next');
+    } finally {
+      await refresh(true);
+      setOpBusy(false);
+    }
+  }
+
   async function searchTracks(q: string) {
     const qs = String(q ?? '').trim();
     if (qs.length < 2) {
@@ -265,7 +284,7 @@ export function DashboardPage() {
     const seq = ++searchSeqRef.current;
     setSearchBusy(true);
     try {
-      const data = await apiJson<SearchTracksResp>(`/api/spotify/search?q=${encodeURIComponent(qs)}&limit=10`);
+      const data = await apiJson<SearchTracksResp>(`/api/music/search?q=${encodeURIComponent(qs)}&limit=10`);
       if (seq !== searchSeqRef.current) return;
 
       const tracks = Array.isArray(data.tracks) ? data.tracks : [];
@@ -287,7 +306,7 @@ export function DashboardPage() {
 
     setOpBusy(true);
     try {
-      await post('/api/queue/add', { uri });
+      await post('/api/queue/add', { uri, item });
     } finally {
       await refresh(true);
       setOpBusy(false);
@@ -390,10 +409,14 @@ export function DashboardPage() {
     };
   }, [queueState?.playback_is_playing, queueState?.playback_track_uri, queueState?.playback_progress_ms]);
 
-  const showDeviceWarning = status === 'ok' && queueState?.enabled === true && !queueState?.playback_device_id;
+  const source = String(queueState?.source || 'spotify');
+  const isSpotify = source === 'spotify';
+  const isYouTube = source === 'youtube';
+
+  const showDeviceWarning = status === 'ok' && queueState?.enabled === true && isSpotify && !queueState?.playback_device_id;
   const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
-  const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && !!activeDeviceWarning;
-  const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && !!selectedDeviceWarning;
+  const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && isSpotify && !!activeDeviceWarning;
+  const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && isSpotify && !!selectedDeviceWarning;
   const canUseQueueControls = status === 'ok' && queueState?.enabled === true;
 
   const durationMs = typeof nowPlaying?.duration_ms === 'number' ? nowPlaying.duration_ms : null;
@@ -438,6 +461,24 @@ export function DashboardPage() {
                     </div>
                   </div>
                 ) : null}
+
+                {isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== '' ? (
+                  <div style={{ marginTop: 10 }}>
+                    <audio
+                      ref={youtubeAudioRef}
+                      controls
+                      preload="none"
+                      src={`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`}
+                      onEnded={() => {
+                        nextTrack().catch(() => {});
+                      }}
+                      onError={() => {
+                        nextTrack().catch(() => {});
+                      }}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="queueOut">(none)</div>
@@ -448,7 +489,7 @@ export function DashboardPage() {
         <div className="card">
           <h2>Queue</h2>
 
-          {status === 'ok' && queueState?.enabled === true ? (
+          {status === 'ok' && queueState?.enabled === true && isSpotify ? (
             <div className="muted" style={{ marginTop: -6, marginBottom: 10, fontSize: 13 }}>
               Active Spotify device: {activeDeviceName ? activeDeviceName : '(none)'}
             </div>
@@ -538,6 +579,12 @@ export function DashboardPage() {
               type="button"
               onClick={async () => {
                 await post('/api/queue/pause');
+                if (youtubeAudioRef.current) {
+                  try {
+                    youtubeAudioRef.current.pause();
+                  } catch {
+                  }
+                }
                 await refresh(true);
               }}
               disabled={opBusy || paused}
@@ -548,12 +595,23 @@ export function DashboardPage() {
               type="button"
               onClick={async () => {
                 await post('/api/queue/resume');
+                if (youtubeAudioRef.current) {
+                  try {
+                    await youtubeAudioRef.current.play();
+                  } catch {
+                  }
+                }
                 await refresh(true);
               }}
               disabled={opBusy || !paused}
             >
               Resume
             </button>
+            {isYouTube ? (
+              <button type="button" onClick={() => nextTrack().catch(() => {})} disabled={opBusy || !canUseQueueControls}>
+                Next
+              </button>
+            ) : null}
             <button type="button" onClick={() => refresh(true)} disabled={opBusy}>
               Refresh
             </button>
@@ -590,7 +648,7 @@ export function DashboardPage() {
             >
               <div style={{ fontWeight: 650, marginBottom: 6 }}>Add Track</div>
               <div className="muted" style={{ marginBottom: 10 }}>
-                Search Spotify for a track, then add it to the end of the queue.
+                Search for a track, then add it to the end of the queue.
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>

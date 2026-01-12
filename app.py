@@ -3,6 +3,7 @@ import configparser
 import json
 import logging
 import os
+import re
 import secrets
 import signal
 import sys
@@ -12,7 +13,12 @@ from typing import Any, Dict, Optional, List, Tuple
 from urllib.parse import urlparse
 
 import httpx
-from aiohttp import web
+from aiohttp import web, ClientSession
+
+try:
+    from yt_dlp import YoutubeDL
+except Exception:
+    YoutubeDL = None
 
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
@@ -33,6 +39,28 @@ config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+
+
+def _music_source_from_config(cfg: configparser.ConfigParser) -> str:
+    try:
+        raw = cfg.get('Music', 'source', fallback='spotify') if cfg.has_section('Music') else 'spotify'
+    except Exception:
+        raw = 'spotify'
+    s = str(raw or '').strip().lower()
+    if s in ('spotify', 'sp'):
+        return 'spotify'
+    if s in ('youtube', 'yt', 'ytdlp'):
+        return 'youtube'
+    return 'spotify'
+
+
+def _active_music_source() -> str:
+    try:
+        fresh = configparser.ConfigParser()
+        fresh.read(config_path)
+        return _music_source_from_config(fresh)
+    except Exception:
+        return 'spotify'
 
 
 def _setup_logging() -> None:
@@ -66,7 +94,13 @@ def _setup_logging() -> None:
                 cfg_path = ''
 
             if cfg_path:
-                file_path = cfg_path
+                try:
+                    if os.path.isabs(cfg_path):
+                        file_path = cfg_path
+                    else:
+                        file_path = str(get_cache_dir() / cfg_path)
+                except Exception:
+                    file_path = cfg_path
             else:
                 default_path = os.getenv('TIPTUNE_DEFAULT_LOG_PATH')
                 if isinstance(default_path, str) and default_path.strip():
@@ -411,6 +445,8 @@ class WebUI:
             web.post('/api/obs/test_overlay', self._api_obs_test_overlay),
             web.get('/api/spotify/devices', self._api_devices),
             web.get('/api/spotify/search', self._api_spotify_search),
+            web.get('/api/music/search', self._api_music_search),
+            web.get('/api/youtube/stream', self._api_youtube_stream),
             web.post('/api/spotify/device', self._api_set_device),
             web.get('/api/spotify/auth/status', self._api_spotify_auth_status),
             web.post('/api/spotify/auth/start', self._api_spotify_auth_start),
@@ -418,6 +454,7 @@ class WebUI:
             web.get('/api/help/user-manual', self._api_help_user_manual),
             web.get('/api/config', self._api_get_config),
             web.post('/api/config', self._api_update_config),
+            web.post('/api/queue/next', self._api_queue_next),
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
             web.get('/api/history/recent', self._api_history_recent),
@@ -532,9 +569,17 @@ class WebUI:
         if not isinstance(payload, dict):
             return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
 
+        item_obj = payload.get('item') if isinstance(payload, dict) else None
+        item_uri = item_obj.get('uri') if isinstance(item_obj, dict) else None
+
         uri = payload.get('uri')
+        if isinstance(item_uri, str) and item_uri.strip() != "":
+            uri = item_uri
         if not isinstance(uri, str) or uri.strip() == "":
             return web.json_response({"ok": False, "error": "Invalid uri"}, status=400)
+
+        source = _active_music_source()
+        item_to_add: Any = item_obj if source == 'youtube' and isinstance(item_obj, dict) else uri
 
         if 'index' in payload:
             index_raw = payload.get('index')
@@ -543,13 +588,17 @@ class WebUI:
             except Exception:
                 return web.json_response({"ok": False, "error": "Invalid index"}, status=400)
 
-            ok = await self._service.insert_track_to_queue(uri, index=index)
+            ok = await self._service.insert_track_to_queue(item_to_add, index=index)
         else:
-            ok = await self._service.add_track_to_queue(uri)
+            ok = await self._service.add_track_to_queue(item_to_add)
 
         if not ok:
             return web.json_response({"ok": False, "error": "Failed to add track to queue"}, status=400)
         return web.json_response({"ok": True})
+
+    async def _api_queue_next(self, _request: web.Request) -> web.Response:
+        ok = await self._service.advance_queue()
+        return web.json_response({"ok": bool(ok)})
 
     async def _api_devices(self, _request: web.Request) -> web.Response:
         try:
@@ -583,6 +632,36 @@ class WebUI:
         except Exception as exc:
             logger.exception("webui.api.spotify.search.error", exc=exc, message="Failed to search Spotify")
             return web.json_response({"ok": False, "error": str(exc), "tracks": []}, status=400)
+
+    async def _api_music_search(self, request: web.Request) -> web.Response:
+        q = request.query.get('q', '')
+        q = q.strip() if isinstance(q, str) else ''
+        if q == '' or len(q) < 2:
+            return web.json_response({"ok": False, "error": "Query too short"}, status=400)
+
+        limit_raw = request.query.get('limit', '10')
+        try:
+            limit = int(limit_raw)
+        except Exception:
+            limit = 10
+        if limit <= 0:
+            limit = 10
+        limit = min(limit, 25)
+
+        try:
+            source = _active_music_source()
+            tracks = await self._service.search_tracks(q, limit=limit, source=source)
+            return web.json_response({"ok": True, "source": source, "tracks": tracks})
+        except Exception as exc:
+            logger.exception("webui.api.music.search.error", exc=exc, message="Failed to search music")
+            return web.json_response({"ok": False, "error": str(exc), "tracks": []}, status=400)
+
+    async def _api_youtube_stream(self, request: web.Request) -> web.StreamResponse:
+        url = request.query.get('url', '')
+        url = url.strip() if isinstance(url, str) else ''
+        if url == '':
+            raise web.HTTPBadRequest(text='Missing url')
+        return await self._service.stream_youtube_audio(url, request)
 
     async def _api_set_device(self, request: web.Request) -> web.Response:
         try:
@@ -875,6 +954,186 @@ class SongRequestService:
         self._spotify_auth_oauth: Any = None
         self._spotify_auth_runner: Optional[web.AppRunner] = None
         self._spotify_auth_site: Optional[web.BaseSite] = None
+
+        self._yt_lock = asyncio.Lock()
+        self._yt_queue: list[dict] = []
+        self._yt_paused: bool = False
+        self._yt_now_playing: Optional[dict] = None
+        self._yt_started_ts: Optional[float] = None
+
+    def _active_source(self) -> str:
+        return _active_music_source()
+
+    def _youtube_url_from_text(self, text: str) -> Optional[str]:
+        try:
+            m = re.search(r"(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[^\s]+)", text or '', flags=re.IGNORECASE)
+            if not m:
+                return None
+            u = m.group(1)
+            return u.strip() if isinstance(u, str) and u.strip() != '' else None
+        except Exception:
+            return None
+
+    def _is_allowed_youtube_url(self, url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            host = (parsed.hostname or '').lower()
+            if host in ('youtu.be', 'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'):
+                return True
+            if host.endswith('.youtube.com'):
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _yt_fetch_best_audio_url(self, video_url: str) -> tuple[str, Optional[str]]:
+        if YoutubeDL is None:
+            raise RuntimeError('yt-dlp is not installed')
+        if not self._is_allowed_youtube_url(video_url):
+            raise RuntimeError('Only YouTube URLs are supported')
+
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+            'format': 'bestaudio/best',
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False) or {}
+
+        if not isinstance(info, dict):
+            raise RuntimeError('Failed to extract YouTube info')
+
+        best_url: Optional[str] = None
+        content_type: Optional[str] = None
+
+        formats = info.get('formats')
+        if isinstance(formats, list) and formats:
+            best = None
+            best_score = -1.0
+            for f in formats:
+                if not isinstance(f, dict):
+                    continue
+                u = f.get('url')
+                if not isinstance(u, str) or u.strip() == '':
+                    continue
+                vcodec = f.get('vcodec')
+                acodec = f.get('acodec')
+                if vcodec not in (None, 'none'):
+                    continue
+                if acodec in (None, 'none'):
+                    continue
+                abr = f.get('abr')
+                try:
+                    score = float(abr) if abr is not None else 0.0
+                except Exception:
+                    score = 0.0
+                if score > best_score:
+                    best_score = score
+                    best = f
+
+            if best is None:
+                best = formats[0] if isinstance(formats[0], dict) else None
+
+            if isinstance(best, dict):
+                u = best.get('url')
+                if isinstance(u, str) and u.strip() != '':
+                    best_url = u.strip()
+                mime = best.get('mime_type')
+                if isinstance(mime, str) and mime.strip() != '':
+                    content_type = mime.split(';', 1)[0].strip()
+                ext = best.get('ext')
+                if content_type is None and isinstance(ext, str):
+                    ext = ext.lower().strip()
+                    if ext == 'm4a':
+                        content_type = 'audio/mp4'
+                    elif ext == 'webm':
+                        content_type = 'audio/webm'
+                    elif ext == 'mp3':
+                        content_type = 'audio/mpeg'
+
+        if best_url is None:
+            u = info.get('url')
+            if isinstance(u, str) and u.strip() != '':
+                best_url = u.strip()
+
+        if best_url is None:
+            raise RuntimeError('No audio stream URL found')
+
+        return (best_url, content_type)
+
+    async def stream_youtube_audio(self, video_url: str, request: web.Request) -> web.StreamResponse:
+        url = str(video_url or '').strip()
+        if url == '':
+            raise web.HTTPBadRequest(text='Missing url')
+        if not self._is_allowed_youtube_url(url):
+            raise web.HTTPBadRequest(text='Only YouTube URLs are supported')
+        if YoutubeDL is None:
+            raise web.HTTPServiceUnavailable(text='yt-dlp is not installed')
+
+        loop = asyncio.get_running_loop()
+        try:
+            stream_url, guessed_ct = await asyncio.wait_for(loop.run_in_executor(None, lambda: self._yt_fetch_best_audio_url(url)), timeout=10)
+        except asyncio.TimeoutError:
+            raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
+        except Exception as exc:
+            raise web.HTTPBadRequest(text=str(exc))
+
+        range_header = request.headers.get('Range')
+        headers: Dict[str, str] = {}
+        if isinstance(range_header, str) and range_header.strip() != '':
+            headers['Range'] = range_header.strip()
+
+        async with ClientSession() as session:
+            async with session.get(stream_url, headers=headers) as upstream:
+                resp_headers: Dict[str, str] = {}
+                ct = upstream.headers.get('Content-Type')
+                if isinstance(ct, str) and ct.strip() != '':
+                    resp_headers['Content-Type'] = ct
+                elif guessed_ct:
+                    resp_headers['Content-Type'] = guessed_ct
+
+                for h in ('Accept-Ranges', 'Content-Range', 'Content-Length'):
+                    v = upstream.headers.get(h)
+                    if isinstance(v, str) and v.strip() != '':
+                        resp_headers[h] = v
+
+                resp_headers['Cache-Control'] = 'no-store'
+
+                out = web.StreamResponse(status=upstream.status, headers=resp_headers)
+                await out.prepare(request)
+
+                try:
+                    async for chunk in upstream.content.iter_chunked(64 * 1024):
+                        await out.write(chunk)
+                finally:
+                    try:
+                        await out.write_eof()
+                    except Exception:
+                        pass
+                return out
+
+    async def _yt_start_next_if_needed(self) -> bool:
+        async with self._yt_lock:
+            if self._yt_paused:
+                return False
+            if self._yt_now_playing is not None:
+                return False
+            if not self._yt_queue:
+                return False
+            nxt = self._yt_queue.pop(0)
+            self._yt_now_playing = nxt
+            self._yt_started_ts = time.time()
+            return True
+
+    async def advance_queue(self) -> bool:
+        if self._active_source() != 'youtube':
+            return False
+        async with self._yt_lock:
+            self._yt_now_playing = None
+            self._yt_started_ts = None
+        return await self._yt_start_next_if_needed()
 
     def _get_obs_overlay_duration_seconds(self) -> int:
         try:
@@ -1522,6 +1781,8 @@ class SongRequestService:
         return (True, auth_url, None)
 
     async def _handle_local_command(self, cmd: str, loop: asyncio.AbstractEventLoop) -> None:
+        if not hasattr(self.actions, 'auto_dj'):
+            return
         if cmd in ("pause", "p"):
             await loop.run_in_executor(None, self.actions.auto_dj.pause_queue)
             return
@@ -1629,13 +1890,18 @@ class SongRequestService:
             is_song_request = self.checks.is_song_request(tip_amount)
             is_skip_request = self.checks.is_skip_song_request(tip_amount)
 
+            source = self._active_source()
+
             if not is_song_request and is_skip_request:
-                skipped = await self.actions.skip_song()
+                if source == 'youtube':
+                    skipped = await self.advance_queue()
+                else:
+                    skipped = await self.actions.skip_song()
                 if not skipped:
                     await self.actions.trigger_warning_overlay(
                         username,
-                        "Couldn't skip the current song.",
-                        10
+                        "Failed to skip current song",
+                        5
                     )
                 return
 
@@ -1670,13 +1936,29 @@ class SongRequestService:
                 song_extracts = [SongRequest(song=tip_message, artist="", spotify_uri=None)]
 
             for song_info in song_extracts:
-                song_uri: Optional[str]
-                if getattr(song_info, 'spotify_uri', None):
-                    song_uri = song_info.spotify_uri
+                song_uri: Optional[str] = None
+
+                if source == 'youtube':
+                    direct = self._youtube_url_from_text(tip_message)
+                    if direct:
+                        song_uri = direct
+                    else:
+                        q = f"{getattr(song_info, 'artist', '')} - {getattr(song_info, 'song', '')}".strip(' -')
+                        try:
+                            results = await self.search_youtube_tracks(q, limit=1)
+                            if results and isinstance(results[0], dict):
+                                song_uri = results[0].get('uri') if isinstance(results[0].get('uri'), str) else None
+                        except Exception:
+                            song_uri = None
                 else:
-                    song_uri = await self.actions.find_song_spotify(song_info)
+                    if getattr(song_info, 'spotify_uri', None):
+                        song_uri = song_info.spotify_uri
+                    else:
+                        song_uri = await self.actions.find_song_spotify(song_info)
 
                 if not song_uri:
+                    not_found_error = 'youtube track not found' if source == 'youtube' else 'spotify track not found'
+                    not_found_msg = "Couldn't find song on YouTube." if source == 'youtube' else "Couldn't find song on Spotify. Did you include artist and song name?"
                     self.publish_request_history_item({
                         "ts": time.time(),
                         "tip_ts": tip_ts,
@@ -1689,16 +1971,16 @@ class SongRequestService:
                         "spotify_uri": getattr(song_info, 'spotify_uri', None),
                         "resolved_uri": None,
                         "status": "failed",
-                        "error": "spotify track not found",
+                        "error": not_found_error,
                     })
                     await self.actions.trigger_warning_overlay(
                         username,
-                        "Couldn't find song on Spotify. Did you include artist and song name?",
+                        not_found_msg,
                         10
                     )
                     continue
 
-                if not await self.actions.available_in_market(song_uri):
+                if source != 'youtube' and not await self.actions.available_in_market(song_uri):
                     self.publish_request_history_item({
                         "ts": time.time(),
                         "tip_ts": tip_ts,
@@ -1721,7 +2003,11 @@ class SongRequestService:
                     continue
 
                 song_details = f"{song_info.artist} - {song_info.song}".strip()
-                await self.actions.add_song_to_queue(song_uri, username, song_details)
+                if source == 'youtube':
+                    await self.add_track_to_queue(song_uri)
+                    await self._yt_start_next_if_needed()
+                else:
+                    await self.actions.add_song_to_queue(song_uri, username, song_details)
 
                 self.publish_request_history_item({
                     "ts": time.time(),
@@ -1891,10 +2177,31 @@ class SongRequestService:
         return out
 
     async def get_queue_state(self) -> Dict[str, Any]:
+        source = self._active_source()
+        if source == 'youtube':
+            async with self._yt_lock:
+                queued_items = list(self._yt_queue)
+                now_item = dict(self._yt_now_playing) if isinstance(self._yt_now_playing, dict) else None
+                paused = bool(self._yt_paused)
+            return {
+                "enabled": True,
+                "source": "youtube",
+                "paused": paused,
+                "playback_progress_ms": None,
+                "playback_is_playing": None,
+                "playback_track_uri": None,
+                "now_playing_track": now_item.get('uri') if now_item else None,
+                "now_playing_item": now_item,
+                "queued_tracks": [it.get('uri') for it in queued_items if isinstance(it, dict) and isinstance(it.get('uri'), str)],
+                "queued_items": queued_items,
+                "playback_device_id": None,
+                "playback_device_name": None,
+            }
+
         if not getattr(self.actions, 'chatdj_enabled', False):
-            return {"enabled": False}
+            return {"enabled": False, "source": source}
         if not hasattr(self.actions, 'auto_dj'):
-            return {"enabled": False}
+            return {"enabled": False, "source": source}
 
         try:
             queued_tracks = self.actions.auto_dj.get_queued_tracks_snapshot()
@@ -1946,6 +2253,7 @@ class SongRequestService:
 
         return {
             "enabled": True,
+            "source": "spotify",
             "paused": bool(paused),
             "playback_progress_ms": playback_progress_ms,
             "playback_is_playing": playback_is_playing,
@@ -2136,11 +2444,16 @@ class SongRequestService:
         return items
 
     async def pause_queue(self) -> bool:
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            return False
-        ok = bool(self.actions.auto_dj.pause_queue())
+        if self._active_source() == 'youtube':
+            async with self._yt_lock:
+                self._yt_paused = True
+            ok = True
+        else:
+            if not getattr(self.actions, 'chatdj_enabled', False):
+                return False
+            if not hasattr(self.actions, 'auto_dj'):
+                return False
+            ok = bool(self.actions.auto_dj.pause_queue())
         if ok:
             try:
                 await self.actions.trigger_queue_state_overlay(
@@ -2151,11 +2464,17 @@ class SongRequestService:
         return ok
 
     async def resume_queue(self) -> bool:
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            return False
-        ok = bool(self.actions.auto_dj.unpause_queue())
+        if self._active_source() == 'youtube':
+            async with self._yt_lock:
+                self._yt_paused = False
+            await self._yt_start_next_if_needed()
+            ok = True
+        else:
+            if not getattr(self.actions, 'chatdj_enabled', False):
+                return False
+            if not hasattr(self.actions, 'auto_dj'):
+                return False
+            ok = bool(self.actions.auto_dj.unpause_queue())
         if ok:
             try:
                 await self.actions.trigger_queue_state_overlay("Song request queue resumed")
@@ -2164,6 +2483,16 @@ class SongRequestService:
         return ok
 
     async def move_queue_item(self, from_index: int, to_index: int) -> bool:
+        if self._active_source() == 'youtube':
+            async with self._yt_lock:
+                if from_index < 0 or to_index < 0:
+                    return False
+                if from_index >= len(self._yt_queue) or to_index >= len(self._yt_queue):
+                    return False
+                item = self._yt_queue.pop(from_index)
+                self._yt_queue.insert(to_index, item)
+            return True
+
         if not getattr(self.actions, 'chatdj_enabled', False):
             return False
         if not hasattr(self.actions, 'auto_dj'):
@@ -2198,6 +2527,31 @@ class SongRequestService:
         return s
 
     async def add_track_to_queue(self, uri: Any) -> bool:
+        if self._active_source() == 'youtube':
+            item: Dict[str, Any]
+            if isinstance(uri, dict):
+                item = dict(uri)
+                track_uri = item.get('uri')
+                if not isinstance(track_uri, str):
+                    return False
+                track_uri = track_uri.strip()
+            else:
+                track_uri = str(uri or '').strip()
+                item = {"uri": track_uri}
+
+            if track_uri == '':
+                return False
+            if not self._is_allowed_youtube_url(track_uri):
+                return False
+
+            if 'external_url' not in item:
+                item['external_url'] = track_uri
+
+            async with self._yt_lock:
+                self._yt_queue.append(item)
+            await self._yt_start_next_if_needed()
+            return True
+
         if not getattr(self.actions, 'chatdj_enabled', False):
             return False
         if not hasattr(self.actions, 'auto_dj'):
@@ -2220,6 +2574,37 @@ class SongRequestService:
         return bool(ok)
 
     async def insert_track_to_queue(self, uri: Any, index: int = 0) -> bool:
+        if self._active_source() == 'youtube':
+            item: Dict[str, Any]
+            if isinstance(uri, dict):
+                item = dict(uri)
+                track_uri = item.get('uri')
+                if not isinstance(track_uri, str):
+                    return False
+                track_uri = track_uri.strip()
+            else:
+                track_uri = str(uri or '').strip()
+                item = {"uri": track_uri}
+
+            if track_uri == '':
+                return False
+            if not self._is_allowed_youtube_url(track_uri):
+                return False
+
+            if 'external_url' not in item:
+                item['external_url'] = track_uri
+            try:
+                idx = int(index)
+            except Exception:
+                idx = 0
+            if idx < 0:
+                idx = 0
+            async with self._yt_lock:
+                idx = min(idx, len(self._yt_queue))
+                self._yt_queue.insert(idx, item)
+            await self._yt_start_next_if_needed()
+            return True
+
         if not getattr(self.actions, 'chatdj_enabled', False):
             return False
         if not hasattr(self.actions, 'auto_dj'):
@@ -2353,7 +2738,105 @@ class SongRequestService:
                 out.append(item)
         return out
 
+    async def search_tracks(self, query: str, limit: int = 10, source: str = 'spotify') -> list[dict]:
+        src = str(source or '').strip().lower()
+        if src == 'youtube':
+            return await self.search_youtube_tracks(query, limit=limit)
+        return await self.search_spotify_tracks(query, limit=limit)
+
+    async def search_youtube_tracks(self, query: str, limit: int = 10) -> list[dict]:
+        if YoutubeDL is None:
+            raise RuntimeError('yt-dlp is not installed')
+        q = query.strip() if isinstance(query, str) else ''
+        if q == '' or len(q) < 2:
+            return []
+
+        try:
+            lim = int(limit)
+        except Exception:
+            lim = 10
+        if lim <= 0:
+            lim = 10
+        lim = min(lim, 25)
+
+        loop = asyncio.get_running_loop()
+
+        def _do_search() -> dict:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'extract_flat': True,
+                'noplaylist': True,
+                'default_search': 'ytsearch',
+            }
+            with YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(f"ytsearch{lim}:{q}", download=False) or {}
+
+        try:
+            payload = await asyncio.wait_for(loop.run_in_executor(None, _do_search), timeout=8)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timed out searching YouTube")
+        except Exception as exc:
+            raise RuntimeError(str(exc))
+
+        entries = payload.get('entries', []) if isinstance(payload, dict) else []
+        if not isinstance(entries, list):
+            entries = []
+
+        out: list[dict] = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+
+            vid = e.get('id') if isinstance(e.get('id'), str) else None
+            title = e.get('title') if isinstance(e.get('title'), str) else None
+            duration_s = e.get('duration')
+            thumb = e.get('thumbnail') if isinstance(e.get('thumbnail'), str) else None
+
+            channel = None
+            for key in ('uploader', 'channel', 'uploader_id', 'channel_id'):
+                v = e.get(key)
+                if isinstance(v, str) and v.strip() != '':
+                    channel = v.strip()
+                    break
+
+            url = None
+            if vid:
+                url = f"https://www.youtube.com/watch?v={vid}"
+            else:
+                u = e.get('url')
+                if isinstance(u, str) and u.strip() != '':
+                    url = u.strip()
+
+            item: Dict[str, Any] = {}
+            if url is not None:
+                item['uri'] = url
+                item['external_url'] = url
+            if title is not None:
+                item['name'] = title
+            if channel is not None:
+                item['artists'] = [channel]
+            if thumb is not None:
+                item['album_image_url'] = thumb
+            if isinstance(duration_s, (int, float)) and duration_s > 0:
+                try:
+                    item['duration_ms'] = int(float(duration_s) * 1000)
+                except Exception:
+                    pass
+            if item:
+                out.append(item)
+
+        return out
+
     async def delete_queue_item(self, index: int) -> bool:
+        if self._active_source() == 'youtube':
+            async with self._yt_lock:
+                if index < 0 or index >= len(self._yt_queue):
+                    return False
+                self._yt_queue.pop(index)
+            return True
+
         if not getattr(self.actions, 'chatdj_enabled', False):
             return False
         if not hasattr(self.actions, 'auto_dj'):
@@ -2491,7 +2974,7 @@ class SongRequestService:
 
     def get_config_for_ui(self) -> Dict[str, Dict[str, str]]:
         cfg: Dict[str, Dict[str, str]] = {}
-        for section in ("Events API", "OpenAI", "Spotify", "Search", "General", "OBS", "Web"):
+        for section in ("Events API", "OpenAI", "Spotify", "Search", "Music", "General", "OBS", "Web"):
             if not config.has_section(section):
                 continue
             cfg[section] = {}
@@ -2511,6 +2994,7 @@ class SongRequestService:
             "OpenAI": {"api_key", "model"},
             "Spotify": {"client_id", "redirect_url", "playback_device_id"},
             "Search": {"google_api_key", "google_cx"},
+            "Music": {"source"},
             "General": {"song_cost", "skip_song_cost", "multi_request_tips", "request_overlay_duration", "setup_complete", "auto_check_updates", "debug_log_to_file", "debug_log_path"},
             "OBS": {"enabled", "host", "port", "password"},
             "Web": {"host", "port"},
