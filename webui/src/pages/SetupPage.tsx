@@ -53,6 +53,7 @@ type SetupStatusResp = {
   events_configured: boolean;
   openai_configured: boolean;
   google_configured: boolean;
+  obs_configured: boolean;
 };
 
 function norm(s: unknown): string {
@@ -568,7 +569,7 @@ export function SetupPage() {
           <label>{humanizeKey('password')} (secret)</label>
           <input
             type="password"
-            placeholder=""
+            placeholder={setupStatus?.obs_configured ? '(leave blank to keep existing)' : ''}
             value={secrets.obsPassword}
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />

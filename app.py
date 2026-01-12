@@ -723,12 +723,18 @@ class WebUI:
                 google_cx = fresh_config.get("Search", "google_cx", fallback="").strip()
             google_configured = bool(google_api_key) and bool(google_cx)
 
+            obs_password = ""
+            if fresh_config.has_section("OBS"):
+                obs_password = fresh_config.get("OBS", "password", fallback="").strip()
+            obs_configured = bool(obs_password)
+
             return web.json_response({
                 "ok": True,
                 "setup_complete": _is_setup_complete(fresh_config),
                 "events_configured": events_configured,
                 "openai_configured": openai_configured,
                 "google_configured": google_configured,
+                "obs_configured": obs_configured,
             })
         except Exception as exc:
             logger.exception("webui.api.setup_status.error", exc=exc, message="Failed to compute setup status")

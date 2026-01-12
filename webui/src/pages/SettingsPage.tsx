@@ -16,6 +16,7 @@ type SetupStatusResp = {
   events_configured: boolean;
   openai_configured: boolean;
   google_configured: boolean;
+  obs_configured: boolean;
 };
 
 type SpotifyAuthStatusResp = {
@@ -294,6 +295,7 @@ export function SettingsPage() {
   const eventsPlaceholder = setupStatus?.events_configured ? '(leave blank to keep)' : '';
   const openaiPlaceholder = setupStatus?.openai_configured ? '(leave blank to keep)' : '';
   const googleKeyPlaceholder = setupStatus?.google_configured ? '(leave blank to keep)' : '';
+  const obsPasswordPlaceholder = setupStatus?.obs_configured ? '(leave blank to keep)' : '';
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
   const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
@@ -427,7 +429,7 @@ export function SettingsPage() {
           <label title={tooltip('OBS', 'password')}>{humanizeKey('password')} (secret)</label>
           <input
             type="password"
-            placeholder=""
+            placeholder={obsPasswordPlaceholder}
             title={tooltip('OBS', 'password')}
             value={secrets.obsPassword}
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
