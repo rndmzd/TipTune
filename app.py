@@ -1240,14 +1240,21 @@ class SongRequestService:
     async def advance_queue(self) -> bool:
         if self._active_source() != 'youtube':
             return False
+        started = False
         async with self._yt_lock:
             self._yt_now_playing = None
             self._yt_started_ts = None
+
+            if (not self._yt_paused) and self._yt_now_playing is None and self._yt_queue:
+                nxt = self._yt_queue.pop(0)
+                self._yt_now_playing = nxt
+                self._yt_started_ts = time.time()
+                started = True
         try:
             self._persist_yt_queue_state_to_disk()
         except Exception:
             pass
-        return await self._yt_start_next_if_needed()
+        return started
 
     def _get_obs_overlay_duration_seconds(self) -> int:
         try:
