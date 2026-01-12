@@ -109,7 +109,6 @@ function tooltip(section: string, key: string) {
     'OpenAI.api_key': 'OpenAI API key used to enable AI features (such as ChatDJ). Leave blank to keep the currently saved key.',
     'OpenAI.model': 'OpenAI model name to use for AI features (for example gpt-5-mini).',
     'Spotify.client_id': 'Spotify application Client ID from your Spotify Developer Dashboard.',
-    'Spotify.client_secret': 'Spotify application Client Secret from your Spotify Developer Dashboard. Leave blank to keep the currently saved secret.',
     'Spotify.redirect_url': 'Redirect/callback URL registered in your Spotify app. Must match exactly for authentication to work.',
     'OBS.enabled': 'Enable or disable OBS integration for scene/overlay control.',
     'OBS.host': 'Hostname or IP address where obs-websocket is running (often 127.0.0.1).',
@@ -144,7 +143,6 @@ export function SettingsPage() {
   const [secrets, setSecrets] = useState({
     eventsUrl: '',
     openaiKey: '',
-    spotifySecret: '',
     googleKey: '',
     obsPassword: '',
   });
@@ -260,7 +258,6 @@ export function SettingsPage() {
 
   const eventsPlaceholder = setupStatus?.events_configured ? '(leave blank to keep)' : '';
   const openaiPlaceholder = setupStatus?.openai_configured ? '(leave blank to keep)' : '';
-  const spotifySecretPlaceholder = spotifyStatus?.configured ? '(leave blank to keep)' : '';
   const googleKeyPlaceholder = setupStatus?.google_configured ? '(leave blank to keep)' : '';
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
@@ -357,14 +354,6 @@ export function SettingsPage() {
             title={tooltip('Spotify', 'client_id')}
             value={v('Spotify', 'client_id')}
             onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
-          />
-          <label title={tooltip('Spotify', 'client_secret')}>{humanizeKey('client_secret')} (secret)</label>
-          <input
-            type="password"
-            placeholder={spotifySecretPlaceholder}
-            title={tooltip('Spotify', 'client_secret')}
-            value={secrets.spotifySecret}
-            onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
           />
           <label title={tooltip('Spotify', 'redirect_url')}>{humanizeKey('redirect_url')}</label>
           <input
@@ -913,7 +902,6 @@ export function SettingsPage() {
                 },
                 Spotify: {
                   client_id: v('Spotify', 'client_id'),
-                  client_secret: secrets.spotifySecret,
                   redirect_url: v('Spotify', 'redirect_url'),
                 },
                 Search: {
@@ -943,7 +931,7 @@ export function SettingsPage() {
                 });
 
                 setStatus('Saved.');
-                setSecrets({ eventsUrl: '', openaiKey: '', spotifySecret: '', googleKey: '', obsPassword: '' });
+                setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
                 await loadConfig();
               } catch (e: any) {
                 setStatus(`Error: ${e?.message ? e.message : String(e)}`);

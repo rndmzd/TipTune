@@ -170,7 +170,6 @@ export function SetupPage() {
   const [secrets, setSecrets] = useState({
     eventsUrl: '',
     openaiKey: '',
-    spotifySecret: '',
     googleKey: '',
     obsPassword: '',
   });
@@ -260,11 +259,9 @@ export function SetupPage() {
       await savePartial({
         Spotify: {
           client_id: v('Spotify', 'client_id'),
-          client_secret: secrets.spotifySecret,
           redirect_url: v('Spotify', 'redirect_url'),
         },
       });
-      setSecrets((s) => ({ ...s, spotifySecret: '' }));
       await loadConfig();
       await refreshSpotifyStatus().catch(() => {});
 
@@ -297,11 +294,9 @@ export function SetupPage() {
         await savePartial({
           Spotify: {
             client_id: v('Spotify', 'client_id'),
-            client_secret: secrets.spotifySecret,
             redirect_url: v('Spotify', 'redirect_url'),
           },
         });
-        setSecrets((s) => ({ ...s, spotifySecret: '' }));
         await loadConfig();
         await loadSetupStatus().catch(() => {});
         await refreshSpotifyStatus();
@@ -404,10 +399,8 @@ export function SetupPage() {
 
   const setupComplete = setupStatus ? !!setupStatus.setup_complete : asBool(v('General', 'setup_complete'));
 
-  const spotifyConfiguredFromStatus = !!sp?.configured;
   const spotifyOk =
     norm(v('Spotify', 'client_id')) !== '' &&
-    (norm(secrets.spotifySecret) !== '' || spotifyConfiguredFromStatus) &&
     norm(v('Spotify', 'redirect_url')) !== '';
   const eventsOk = norm(secrets.eventsUrl) !== '' || !!setupStatus?.events_configured;
   const openaiOk = norm(secrets.openaiKey) !== '' || !!setupStatus?.openai_configured;
@@ -504,15 +497,6 @@ export function SetupPage() {
           />
           <div className="muted">Get this from your Spotify Developer Dashboard: create an app and copy the Client ID.</div>
 
-          <label>{humanizeKey('client_secret')} (secret)</label>
-          <input
-            type="password"
-            placeholder={spotifyConfiguredFromStatus ? '(leave blank to keep existing)' : ''}
-            value={secrets.spotifySecret}
-            onChange={(e) => setSecrets((s) => ({ ...s, spotifySecret: e.target.value }))}
-          />
-          <div className="muted">In the same Spotify app page, click “Show Client Secret” and copy it.</div>
-
           <label>{humanizeKey('redirect_url')}</label>
           <input
             type="text"
@@ -538,7 +522,7 @@ export function SetupPage() {
           {sp?.error ? <div className="muted">Error: <span className="pill pillError">{String(sp.error)}</span></div> : null}
           {spMsg ? <div className="muted">{spMsg}</div> : null}
           <div className="muted" style={{ marginTop: 8 }}>
-            You can proceed after entering credentials + redirect URL. Connecting Spotify is recommended but not required to click Next.
+            You can proceed after entering Client ID + redirect URL. Connecting Spotify is recommended but not required to click Next.
           </div>
         </div>
       ) : null}

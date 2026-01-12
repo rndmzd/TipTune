@@ -1194,23 +1194,21 @@ class SongRequestService:
                 logger.exception("local.control.error", exc=exc, message="Local control loop error")
                 await asyncio.sleep(1)
 
-    def _get_spotify_config_values(self) -> tuple[str, str, str]:
+    def _get_spotify_config_values(self) -> tuple[str, str]:
         if not config.has_section("Spotify"):
-            return ("", "", "")
+            return ("", "")
         client_id = config.get("Spotify", "client_id", fallback="").strip()
-        client_secret = config.get("Spotify", "client_secret", fallback="").strip()
         redirect_url = config.get("Spotify", "redirect_url", fallback="").strip()
-        return (client_id, client_secret, redirect_url)
+        return (client_id, redirect_url)
 
     def _build_spotify_oauth(self):
-        from spotipy import SpotifyOAuth
+        from spotipy import SpotifyPKCE
 
-        client_id, client_secret, redirect_url = self._get_spotify_config_values()
+        client_id, redirect_url = self._get_spotify_config_values()
         cache_path = get_spotipy_cache_path()
         ensure_parent_dir(cache_path)
-        return SpotifyOAuth(
+        return SpotifyPKCE(
             client_id=client_id,
-            client_secret=client_secret,
             redirect_uri=redirect_url,
             scope="user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private",
             open_browser=False,
@@ -1219,8 +1217,8 @@ class SongRequestService:
 
     def _is_spotify_authorized(self) -> bool:
         try:
-            client_id, client_secret, redirect_url = self._get_spotify_config_values()
-            if not client_id or not client_secret or not redirect_url:
+            client_id, redirect_url = self._get_spotify_config_values()
+            if not client_id or not redirect_url:
                 return False
             # NOTE: Avoid oauth.validate_token() here because it may attempt a token refresh
             # over the network. This method is used by the WebUI polling endpoint
@@ -1232,8 +1230,8 @@ class SongRequestService:
             return False
 
     async def get_spotify_auth_status(self) -> Dict[str, Any]:
-        client_id, client_secret, redirect_url = self._get_spotify_config_values()
-        configured = bool(client_id and client_secret and redirect_url)
+        client_id, redirect_url = self._get_spotify_config_values()
+        configured = bool(client_id and redirect_url)
         authorized = self._is_spotify_authorized()
 
         from helpers import spotify_client as helpers_spotify_client
@@ -1385,9 +1383,9 @@ class SongRequestService:
         )
 
     async def start_spotify_auth(self) -> tuple[bool, Optional[str], Optional[str]]:
-        client_id, client_secret, redirect_url = self._get_spotify_config_values()
-        if not client_id or not client_secret or not redirect_url:
-            return (False, None, "Spotify client_id/client_secret/redirect_url must be configured first.")
+        client_id, redirect_url = self._get_spotify_config_values()
+        if not client_id or not redirect_url:
+            return (False, None, "Spotify client_id/redirect_url must be configured first.")
 
         parsed = urlparse(redirect_url)
         host = (parsed.hostname or "").strip()
@@ -2435,7 +2433,7 @@ class SongRequestService:
         allowed: Dict[str, set[str]] = {
             "Events API": {"url", "max_requests_per_minute"},
             "OpenAI": {"api_key", "model"},
-            "Spotify": {"client_id", "client_secret", "redirect_url", "playback_device_id"},
+            "Spotify": {"client_id", "redirect_url", "playback_device_id"},
             "Search": {"google_api_key", "google_cx"},
             "General": {"song_cost", "skip_song_cost", "multi_request_tips", "request_overlay_duration", "setup_complete", "auto_check_updates"},
             "OBS": {"enabled", "host", "port", "password"},
