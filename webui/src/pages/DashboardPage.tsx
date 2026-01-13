@@ -9,6 +9,7 @@ import { QueueCard } from '../components/QueueCard';
 type QueueResp = { ok: true; queue: QueueState };
 type DevicesResp = { ok: true; devices: Device[] };
 type SearchTracksResp = { ok: true; tracks: QueueItem[] };
+type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 
 export function DashboardPage() {
   const location = useLocation();
@@ -34,6 +35,8 @@ export function DashboardPage() {
 
   const [obsNowPlayingBusy, setObsNowPlayingBusy] = useState<boolean>(false);
   const [obsNowPlayingMsg, setObsNowPlayingMsg] = useState<string>('');
+  const [obsOverlayDurationSec, setObsOverlayDurationSec] = useState<number>(10);
+  const obsNowPlayingMsgClearTimerRef = useRef<number | null>(null);
 
   const [addTrackOpen, setAddTrackOpen] = useState<boolean>(false);
   const [searchQ, setSearchQ] = useState<string>('');
@@ -67,6 +70,11 @@ export function DashboardPage() {
     if (obsNowPlayingBusy || opBusy) return;
     setObsNowPlayingBusy(true);
     setObsNowPlayingMsg('');
+
+    if (obsNowPlayingMsgClearTimerRef.current != null) {
+      window.clearTimeout(obsNowPlayingMsgClearTimerRef.current);
+      obsNowPlayingMsgClearTimerRef.current = null;
+    }
     try {
       await apiJson<{ ok: true }>('/api/obs/now_playing', {
         method: 'POST',
@@ -74,6 +82,12 @@ export function DashboardPage() {
         body: '{}',
       });
       setObsNowPlayingMsg('Sent to OBS.');
+
+      const ms = Math.max(0, Math.floor(obsOverlayDurationSec * 1000));
+      obsNowPlayingMsgClearTimerRef.current = window.setTimeout(() => {
+        setObsNowPlayingMsg('');
+        obsNowPlayingMsgClearTimerRef.current = null;
+      }, ms);
     } catch (e: any) {
       setObsNowPlayingMsg(e?.message ? String(e.message) : String(e));
     } finally {
@@ -355,6 +369,13 @@ export function DashboardPage() {
   useEffect(() => {
     refresh(true).catch(() => {});
     refreshDevices().catch(() => {});
+    apiJson<ConfigResp>('/api/config')
+      .then((data) => {
+        const raw = (data?.config?.General?.request_overlay_duration ?? '').trim();
+        const n = Number.parseInt(String(raw || '10'), 10);
+        setObsOverlayDurationSec(Number.isFinite(n) && n >= 0 ? n : 10);
+      })
+      .catch(() => {});
     const t = window.setInterval(() => {
       refresh(false).catch(() => {});
     }, 2000);
@@ -364,6 +385,11 @@ export function DashboardPage() {
     return () => {
       window.clearInterval(t);
       window.clearInterval(td);
+
+      if (obsNowPlayingMsgClearTimerRef.current != null) {
+        window.clearTimeout(obsNowPlayingMsgClearTimerRef.current);
+        obsNowPlayingMsgClearTimerRef.current = null;
+      }
     };
   }, [location.key]);
 
