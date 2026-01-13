@@ -113,6 +113,7 @@ pub fn run() {
             {
                 if matches!(event, WindowEvent::CloseRequested { .. }) {
                     kill_sidecar(&window.app_handle());
+                    window.app_handle().exit(0);
                 }
             }
         })
