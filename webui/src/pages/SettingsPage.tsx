@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
@@ -16,6 +16,7 @@ type SetupStatusResp = {
   events_configured: boolean;
   openai_configured: boolean;
   google_configured: boolean;
+  obs_configured: boolean;
 };
 
 type SpotifyAuthStatusResp = {
@@ -116,6 +117,7 @@ function tooltip(section: string, key: string) {
     'OBS.password': 'Password configured for obs-websocket. Leave blank to keep the currently saved password.',
     'Search.google_api_key': 'Google API key used for web search features. Leave blank to keep the currently saved key.',
     'Search.google_cx': 'Google Custom Search Engine (CSE) ID used for web search results.',
+    'Music.source': 'Select which music source TipTune will use to fulfill song requests and searches.',
     'General.song_cost': 'Default token cost to request a song.',
     'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
@@ -132,6 +134,14 @@ function isTauriRuntime(): boolean {
   return !!(w && (w.__TAURI_INTERNALS__ || w.__TAURI__));
 }
 
+function stableStringify(value: any): string {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+}
+
 export function SettingsPage() {
   const [currentDeviceText, setCurrentDeviceText] = useState<string>('Loading...');
   const [devices, setDevices] = useState<Device[]>([]);
@@ -140,6 +150,7 @@ export function SettingsPage() {
   const [runtimeAppVersion, setRuntimeAppVersion] = useState<string>('');
 
   const [cfg, setCfg] = useState<Record<string, Record<string, string>>>({});
+  const [baselineCfgSig, setBaselineCfgSig] = useState<string>('');
   const [setupStatus, setSetupStatus] = useState<SetupStatusResp | null>(null);
   const [spotifyStatus, setSpotifyStatus] = useState<SpotifyAuthStatusResp | null>(null);
   const [secrets, setSecrets] = useState({
@@ -209,7 +220,9 @@ export function SettingsPage() {
 
   async function loadConfig() {
     const data = await apiJson<ConfigResp>('/api/config');
-    setCfg(data.config || {});
+    const next = data.config || {};
+    setCfg(next);
+    setBaselineCfgSig(stableStringify(next));
   }
 
   async function loadSetupStatus() {
@@ -293,11 +306,73 @@ export function SettingsPage() {
   const eventsPlaceholder = setupStatus?.events_configured ? '(leave blank to keep)' : '';
   const openaiPlaceholder = setupStatus?.openai_configured ? '(leave blank to keep)' : '';
   const googleKeyPlaceholder = setupStatus?.google_configured ? '(leave blank to keep)' : '';
+  const obsPasswordPlaceholder = setupStatus?.obs_configured ? '(leave blank to keep)' : '';
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
   const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
 
   const appVersion = runtimeAppVersion || (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '');
+
+  const isDirty = useMemo(() => {
+    if (!baselineCfgSig) return false;
+    if (stableStringify(cfg) !== baselineCfgSig) return true;
+    return Object.values(secrets).some((s) => String(s || '').trim() !== '');
+  }, [baselineCfgSig, cfg, secrets]);
+
+  async function saveSettings() {
+    setStatus('Saving...');
+
+    const payload: Record<string, Record<string, string>> = {
+      'Events API': {
+        url: secrets.eventsUrl,
+        max_requests_per_minute: v('Events API', 'max_requests_per_minute'),
+      },
+      OpenAI: {
+        api_key: secrets.openaiKey,
+        model: v('OpenAI', 'model'),
+      },
+      Spotify: {
+        client_id: v('Spotify', 'client_id'),
+        redirect_url: v('Spotify', 'redirect_url'),
+      },
+      Search: {
+        google_api_key: secrets.googleKey,
+        google_cx: v('Search', 'google_cx'),
+      },
+      Music: {
+        source: v('Music', 'source') || 'spotify',
+      },
+      General: {
+        song_cost: v('General', 'song_cost'),
+        multi_request_tips: multiRequestTipsEnabled ? 'true' : 'false',
+        skip_song_cost: v('General', 'skip_song_cost'),
+        request_overlay_duration: v('General', 'request_overlay_duration'),
+        auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
+        debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
+        debug_log_path: v('General', 'debug_log_path'),
+      },
+      OBS: {
+        enabled: v('OBS', 'enabled'),
+        host: v('OBS', 'host'),
+        port: v('OBS', 'port'),
+        password: secrets.obsPassword,
+      },
+    };
+
+    try {
+      await apiJson('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      setStatus('Saved.');
+      setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
+      await loadConfig();
+    } catch (e: any) {
+      setStatus(`Error: ${e?.message ? e.message : String(e)}`);
+    }
+  }
 
   return (
     <>
@@ -305,157 +380,61 @@ export function SettingsPage() {
         title="Settings"
       />
 
-      <div className="row">
+      <div className="settingsGrid">
         <div className="card">
-          <h2>Playback Device</h2>
-          <div className="muted">{currentDeviceText}</div>
-          <label htmlFor="deviceSelect" title={tooltip('Playback', 'device_id')}>Available devices</label>
-          <select id="deviceSelect" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
-            {(devices || []).map((d, idx) => (
-              <option key={idx} value={d.id || ''}>
-                {(d.name || '(unknown)') + (d.is_active ? ' (active)' : '')}
-              </option>
-            ))}
-          </select>
-          <div className="actions">
-            <button type="button" onClick={() => refreshDevices().catch(() => {})}>
-              Refresh
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                await apiJson('/api/spotify/device', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ device_id: deviceId, persist: true }),
-                });
-                await refreshCurrentDevice();
-                await refreshDevices();
-              }}
+          <h2>Playback</h2>
+          <div className="highlightField">
+            <label title={tooltip('Music', 'source')} style={{ marginTop: 0 }}>
+              Music source
+            </label>
+            <select
+              title={tooltip('Music', 'source')}
+              value={v('Music', 'source') || 'spotify'}
+              onChange={(e) => setCfg((c) => ({ ...c, Music: { ...(c.Music || {}), source: e.target.value } }))}
             >
-              Apply + Save
-            </button>
+              <option value="spotify">Spotify</option>
+              <option value="youtube">YouTube</option>
+            </select>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <label title={tooltip('Playback', 'device_id')} style={{ marginTop: 0 }}>
+              Playback device
+            </label>
+            <div className="muted">{currentDeviceText}</div>
+            <label htmlFor="deviceSelect" title={tooltip('Playback', 'device_id')}>Available devices</label>
+            <select id="deviceSelect" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+              {(devices || []).map((d, idx) => (
+                <option key={idx} value={d.id || ''}>
+                  {(d.name || '(unknown)') + (d.is_active ? ' (active)' : '')}
+                </option>
+              ))}
+            </select>
+            <div className="actions">
+              <button type="button" onClick={() => refreshDevices().catch(() => {})}>
+                Refresh
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await apiJson('/api/spotify/device', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_id: deviceId, persist: true }),
+                  });
+                  await refreshCurrentDevice();
+                  await refreshDevices();
+                }}
+              >
+                Apply + Save
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="row" style={{ marginTop: 16 }}>
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
-          <h2>Events API</h2>
-          <label title={tooltip('Events API', 'url')}>URL (secret)</label>
-          <input
-            type="password"
-            placeholder={eventsPlaceholder}
-            title={tooltip('Events API', 'url')}
-            value={secrets.eventsUrl}
-            onChange={(e) => setSecrets((s) => ({ ...s, eventsUrl: e.target.value }))}
-          />
-          <label title={tooltip('Events API', 'max_requests_per_minute')}>{humanizeKey('max_requests_per_minute')}</label>
-          <input
-            type="text"
-            title={tooltip('Events API', 'max_requests_per_minute')}
-            value={v('Events API', 'max_requests_per_minute')}
-            onChange={(e) => setCfg((c) => ({ ...c, 'Events API': { ...(c['Events API'] || {}), max_requests_per_minute: e.target.value } }))}
-          />
-        </div>
-
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
-          <h2>OpenAI</h2>
-          <label title={tooltip('OpenAI', 'api_key')}>API key (secret)</label>
-          <input
-            type="password"
-            placeholder={openaiPlaceholder}
-            title={tooltip('OpenAI', 'api_key')}
-            value={secrets.openaiKey}
-            onChange={(e) => setSecrets((s) => ({ ...s, openaiKey: e.target.value }))}
-          />
-          <label title={tooltip('OpenAI', 'model')}>Model</label>
-          <input
-            type="text"
-            title={tooltip('OpenAI', 'model')}
-            value={v('OpenAI', 'model')}
-            onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
-          />
-        </div>
-      </div>
-
-      <div className="row" style={{ marginTop: 16 }}>
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
-          <h2>Spotify</h2>
-          <label title={tooltip('Spotify', 'client_id')}>{humanizeKey('client_id')}</label>
-          <input
-            type="text"
-            title={tooltip('Spotify', 'client_id')}
-            value={v('Spotify', 'client_id')}
-            onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
-          />
-          <label title={tooltip('Spotify', 'redirect_url')}>{humanizeKey('redirect_url')}</label>
-          <input
-            type="text"
-            title={tooltip('Spotify', 'redirect_url')}
-            value={v('Spotify', 'redirect_url')}
-            onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), redirect_url: e.target.value } }))}
-          />
-        </div>
-
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
-          <h2>OBS</h2>
-          <label title={tooltip('OBS', 'enabled')}>{humanizeKey('enabled')}</label>
-          <select
-            title={tooltip('OBS', 'enabled')}
-            value={(v('OBS', 'enabled') || 'false').toLowerCase()}
-            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
-          >
-            <option value="true">true</option>
-            <option value="false">false</option>
-          </select>
-          <label title={tooltip('OBS', 'host')}>{humanizeKey('host')}</label>
-          <input
-            type="text"
-            title={tooltip('OBS', 'host')}
-            value={v('OBS', 'host')}
-            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), host: e.target.value } }))}
-          />
-          <label title={tooltip('OBS', 'port')}>{humanizeKey('port')}</label>
-          <input
-            type="text"
-            title={tooltip('OBS', 'port')}
-            value={v('OBS', 'port')}
-            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), port: e.target.value } }))}
-          />
-          <label title={tooltip('OBS', 'password')}>{humanizeKey('password')} (secret)</label>
-          <input
-            type="password"
-            placeholder=""
-            title={tooltip('OBS', 'password')}
-            value={secrets.obsPassword}
-            onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
-          />
-        </div>
-      </div>
-
-      <div className="row" style={{ marginTop: 16 }}>
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
-          <h2>Search</h2>
-          <label title={tooltip('Search', 'google_api_key')}>{humanizeKey('google_api_key')} (secret)</label>
-          <input
-            type="password"
-            placeholder={googleKeyPlaceholder}
-            title={tooltip('Search', 'google_api_key')}
-            value={secrets.googleKey}
-            onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
-          />
-          <label title={tooltip('Search', 'google_cx')}>{humanizeKey('google_cx')}</label>
-          <input
-            type="text"
-            title={tooltip('Search', 'google_cx')}
-            value={v('Search', 'google_cx')}
-            onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
-          />
-        </div>
-
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+        <div className="card">
           <h2>General</h2>
+
           <label title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>
           <input
             type="text"
@@ -529,11 +508,119 @@ export function SettingsPage() {
             ) : null}
           </div>
         </div>
-      </div>
 
-      {obsEnabled ? (
-        <div className="row" style={{ marginTop: 16 }}>
-          <div className="card" style={{ flex: 1, minWidth: 360 }}>
+        <div className="card">
+          <h2>Events API</h2>
+          <label title={tooltip('Events API', 'url')}>URL (secret)</label>
+          <input
+            type="password"
+            placeholder={eventsPlaceholder}
+            title={tooltip('Events API', 'url')}
+            value={secrets.eventsUrl}
+            onChange={(e) => setSecrets((s) => ({ ...s, eventsUrl: e.target.value }))}
+          />
+          <label title={tooltip('Events API', 'max_requests_per_minute')}>{humanizeKey('max_requests_per_minute')}</label>
+          <input
+            type="text"
+            title={tooltip('Events API', 'max_requests_per_minute')}
+            value={v('Events API', 'max_requests_per_minute')}
+            onChange={(e) => setCfg((c) => ({ ...c, 'Events API': { ...(c['Events API'] || {}), max_requests_per_minute: e.target.value } }))}
+          />
+        </div>
+
+        <div className="card">
+          <h2>OpenAI</h2>
+          <label title={tooltip('OpenAI', 'api_key')}>API key (secret)</label>
+          <input
+            type="password"
+            placeholder={openaiPlaceholder}
+            title={tooltip('OpenAI', 'api_key')}
+            value={secrets.openaiKey}
+            onChange={(e) => setSecrets((s) => ({ ...s, openaiKey: e.target.value }))}
+          />
+          <label title={tooltip('OpenAI', 'model')}>Model</label>
+          <input
+            type="text"
+            title={tooltip('OpenAI', 'model')}
+            value={v('OpenAI', 'model')}
+            onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
+          />
+        </div>
+
+        <div className="card">
+          <h2>Spotify</h2>
+          <label title={tooltip('Spotify', 'client_id')}>{humanizeKey('client_id')}</label>
+          <input
+            type="text"
+            title={tooltip('Spotify', 'client_id')}
+            value={v('Spotify', 'client_id')}
+            onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
+          />
+          <label title={tooltip('Spotify', 'redirect_url')}>{humanizeKey('redirect_url')}</label>
+          <input
+            type="text"
+            title={tooltip('Spotify', 'redirect_url')}
+            value={v('Spotify', 'redirect_url')}
+            onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), redirect_url: e.target.value } }))}
+          />
+        </div>
+
+        <div className="card">
+          <h2>OBS</h2>
+          <label title={tooltip('OBS', 'enabled')}>{humanizeKey('enabled')}</label>
+          <select
+            title={tooltip('OBS', 'enabled')}
+            value={(v('OBS', 'enabled') || 'false').toLowerCase()}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), enabled: e.target.value } }))}
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+          <label title={tooltip('OBS', 'host')}>{humanizeKey('host')}</label>
+          <input
+            type="text"
+            title={tooltip('OBS', 'host')}
+            value={v('OBS', 'host')}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), host: e.target.value } }))}
+          />
+          <label title={tooltip('OBS', 'port')}>{humanizeKey('port')}</label>
+          <input
+            type="text"
+            title={tooltip('OBS', 'port')}
+            value={v('OBS', 'port')}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), port: e.target.value } }))}
+          />
+          <label title={tooltip('OBS', 'password')}>{humanizeKey('password')} (secret)</label>
+          <input
+            type="password"
+            placeholder={obsPasswordPlaceholder}
+            title={tooltip('OBS', 'password')}
+            value={secrets.obsPassword}
+            onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
+          />
+        </div>
+
+        <div className="card">
+          <h2>Search</h2>
+          <label title={tooltip('Search', 'google_api_key')}>{humanizeKey('google_api_key')} (secret)</label>
+          <input
+            type="password"
+            placeholder={googleKeyPlaceholder}
+            title={tooltip('Search', 'google_api_key')}
+            value={secrets.googleKey}
+            onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
+          />
+          <label title={tooltip('Search', 'google_cx')}>{humanizeKey('google_cx')}</label>
+          <input
+            type="text"
+            title={tooltip('Search', 'google_cx')}
+            value={v('Search', 'google_cx')}
+            onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
+          />
+        </div>
+
+        {obsEnabled ? (
+          <div className="card settingsSpanFull">
             <h2>
               OBS overlay status{' '}
               <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>{obsStatus?.connected ? 'connected' : 'not connected'}</span>
@@ -808,11 +895,9 @@ export function SettingsPage() {
               Note: test overlay duration follows your configured OBS overlay duration setting.
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      <div className="row" style={{ marginTop: 16 }}>
-        <div className="card" style={{ flex: 1, minWidth: 360 }}>
+        <div className="card">
           <h2>App Updates</h2>
           <div className="muted" style={{ marginTop: -6 }}>
             Check for updates via GitHub releases.
@@ -952,67 +1037,19 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="actions">
-          <button
-            type="button"
-            onClick={async () => {
-              setStatus('Saving...');
-
-              const payload: Record<string, Record<string, string>> = {
-                'Events API': {
-                  url: secrets.eventsUrl,
-                  max_requests_per_minute: v('Events API', 'max_requests_per_minute'),
-                },
-                OpenAI: {
-                  api_key: secrets.openaiKey,
-                  model: v('OpenAI', 'model'),
-                },
-                Spotify: {
-                  client_id: v('Spotify', 'client_id'),
-                  redirect_url: v('Spotify', 'redirect_url'),
-                },
-                Search: {
-                  google_api_key: secrets.googleKey,
-                  google_cx: v('Search', 'google_cx'),
-                },
-                General: {
-                  song_cost: v('General', 'song_cost'),
-                  multi_request_tips: multiRequestTipsEnabled ? 'true' : 'false',
-                  skip_song_cost: v('General', 'skip_song_cost'),
-                  request_overlay_duration: v('General', 'request_overlay_duration'),
-                  auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
-                  debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
-                  debug_log_path: v('General', 'debug_log_path'),
-                },
-                OBS: {
-                  enabled: v('OBS', 'enabled'),
-                  host: v('OBS', 'host'),
-                  port: v('OBS', 'port'),
-                  password: secrets.obsPassword,
-                },
-              };
-
-              try {
-                await apiJson('/api/config', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(payload),
-                });
-
-                setStatus('Saved.');
-                setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
-                await loadConfig();
-              } catch (e: any) {
-                setStatus(`Error: ${e?.message ? e.message : String(e)}`);
-              }
-            }}
-          >
-            Save Settings
-          </button>
-          <span className="muted">{status}</span>
+      {isDirty ? (
+        <div className="saveBanner">
+          <div className="saveBannerInner">
+            <div style={{ fontWeight: 650 }}>Save changes</div>
+            <div className="actions" style={{ marginTop: 0 }}>
+              <button type="button" onClick={() => saveSettings().catch(() => {})}>
+                Save changes
+              </button>
+              <span className="muted">{status}</span>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : null}
     </>
   );
 }

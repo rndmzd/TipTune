@@ -7,11 +7,13 @@ export type QueueItem = {
   duration_ms?: number;
   explicit?: boolean;
   spotify_url?: string;
+  external_url?: string;
   album_image_url?: string;
 };
 
 export type QueueState = {
   enabled?: boolean;
+  source?: string;
   paused?: boolean;
   playback_device_name?: string;
   playback_device_id?: string;

@@ -4,11 +4,12 @@ a { color: #8ab4ff; }
 
 .row { display: flex; gap: 16px; flex-wrap: wrap; }
 .card { background: #121a33; border: 1px solid #1e2a4d; border-radius: 10px; padding: 16px; min-width: 320px; flex: 1; }
+ .card h2 { margin-bottom: 16px; font-size: 18px; letter-spacing: 0.2px; }
 
 h1 { margin: 0 0 12px 0; font-size: 22px; }
 h2 { margin: 0 0 12px 0; font-size: 16px; }
 
-label { display: block; font-size: 12px; opacity: 0.9; margin-top: 10px; }
+label { display: block; font-size: 14px; opacity: 0.9; margin-top: 10px; }
 input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3a66; background: #0e1530; color: #e6e9f2; }
 
 button { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; cursor: pointer; }
@@ -21,6 +22,16 @@ button:disabled:hover { background: #1b2a55; }
 .actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .actions + .muted { margin-top: 8px; }
 
+.settingsGrid { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+.settingsSpanFull { grid-column: 1 / -1; }
+
+.saveBanner { position: sticky; bottom: 0; left: 0; right: 0; z-index: 60; padding: 10px 0; margin-top: 16px; background: linear-gradient(to top, rgba(11, 16, 32, 0.85), rgba(11, 16, 32, 0.35)); }
+.saveBannerInner { max-width: 980px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid rgba(138, 180, 255, 0.85); border-radius: 12px; background: linear-gradient(180deg, rgba(32, 56, 120, 0.55), rgba(18, 26, 51, 0.96)); box-shadow: 0 12px 34px rgba(0,0,0,0.55), 0 0 0 1px rgba(138, 180, 255, 0.22); }
+.saveBannerInner .actions { margin-top: 0; }
+
+.highlightField { border: 1px solid rgba(138, 180, 255, 0.55); background: rgba(138, 180, 255, 0.08); border-radius: 10px; padding: 10px; margin-top: 10px; }
+.highlightField .pill { margin-left: 6px; padding: 2px 8px; }
+
 .headerBar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
 .headerTitle { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
 .headerNav { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
@@ -28,7 +39,6 @@ button:disabled:hover { background: #1b2a55; }
 .navBtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border-radius: 10px; border: 1px solid #2a3a66; background: #1b2a55; color: #e6e9f2; text-decoration: none; cursor: pointer; line-height: 1; white-space: nowrap; }
 .navBtn:hover { background: #23366f; }
 .navBtnPrimary { border-color: rgba(138, 180, 255, 0.55); background: rgba(138, 180, 255, 0.14); }
-.navBtnPrimary:hover { background: rgba(138, 180, 255, 0.22); }
 .navBtnGhost { background: transparent; }
 .navBtnGhost:hover { background: rgba(35, 54, 111, 0.35); }
 .navBtnActive { border-color: rgba(138, 180, 255, 0.85); box-shadow: 0 0 0 1px rgba(138,180,255,0.35), 0 6px 18px rgba(0,0,0,0.25); }

@@ -208,6 +208,29 @@ class OBSHandler:
             return None
         return self.scenes[scene_key]['name']
 
+    def _resolve_scene_name(self, scene_name: Optional[str] = None, scene_key: Optional[str] = None) -> Optional[str]:
+        if isinstance(scene_name, str) and scene_name.strip():
+            return scene_name.strip()
+        if isinstance(scene_key, str) and scene_key.strip():
+            return self._get_scene_name(scene_key.strip())
+        return None
+
+    async def list_scene_names(self) -> Optional[list[str]]:
+        resp = await self.send_request('GetSceneList')
+        if not isinstance(resp, dict):
+            return None
+        scenes = resp.get('scenes')
+        if not isinstance(scenes, list):
+            return None
+        out: list[str] = []
+        for s in scenes:
+            if not isinstance(s, dict):
+                continue
+            name = s.get('sceneName')
+            if isinstance(name, str) and name.strip():
+                out.append(name.strip())
+        return out
+
     async def connect(self) -> bool:
         """Connect to OBS WebSocket server."""
         try:
@@ -462,11 +485,11 @@ class OBSHandler:
         except Exception:
             return None
 
-    async def get_text_source_status(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+    async def get_text_source_status(self, scene_key: str = 'main', source_names: Optional[list[str]] = None, scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         names = source_names or list(REQUIRED_TEXT_SOURCES)
 
         current_scene = await self.get_current_scene()
-        main_scene = self._get_scene_name(scene_key) if scene_key else None
+        main_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
 
         input_names = await self._get_input_names()
         if input_names is None:
@@ -491,8 +514,8 @@ class OBSHandler:
             'sources': sources,
         }
 
-    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe') -> Optional[Dict[str, Any]]:
-        main_scene = self._get_scene_name(scene_key) if scene_key else None
+    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        main_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
         inputs = await self._get_inputs()
         if inputs is None:
             return None
@@ -543,14 +566,14 @@ class OBSHandler:
     async def ensure_spotify_audio_capture(self,
                                           scene_key: str = 'main',
                                           exe_name: str = 'Spotify.exe',
-                                          preferred_input_name: str = 'Spotify Audio') -> Optional[Dict[str, Any]]:
-        scene_name = self._get_scene_name(scene_key) if scene_key else None
-        if not scene_name:
-            scene_name = await self.get_current_scene()
-        if not scene_name:
+                                          preferred_input_name: str = 'Spotify Audio',
+                                          scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        resolved_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
+        if not resolved_scene:
+            resolved_scene = await self.get_current_scene()
+        if not resolved_scene:
             return None
-
-        status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name)
+        status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=resolved_scene)
         if status is None:
             return None
 
@@ -569,7 +592,7 @@ class OBSHandler:
 
             for cand in candidate_names:
                 ok, _, code, comment = await self._send_request_with_status('CreateInput', {
-                    'sceneName': scene_name,
+                    'sceneName': resolved_scene,
                     'inputName': cand,
                     'inputKind': 'wasapi_process_output_capture',
                     'inputSettings': {
@@ -589,7 +612,7 @@ class OBSHandler:
 
             if not created_name:
                 return {
-                    'scene': scene_name,
+                    'scene': resolved_scene,
                     'target_exe': exe_name,
                     'input_name': None,
                     'created': False,
@@ -599,13 +622,13 @@ class OBSHandler:
                 }
 
             input_name = created_name
-            status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name) or status
+            status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=resolved_scene) or status
 
         # Ensure it's in the scene
-        scene_item_id = await self._get_scene_item_id_by_scene_name(scene_name, input_name)
+        scene_item_id = await self._get_scene_item_id_by_scene_name(resolved_scene, input_name)
         if scene_item_id is None:
             resp = await self.send_request('CreateSceneItem', {
-                'sceneName': scene_name,
+                'sceneName': resolved_scene,
                 'sourceName': input_name,
             })
             if resp and 'sceneItemId' in resp:
@@ -650,7 +673,7 @@ class OBSHandler:
         except Exception as exc:
             errors.append(str(exc))
 
-        in_main_scene = (await self._get_scene_item_id_by_scene_name(scene_name, input_name)) is not None
+        in_main_scene = (await self._get_scene_item_id_by_scene_name(resolved_scene, input_name)) is not None
         # Determine if settings actually target Spotify.exe (optional, best-effort)
         targets_exe = False
         try:
@@ -661,7 +684,7 @@ class OBSHandler:
             targets_exe = False
 
         return {
-            'scene': scene_name,
+            'scene': resolved_scene,
             'target_exe': exe_name,
             'input_name': input_name,
             'created': bool(created),
@@ -699,12 +722,12 @@ class OBSHandler:
 
         return (False, "; ".join(failures) if failures else 'create_input_failed')
 
-    async def ensure_text_sources(self, scene_key: str = 'main', source_names: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+    async def ensure_text_sources(self, scene_key: str = 'main', source_names: Optional[list[str]] = None, scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         names = source_names or list(REQUIRED_TEXT_SOURCES)
-        scene_name = self._get_scene_name(scene_key) if scene_key else None
-        if not scene_name:
-            scene_name = await self.get_current_scene()
-        if not scene_name:
+        resolved_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
+        if not resolved_scene:
+            resolved_scene = await self.get_current_scene()
+        if not resolved_scene:
             return None
 
         input_names = await self._get_input_names()
@@ -720,17 +743,17 @@ class OBSHandler:
             try:
                 exists = n in input_names
                 if not exists:
-                    ok, err = await self._create_text_input(scene_name, n)
+                    ok, err = await self._create_text_input(resolved_scene, n)
                     if not ok:
                         errors[n] = err or 'create_input_failed'
                         continue
                     created.append(n)
                     input_names.add(n)
 
-                scene_item_id = await self._get_scene_item_id_by_scene_name(scene_name, n)
+                scene_item_id = await self._get_scene_item_id_by_scene_name(resolved_scene, n)
                 if scene_item_id is None:
                     resp = await self.send_request('CreateSceneItem', {
-                        'sceneName': scene_name,
+                        'sceneName': resolved_scene,
                         'sourceName': n,
                     })
                     if not resp or 'sceneItemId' not in resp:
@@ -747,7 +770,7 @@ class OBSHandler:
                     added_to_scene.append(n)
 
                 await self.send_request('SetSceneItemEnabled', {
-                    'sceneName': scene_name,
+                    'sceneName': resolved_scene,
                     'sceneItemId': scene_item_id,
                     'sceneItemEnabled': False,
                 })
@@ -761,7 +784,7 @@ class OBSHandler:
                 errors[n] = str(exc)
 
         return {
-            'scene': scene_name,
+            'scene': resolved_scene,
             'created': created,
             'added_to_scene': added_to_scene,
             'already_present': already_present,

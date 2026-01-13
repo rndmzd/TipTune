@@ -75,7 +75,6 @@ http://127.0.0.1:8888/callback
 In the Setup Wizard:
 
 - Set `Spotify.client_id`
-- Set `Spotify.client_secret`
 - Set `Spotify.redirect_url`
 
 ### 3.3 Authorize
@@ -122,6 +121,10 @@ In Setup Wizard or Settings:
 Open:
 
 - `http://127.0.0.1:8765/`
+
+If you want in-app documentation or troubleshooting info, open:
+
+- `http://127.0.0.1:8765/help`
 
 You should see:
 

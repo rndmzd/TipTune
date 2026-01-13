@@ -111,6 +111,10 @@ The UI is served from a local HTTP server (default `http://127.0.0.1:8765`).
   - Recent events + live SSE stream
 - `/history`
   - Request processing history (success/failure details)
+- `/stats`
+  - Aggregated stats from request history
+- `/help`
+  - In-app Help viewer (renders `docs/USER_MANUAL.md`)
 
 ### Setup redirect behavior
 
@@ -139,7 +143,6 @@ It guides you through:
 You will enter:
 
 - `Spotify.client_id`
-- `Spotify.client_secret`
 - `Spotify.redirect_url`
 
 Then:
@@ -309,7 +312,6 @@ Steps:
 ### Spotify
 
 - `Spotify.client_id`
-- `Spotify.client_secret`
 - `Spotify.redirect_url`
 
 Redirect URL rules:
@@ -322,6 +324,7 @@ Redirect URL rules:
 
 - `OBS.enabled` toggles all OBS features.
 - `OBS.host`, `OBS.port`, `OBS.password` configure obs-websocket.
+- `OBS.scene_name` controls which scene TipTune targets when creating/validating required text sources.
 
 When enabled, Settings provides:
 
@@ -347,6 +350,8 @@ Used to improve song metadata when the artist is missing.
 - `General.multi_request_tips`
 - `General.request_overlay_duration` (seconds)
 - `General.auto_check_updates` (UI toggle)
+- `General.debug_log_to_file`
+- `General.debug_log_path`
 
 `General.multi_request_tips` controls whether a single tip can request multiple songs when the tip amount is a multiple of `song_cost`.
 
@@ -452,7 +457,7 @@ If `config.ini` does not exist yet, TipTune seeds it from `config.ini.example` o
 See `config.ini.example` for the template.
 
 - `[Spotify]`
-  - `client_id`, `client_secret`, `redirect_url`, `playback_device_id`
+  - `client_id`, `redirect_url`, `playback_device_id`
 - `[OpenAI]`
   - `api_key`, `model`
 - `[Events API]`
@@ -460,11 +465,11 @@ See `config.ini.example` for the template.
 - `[Search]`
   - `google_api_key`, `google_cx`
 - `[OBS]`
-  - `enabled`, `host`, `port`, `password`
+  - `enabled`, `host`, `port`, `password`, `scene_name`
 - `[Web]`
   - `host`, `port`
 - `[General]`
-  - `song_cost`, `skip_song_cost`, `multi_request_tips`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`
+  - `song_cost`, `skip_song_cost`, `multi_request_tips`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `debug_log_to_file`, `debug_log_path`
 
 ---
 

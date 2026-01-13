@@ -87,10 +87,14 @@ pub fn run() {
                     while let Some(event) = rx.recv().await {
                         match event {
                             CommandEvent::Stdout(line) => {
-                                println!("[sidecar stdout] {}", String::from_utf8_lossy(&line));
+                                let s = String::from_utf8_lossy(&line);
+                                let s = s.trim_end_matches(&['\r', '\n'][..]);
+                                println!("[sidecar stdout] {}", s);
                             }
                             CommandEvent::Stderr(line) => {
-                                eprintln!("[sidecar stderr] {}", String::from_utf8_lossy(&line));
+                                let s = String::from_utf8_lossy(&line);
+                                let s = s.trim_end_matches(&['\r', '\n'][..]);
+                                eprintln!("[sidecar stderr] {}", s);
                             }
                             CommandEvent::Error(err) => {
                                 eprintln!("[sidecar error] {}", err);
@@ -113,6 +117,7 @@ pub fn run() {
             {
                 if matches!(event, WindowEvent::CloseRequested { .. }) {
                     kill_sidecar(&window.app_handle());
+                    window.app_handle().exit(0);
                 }
             }
         })
