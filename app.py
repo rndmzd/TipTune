@@ -71,42 +71,46 @@ def _setup_logging() -> None:
         return s in ('1', 'true', 'yes', 'y', 'on')
 
     level_name = str(os.getenv('TIPTUNE_LOG_LEVEL', 'INFO') or 'INFO').strip().upper()
-    console_level = getattr(logging, level_name, logging.INFO)
+    env_console_level = getattr(logging, level_name, logging.INFO)
 
-    file_enabled = False
+    debug_enabled = False
+    try:
+        debug_enabled = _truthy(config.get('General', 'debug_log_to_file', fallback='false'))
+    except Exception:
+        debug_enabled = False
+
+    level_force = _truthy(os.getenv('TIPTUNE_LOG_LEVEL_FORCE'))
+    console_level = env_console_level if (debug_enabled or level_force) else logging.INFO
+
+    file_enabled = debug_enabled
     file_path: Optional[str] = None
 
     env_log_path = os.getenv('TIPTUNE_LOG_PATH')
-    if isinstance(env_log_path, str) and env_log_path.strip():
+    log_path_force = _truthy(os.getenv('TIPTUNE_LOG_PATH_FORCE'))
+    if (isinstance(env_log_path, str) and env_log_path.strip()) and (file_enabled or log_path_force):
         file_enabled = True
         file_path = env_log_path.strip()
-    else:
+    elif file_enabled:
+        cfg_path = ''
         try:
-            file_enabled = _truthy(config.get('General', 'debug_log_to_file', fallback='false'))
+            cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
         except Exception:
-            file_enabled = False
-
-        if file_enabled:
             cfg_path = ''
-            try:
-                cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
-            except Exception:
-                cfg_path = ''
 
-            if cfg_path:
-                try:
-                    if os.path.isabs(cfg_path):
-                        file_path = cfg_path
-                    else:
-                        file_path = str(get_cache_dir() / cfg_path)
-                except Exception:
+        if cfg_path:
+            try:
+                if os.path.isabs(cfg_path):
                     file_path = cfg_path
-            else:
-                default_path = os.getenv('TIPTUNE_DEFAULT_LOG_PATH')
-                if isinstance(default_path, str) and default_path.strip():
-                    file_path = default_path.strip()
                 else:
-                    file_path = str(get_cache_dir() / 'tiptune-debug.log')
+                    file_path = str(get_cache_dir() / cfg_path)
+            except Exception:
+                file_path = cfg_path
+        else:
+            default_path = os.getenv('TIPTUNE_DEFAULT_LOG_PATH')
+            if isinstance(default_path, str) and default_path.strip():
+                file_path = default_path.strip()
+            else:
+                file_path = str(get_cache_dir() / 'tiptune-debug.log')
 
     root.setLevel(logging.DEBUG if file_enabled else console_level)
 

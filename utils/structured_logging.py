@@ -75,8 +75,7 @@ class StructuredLogFormatter(logging.Formatter):
         if hasattr(record, "extra_fields"):
             log_entry.update(record.extra_fields)
 
-        # Add a newline character after the JSON to create spacing between log entries
-        return json.dumps(log_entry, default=_json_default) + "\n"
+        return json.dumps(log_entry, default=_json_default)
 
 class StructuredLogger:
     """Wrapper for standardized structured logging across the application."""
