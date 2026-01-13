@@ -1222,8 +1222,9 @@ class SongRequestService:
             stream_url, guessed_ct = await asyncio.wait_for(loop.run_in_executor(None, lambda: self._yt_fetch_best_audio_url(url)), timeout=10)
         except asyncio.TimeoutError:
             raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
-        except Exception as exc:
-            raise web.HTTPBadRequest(text=str(exc))
+        except Exception:
+            logging.exception("Error extracting YouTube audio for URL %s", url)
+            raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
 
         range_header = request.headers.get('Range')
         headers: Dict[str, str] = {}
