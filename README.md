@@ -61,6 +61,12 @@ Pages:
   - Setup Wizard
 - `/events`
   - Recent events + live SSE stream
+- `/history`
+  - Request processing history (success/failure details)
+- `/stats`
+  - Aggregated stats from request history
+- `/help`
+  - In-app Help viewer (renders `docs/USER_MANUAL.md`)
 
 ---
 
@@ -99,7 +105,7 @@ Environment overrides:
 TipTune uses these sections/keys (see `config.ini.example`):
 
 - `[Spotify]` (required for playback)
-  - `client_id`, `client_secret`, `redirect_url`, `playback_device_id`
+  - `client_id`, `redirect_url`, `playback_device_id`
 - `[OpenAI]` (optional)
   - `api_key`, `model`
 - `[Events API]` (optional)
@@ -107,11 +113,11 @@ TipTune uses these sections/keys (see `config.ini.example`):
 - `[Search]` (optional)
   - `google_api_key`, `google_cx`
 - `[OBS]` (optional)
-  - `enabled`, `host`, `port`, `password`
+  - `enabled`, `host`, `port`, `password`, `scene_name`
 - `[Web]` (optional)
   - `host`, `port`
 - `[General]` (required)
-  - `song_cost`, `multi_request_tips`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`
+  - `song_cost`, `multi_request_tips`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `debug_log_to_file`, `debug_log_path`
 
 ### Multi-song tips
 
@@ -146,7 +152,7 @@ Steps:
 
 1. In TipTune Setup Wizard:
 
-    - Enter `client_id`, `client_secret`, `redirect_url`
+    - Enter `client_id`, `redirect_url`
     - Click **Connect Spotify** and complete login in your browser
 
 1. In Settings:
