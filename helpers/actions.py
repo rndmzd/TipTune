@@ -92,8 +92,10 @@ class Actions:
                 # Not connecting yet
                 logger.info("actions.obs.init.complete", message="OBS handler initialized")
 
-                if self.chatdj_enabled:
+                try:
                     self.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
+                except Exception:
+                    self.request_overlay_duration = 10
             except Exception as exc:
                 logger.exception("actions.obs.init.error", message="Failed to initialize OBS integration", exc=exc)
                 self.obs_integration_enabled = False
@@ -222,12 +224,21 @@ class Actions:
             return
         await self.obs.trigger_warning_overlay(username, message, duration)
 
-    async def trigger_queue_state_overlay(self, message: str, duration: int = 3) -> None:
+    async def trigger_queue_state_overlay(self, message: str, duration: Optional[int] = None) -> None:
         if not self.obs_integration_enabled:
             return
         obs = getattr(self, 'obs', None)
         if obs is None:
             return
+        if duration is None:
+            try:
+                duration = int(getattr(self, 'request_overlay_duration', 10) or 10)
+            except Exception:
+                duration = 10
+        try:
+            duration = max(1, int(duration))
+        except Exception:
+            duration = 10
         try:
             await obs.trigger_motor_overlay(message, overlay_type='processing', display_duration=duration)
         except Exception as exc:
