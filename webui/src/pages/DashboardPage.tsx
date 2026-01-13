@@ -761,7 +761,6 @@ export function DashboardPage() {
 
           {status === 'error' ? <div className="muted">Error: {err}</div> : null}
 
-          <label>Up next</label>
           <div className="queueOut" ref={queueOutRef}>
             {queue.length ? (
               queue.map((item, i) => (
