@@ -63,6 +63,15 @@ def _active_music_source() -> str:
         return 'spotify'
 
 
+def _normalize_music_source(raw: Any, default: str = 'spotify') -> str:
+    s = str(raw or '').strip().lower()
+    if s in ('spotify', 'sp'):
+        return 'spotify'
+    if s in ('youtube', 'yt', 'ytdlp'):
+        return 'youtube'
+    return str(default or 'spotify')
+
+
 def _setup_logging() -> None:
     root = logging.getLogger()
 
@@ -583,8 +592,19 @@ class WebUI:
         if not isinstance(uri, str) or uri.strip() == "":
             return web.json_response({"ok": False, "error": "Invalid uri"}, status=400)
 
-        source = _active_music_source()
-        item_to_add: Any = item_obj if source == 'youtube' and isinstance(item_obj, dict) else uri
+        source = _normalize_music_source(payload.get('source'), default=_active_music_source())
+        if isinstance(item_obj, dict):
+            item_to_add: Any = dict(item_obj)
+            if isinstance(item_to_add.get('source'), str):
+                item_to_add['source'] = _normalize_music_source(item_to_add.get('source'), default=source)
+            else:
+                item_to_add['source'] = source
+            if isinstance(item_to_add.get('uri'), str) and item_to_add.get('uri').strip() != "":
+                pass
+            else:
+                item_to_add['uri'] = uri
+        else:
+            item_to_add = {"source": source, "uri": uri}
 
         if 'index' in payload:
             index_raw = payload.get('index')
@@ -654,7 +674,7 @@ class WebUI:
         limit = min(limit, 25)
 
         try:
-            source = _active_music_source()
+            source = _normalize_music_source(request.query.get('source'), default=_active_music_source())
             tracks = await self._service.search_tracks(q, limit=limit, source=source)
             return web.json_response({"ok": True, "source": source, "tracks": tracks})
         except Exception as exc:
@@ -1006,8 +1026,34 @@ class SongRequestService:
         self._yt_queue_path: Path = cache_dir / 'yt_queue_state.json'
         self._load_yt_queue_state_from_disk()
 
+        self._queue_lock = asyncio.Lock()
+        self._queue_items: list[dict] = []
+        self._queue_paused: bool = False
+        self._queue_now_playing: Optional[dict] = None
+        self._queue_started_ts: Optional[float] = None
+
+        self._queue_path: Path = cache_dir / 'queue_state.json'
+        self._load_queue_state_from_disk()
+        self._maybe_migrate_legacy_queue_state()
+
     def _active_source(self) -> str:
         return _active_music_source()
+
+    def _source_override_from_text(self, text: str) -> Optional[str]:
+        try:
+            msg = text or ''
+            if not isinstance(msg, str):
+                return None
+            s = msg.lower()
+            sp = s.rfind('spotify')
+            yt = s.rfind('youtube')
+            if sp < 0 and yt < 0:
+                return None
+            if sp > yt:
+                return 'spotify'
+            return 'youtube'
+        except Exception:
+            return None
 
     def _youtube_url_from_text(self, text: str) -> Optional[str]:
         try:
@@ -1053,6 +1099,207 @@ class SongRequestService:
         except Exception:
             return
 
+    def _normalize_queue_item(self, raw: Any, default_source: str) -> Optional[dict]:
+        try:
+            if isinstance(raw, dict):
+                item = dict(raw)
+            else:
+                item = {"uri": str(raw or '').strip()}
+
+            src = _normalize_music_source(item.get('source'), default=default_source)
+            uri = item.get('uri')
+            if not isinstance(uri, str) or uri.strip() == '':
+                return None
+
+            if src == 'youtube':
+                url = uri.strip()
+                if not self._is_allowed_youtube_url(url):
+                    return None
+                item['uri'] = url
+                if 'external_url' not in item:
+                    item['external_url'] = url
+            else:
+                track_uri = self._normalize_spotify_track_uri(uri)
+                if not track_uri:
+                    return None
+                item['uri'] = track_uri
+
+            item['source'] = src
+            return item
+        except Exception:
+            return None
+
+    async def _enrich_mixed_queue_items(self, items: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        if not items:
+            return out
+
+        to_fetch: list[tuple[int, str, str]] = []
+        max_fetch = 10
+
+        for idx, it in enumerate(items):
+            if not isinstance(it, dict):
+                continue
+            enriched = dict(it)
+            src = _normalize_music_source(enriched.get('source'), default='spotify')
+            enriched['source'] = src
+
+            if src == 'youtube':
+                u = enriched.get('uri')
+                if isinstance(u, str) and u.strip() != '' and 'external_url' not in enriched:
+                    enriched['external_url'] = u.strip()
+                out.append(enriched)
+                continue
+
+            uri = enriched.get('uri')
+            uri = uri.strip() if isinstance(uri, str) else ''
+            if uri == '':
+                out.append(enriched)
+                continue
+
+            tid = self._parse_spotify_track_id(uri)
+            cache_key = tid or uri
+            meta = self._cache_get_track(cache_key)
+            if tid and 'track_id' not in enriched:
+                enriched['track_id'] = tid
+            if meta:
+                enriched.update(meta)
+            else:
+                if len(to_fetch) < max_fetch:
+                    to_fetch.append((len(out), cache_key, uri))
+
+            out.append(enriched)
+
+        if not to_fetch:
+            return out
+
+        tasks = [self._fetch_spotify_track_meta(uri) for (_idx, _key, uri) in to_fetch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, res in enumerate(results):
+            if isinstance(res, dict):
+                idx, cache_key, _uri = to_fetch[i]
+                self._cache_put_track(cache_key, res)
+                try:
+                    out[idx].update(res)
+                except Exception:
+                    pass
+        return out
+
+    async def _queue_start_next_if_needed(self) -> bool:
+        async with self._queue_lock:
+            if self._queue_paused:
+                return False
+            if self._queue_now_playing is not None:
+                return False
+            if not self._queue_items:
+                return False
+            nxt = self._queue_items.pop(0)
+            self._queue_now_playing = nxt
+            self._queue_started_ts = time.time()
+
+        try:
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+
+        src = _normalize_music_source((nxt or {}).get('source'), default=self._active_source())
+        if src == 'youtube':
+            try:
+                enriched = await self._yt_enrich_item(nxt)
+                enriched['source'] = 'youtube'
+                async with self._queue_lock:
+                    if self._queue_now_playing is not None:
+                        self._queue_now_playing = enriched
+                try:
+                    self._persist_queue_state_to_disk()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            return True
+
+        if not getattr(self.actions, 'chatdj_enabled', False):
+            async with self._queue_lock:
+                self._queue_now_playing = None
+                self._queue_started_ts = None
+                self._queue_items.insert(0, nxt)
+            try:
+                self._persist_queue_state_to_disk()
+            except Exception:
+                pass
+            return False
+        if not hasattr(self.actions, 'auto_dj'):
+            async with self._queue_lock:
+                self._queue_now_playing = None
+                self._queue_started_ts = None
+                self._queue_items.insert(0, nxt)
+            try:
+                self._persist_queue_state_to_disk()
+            except Exception:
+                pass
+            return False
+
+        uri = nxt.get('uri') if isinstance(nxt, dict) else None
+        track_uri = self._normalize_spotify_track_uri(uri) if isinstance(uri, str) else None
+        if not track_uri:
+            async with self._queue_lock:
+                self._queue_now_playing = None
+                self._queue_started_ts = None
+            try:
+                self._persist_queue_state_to_disk()
+            except Exception:
+                pass
+            return False
+
+        loop = asyncio.get_running_loop()
+
+        def _do_start() -> bool:
+            try:
+                try:
+                    self.actions.auto_dj.clear_playback_context(persist=False)
+                except Exception:
+                    pass
+                try:
+                    self.actions.auto_dj.now_playing_track_uri = track_uri
+                except Exception:
+                    pass
+                self.actions.auto_dj.spotify.start_playback(device_id=getattr(self.actions.auto_dj, 'playback_device', None), uris=[track_uri])
+                try:
+                    self.actions.auto_dj._last_start_playback_ts = time.time()
+                except Exception:
+                    pass
+                return True
+            except Exception:
+                return False
+
+        try:
+            ok = await asyncio.wait_for(loop.run_in_executor(None, _do_start), timeout=8)
+        except asyncio.TimeoutError:
+            ok = False
+        except Exception:
+            ok = False
+
+        if not ok:
+            async with self._queue_lock:
+                self._queue_now_playing = None
+                self._queue_started_ts = None
+                self._queue_items.insert(0, nxt)
+            try:
+                self._persist_queue_state_to_disk()
+            except Exception:
+                pass
+            return False
+
+        async with self._queue_lock:
+            if self._queue_now_playing is not None:
+                self._queue_now_playing['source'] = 'spotify'
+                self._queue_now_playing['uri'] = track_uri
+        try:
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+        return True
+
     def _persist_yt_queue_state_to_disk(self) -> None:
         try:
             ensure_parent_dir(self._yt_queue_path)
@@ -1065,6 +1312,79 @@ class SongRequestService:
             tmp = self._yt_queue_path.with_suffix(self._yt_queue_path.suffix + '.tmp')
             tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
             os.replace(tmp, self._yt_queue_path)
+        except Exception:
+            return
+
+    def _load_queue_state_from_disk(self) -> None:
+        try:
+            raw = read_text_if_exists(self._queue_path)
+            if raw is None:
+                return
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                return
+
+            queued = payload.get('queued_items')
+            now_item = payload.get('now_playing_item')
+            paused = payload.get('paused')
+            started_ts = payload.get('started_ts')
+
+            if isinstance(queued, list):
+                self._queue_items = [dict(x) for x in queued if isinstance(x, dict)]
+            if isinstance(now_item, dict):
+                self._queue_now_playing = dict(now_item)
+            if paused is not None:
+                self._queue_paused = bool(paused)
+            if started_ts is not None:
+                try:
+                    self._queue_started_ts = float(started_ts)
+                except Exception:
+                    self._queue_started_ts = None
+        except Exception:
+            return
+
+    def _persist_queue_state_to_disk(self) -> None:
+        try:
+            ensure_parent_dir(self._queue_path)
+            payload = {
+                'ts': time.time(),
+                'paused': bool(self._queue_paused),
+                'started_ts': self._queue_started_ts,
+                'now_playing_item': self._queue_now_playing,
+                'queued_items': self._queue_items,
+            }
+            tmp = self._queue_path.with_suffix(self._queue_path.suffix + '.tmp')
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
+            os.replace(tmp, self._queue_path)
+        except Exception:
+            return
+
+    def _maybe_migrate_legacy_queue_state(self) -> None:
+        try:
+            if self._queue_items or self._queue_now_playing is not None:
+                return
+
+            items: list[dict] = []
+            now_item: Optional[dict] = None
+
+            if isinstance(self._yt_now_playing, dict):
+                now_item = dict(self._yt_now_playing)
+                now_item['source'] = 'youtube'
+            if isinstance(self._yt_queue, list) and self._yt_queue:
+                for it in self._yt_queue:
+                    if isinstance(it, dict):
+                        d = dict(it)
+                        d['source'] = 'youtube'
+                        items.append(d)
+
+            if items or now_item is not None:
+                self._queue_items = items
+                self._queue_now_playing = now_item
+                self._queue_paused = bool(self._yt_paused)
+                try:
+                    self._persist_queue_state_to_disk()
+                except Exception:
+                    pass
         except Exception:
             return
 
@@ -1281,23 +1601,26 @@ class SongRequestService:
         return started
 
     async def advance_queue(self) -> bool:
-        if self._active_source() != 'youtube':
-            return False
-        started = False
-        async with self._yt_lock:
-            self._yt_now_playing = None
-            self._yt_started_ts = None
+        now_item: Optional[dict] = None
+        async with self._queue_lock:
+            now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
 
-            if (not self._yt_paused) and self._yt_now_playing is None and self._yt_queue:
-                nxt = self._yt_queue.pop(0)
-                self._yt_now_playing = nxt
-                self._yt_started_ts = time.time()
-                started = True
         try:
-            self._persist_yt_queue_state_to_disk()
+            if now_item and _normalize_music_source(now_item.get('source'), default=self._active_source()) == 'spotify':
+                await self.actions.skip_song()
         except Exception:
             pass
-        return started
+
+        async with self._queue_lock:
+            self._queue_now_playing = None
+            self._queue_started_ts = None
+
+        try:
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+
+        return await self._queue_start_next_if_needed()
 
     def _get_obs_overlay_duration_seconds(self) -> int:
         try:
@@ -1675,14 +1998,38 @@ class SongRequestService:
             pass
 
     async def _queue_watchdog(self) -> None:
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return
-        if not hasattr(self.actions, 'auto_dj'):
-            return
         while not self._stop_event.is_set():
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self.actions.auto_dj.check_queue_status)
+
+                if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+                    await loop.run_in_executor(None, self.actions.auto_dj.check_queue_status)
+
+                try:
+                    await self._queue_start_next_if_needed()
+                except Exception:
+                    pass
+
+                try:
+                    async with self._queue_lock:
+                        paused = bool(self._queue_paused)
+                        now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+                        started_ts = self._queue_started_ts
+
+                    if (
+                        (not paused)
+                        and now_item
+                        and _normalize_music_source(now_item.get('source'), default=self._active_source()) == 'spotify'
+                        and getattr(self.actions, 'chatdj_enabled', False)
+                        and hasattr(self.actions, 'auto_dj')
+                        and started_ts is not None
+                        and (time.time() - float(started_ts)) > 5.0
+                    ):
+                        is_active = await loop.run_in_executor(None, self.actions.auto_dj.playback_active)
+                        if not bool(is_active):
+                            await self.advance_queue()
+                except Exception:
+                    pass
             except Exception as exc:
                 logger.exception("song.queue.check.error", exc=exc, message="Queue watchdog error")
 
@@ -1693,8 +2040,6 @@ class SongRequestService:
 
     async def _local_control_loop(self) -> None:
         if not getattr(self.actions, 'chatdj_enabled', False):
-            return
-        if not hasattr(self.actions, 'auto_dj'):
             return
 
         logger.info(
@@ -2002,17 +2347,16 @@ class SongRequestService:
         return (True, auth_url, None)
 
     async def _handle_local_command(self, cmd: str, loop: asyncio.AbstractEventLoop) -> None:
-        if not hasattr(self.actions, 'auto_dj'):
-            return
         if cmd in ("pause", "p"):
-            await loop.run_in_executor(None, self.actions.auto_dj.pause_queue)
+            await self.pause_queue()
             return
         if cmd in ("resume", "unpause", "r"):
-            await loop.run_in_executor(None, self.actions.auto_dj.unpause_queue)
+            await self.resume_queue()
             return
         if cmd in ("status", "s"):
-            paused = await loop.run_in_executor(None, self.actions.auto_dj.queue_paused)
-            queued = len(getattr(self.actions.auto_dj, 'queued_tracks', []))
+            state = await self.get_queue_state()
+            paused = bool(state.get('paused'))
+            queued = len(state.get('queued_items') or [])
             logger.info(
                 "local.control.status",
                 message="Queue status.",
@@ -2111,13 +2455,10 @@ class SongRequestService:
             is_song_request = self.checks.is_song_request(tip_amount)
             is_skip_request = self.checks.is_skip_song_request(tip_amount)
 
-            source = self._active_source()
+            active_source = self._active_source()
 
             if not is_song_request and is_skip_request:
-                if source == 'youtube':
-                    skipped = await self.advance_queue()
-                else:
-                    skipped = await self.actions.skip_song()
+                skipped = await self.advance_queue()
                 if not skipped:
                     await self.actions.trigger_warning_overlay(
                         username,
@@ -2128,6 +2469,9 @@ class SongRequestService:
 
             if not is_song_request:
                 return
+
+            source_override = self._source_override_from_text(tip_message)
+            source = _normalize_music_source(source_override, default=active_source)
 
             request_count = max(1, self.checks.get_request_count(tip_amount))
 
@@ -2224,11 +2568,16 @@ class SongRequestService:
                     continue
 
                 song_details = f"{song_info.artist} - {song_info.song}".strip()
-                if source == 'youtube':
-                    await self.add_track_to_queue(song_uri)
-                    await self._yt_start_next_if_needed()
-                else:
-                    await self.actions.add_song_to_queue(song_uri, username, song_details)
+                ok = await self.add_track_to_queue({"source": source, "uri": song_uri})
+                if ok:
+                    try:
+                        await self.actions.trigger_song_requester_overlay(
+                            username,
+                            song_details,
+                            self._get_obs_overlay_duration_seconds(),
+                        )
+                    except Exception:
+                        pass
 
                 self.publish_request_history_item({
                     "ts": time.time(),
@@ -2399,56 +2748,43 @@ class SongRequestService:
 
     async def get_queue_state(self) -> Dict[str, Any]:
         source = self._active_source()
-        if source == 'youtube':
-            async with self._yt_lock:
-                queued_items = list(self._yt_queue)
-                now_item = dict(self._yt_now_playing) if isinstance(self._yt_now_playing, dict) else None
-                paused = bool(self._yt_paused)
-            return {
-                "enabled": True,
-                "source": "youtube",
-                "paused": paused,
-                "playback_progress_ms": None,
-                "playback_is_playing": None,
-                "playback_track_uri": None,
-                "now_playing_track": now_item.get('uri') if now_item else None,
-                "now_playing_item": now_item,
-                "queued_tracks": [it.get('uri') for it in queued_items if isinstance(it, dict) and isinstance(it.get('uri'), str)],
-                "queued_items": queued_items,
-                "playback_device_id": None,
-                "playback_device_name": None,
-            }
 
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return {"enabled": False, "source": source}
-        if not hasattr(self.actions, 'auto_dj'):
-            return {"enabled": False, "source": source}
+        async with self._queue_lock:
+            queued_raw = list(self._queue_items)
+            now_raw = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+            paused = bool(self._queue_paused)
+
+        now_item: Optional[dict] = None
+        if isinstance(now_raw, dict):
+            try:
+                enriched = await self._enrich_mixed_queue_items([now_raw])
+                now_item = enriched[0] if enriched else dict(now_raw)
+            except Exception:
+                now_item = dict(now_raw)
 
         try:
-            queued_tracks = self.actions.auto_dj.get_queued_tracks_snapshot()
+            queued_items = await self._enrich_mixed_queue_items(queued_raw)
         except Exception:
-            queued_tracks = list(getattr(self.actions.auto_dj, 'queued_tracks', []))
-        playback_device_id = getattr(self.actions.auto_dj, 'playback_device', None)
-        playback_device_name = getattr(self.actions.auto_dj, 'playback_device_name', None)
+            queued_items = list(queued_raw)
 
-        paused = self.actions.auto_dj.queue_paused()
+        queued_tracks = [it.get('uri') for it in queued_items if isinstance(it, dict) and isinstance(it.get('uri'), str)]
+        now_playing_track = now_item.get('uri') if isinstance(now_item, dict) else None
+
+        playback_device_id = getattr(getattr(self.actions, 'auto_dj', None), 'playback_device', None)
+        playback_device_name = getattr(getattr(self.actions, 'auto_dj', None), 'playback_device_name', None)
 
         playback_progress_ms: Optional[int] = None
         playback_is_playing: Optional[bool] = None
         playback_track_uri: Optional[str] = None
 
-        now_playing_track = getattr(self.actions.auto_dj, 'now_playing_track_uri', None)
-        now_playing_item: Optional[dict] = None
-        if isinstance(now_playing_track, str) and now_playing_track.strip() != "":
-            try:
-                enriched_np = await self._enrich_queue_tracks([now_playing_track])
-                if enriched_np and isinstance(enriched_np, list) and isinstance(enriched_np[0], dict):
-                    now_playing_item = enriched_np[0]
-                else:
-                    now_playing_item = {"uri": now_playing_track}
-            except Exception:
-                now_playing_item = {"uri": now_playing_track}
-
+        now_src = _normalize_music_source((now_item or {}).get('source'), default=source) if isinstance(now_item, dict) else source
+        if (
+            now_src == 'spotify'
+            and getattr(self.actions, 'chatdj_enabled', False)
+            and hasattr(self.actions, 'auto_dj')
+            and isinstance(now_playing_track, str)
+            and now_playing_track.strip() != ''
+        ):
             try:
                 loop = asyncio.get_running_loop()
                 pb = await loop.run_in_executor(None, self.actions.auto_dj.spotify.current_playback)
@@ -2470,17 +2806,15 @@ class SongRequestService:
                 playback_is_playing = None
                 playback_track_uri = None
 
-        queued_items = await self._enrich_queue_tracks(queued_tracks)
-
         return {
             "enabled": True,
-            "source": "spotify",
-            "paused": bool(paused),
+            "source": source,
+            "paused": paused,
             "playback_progress_ms": playback_progress_ms,
             "playback_is_playing": playback_is_playing,
             "playback_track_uri": playback_track_uri,
             "now_playing_track": now_playing_track,
-            "now_playing_item": now_playing_item,
+            "now_playing_item": now_item,
             "queued_tracks": queued_tracks,
             "queued_items": queued_items,
             "playback_device_id": playback_device_id,
@@ -2665,81 +2999,47 @@ class SongRequestService:
         return items
 
     async def pause_queue(self) -> bool:
-        if self._active_source() == 'youtube':
-            async with self._yt_lock:
-                self._yt_paused = True
-            try:
-                self._persist_yt_queue_state_to_disk()
-            except Exception:
-                pass
-            return True
-        else:
-            if not getattr(self.actions, 'chatdj_enabled', False):
-                return False
-            if not hasattr(self.actions, 'auto_dj'):
-                return False
-            ok = bool(self.actions.auto_dj.pause_queue())
-        if ok:
-            try:
-                await self.actions.trigger_queue_state_overlay(
-                    "Song queue paused — current song will finish, then new requests will wait."
-                )
-            except Exception:
-                pass
-        return ok
+        async with self._queue_lock:
+            self._queue_paused = True
+        try:
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+        try:
+            await self.actions.trigger_queue_state_overlay(
+                "Song queue paused — current song will finish, then new requests will wait."
+            )
+        except Exception:
+            pass
+        return True
 
     async def resume_queue(self) -> bool:
-        if self._active_source() == 'youtube':
-            async with self._yt_lock:
-                self._yt_paused = False
-            try:
-                self._persist_yt_queue_state_to_disk()
-            except Exception:
-                pass
-            await self._yt_start_next_if_needed()
-            ok = True
-        else:
-            if not getattr(self.actions, 'chatdj_enabled', False):
-                return False
-            if not hasattr(self.actions, 'auto_dj'):
-                return False
-            ok = bool(self.actions.auto_dj.unpause_queue())
-        if ok:
-            try:
-                await self.actions.trigger_queue_state_overlay("Song request queue resumed")
-            except Exception:
-                pass
-        return ok
+        async with self._queue_lock:
+            self._queue_paused = False
+        try:
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+        await self._queue_start_next_if_needed()
+        try:
+            await self.actions.trigger_queue_state_overlay("Song request queue resumed")
+        except Exception:
+            pass
+        return True
 
     async def move_queue_item(self, from_index: int, to_index: int) -> bool:
-        if self._active_source() == 'youtube':
-            async with self._yt_lock:
-                if from_index < 0 or to_index < 0:
-                    return False
-                if from_index >= len(self._yt_queue) or to_index >= len(self._yt_queue):
-                    return False
-                item = self._yt_queue.pop(from_index)
-                self._yt_queue.insert(to_index, item)
-            try:
-                self._persist_yt_queue_state_to_disk()
-            except Exception:
-                pass
-            return True
-
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            return False
-
-        loop = asyncio.get_running_loop()
+        async with self._queue_lock:
+            if from_index < 0 or to_index < 0:
+                return False
+            if from_index >= len(self._queue_items) or to_index >= len(self._queue_items):
+                return False
+            item = self._queue_items.pop(from_index)
+            self._queue_items.insert(to_index, item)
         try:
-            ok = await asyncio.wait_for(
-                loop.run_in_executor(None, self.actions.auto_dj.move_queued_track, from_index, to_index),
-                timeout=2,
-            )
-        except asyncio.TimeoutError:
-            return False
-        return bool(ok)
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+        return True
 
     def _normalize_spotify_track_uri(self, v: Any) -> Optional[str]:
         if not isinstance(v, str):
@@ -2760,121 +3060,54 @@ class SongRequestService:
         return s
 
     async def add_track_to_queue(self, uri: Any) -> bool:
-        if self._active_source() == 'youtube':
-            item: Dict[str, Any]
-            if isinstance(uri, dict):
-                item = dict(uri)
-                track_uri = item.get('uri')
-                if not isinstance(track_uri, str):
-                    return False
-                track_uri = track_uri.strip()
-            else:
-                track_uri = str(uri or '').strip()
-                item = {"uri": track_uri}
+        item = self._normalize_queue_item(uri, default_source=self._active_source())
+        if not item:
+            return False
 
-            if track_uri == '':
-                return False
-            if not self._is_allowed_youtube_url(track_uri):
-                return False
-
-            if 'external_url' not in item:
-                item['external_url'] = track_uri
-
+        if item.get('source') == 'youtube':
             try:
                 item = await self._yt_enrich_item(item)
+                item['source'] = 'youtube'
             except Exception:
                 pass
 
-            async with self._yt_lock:
-                self._yt_queue.append(item)
-            try:
-                self._persist_yt_queue_state_to_disk()
-            except Exception:
-                pass
-            await self._yt_start_next_if_needed()
-            return True
-
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            return False
-
-        track_uri = self._normalize_spotify_track_uri(uri)
-        if not track_uri:
-            return False
-
-        loop = asyncio.get_running_loop()
+        async with self._queue_lock:
+            self._queue_items.append(item)
         try:
-            ok = await asyncio.wait_for(
-                loop.run_in_executor(None, self.actions.auto_dj.add_song_to_queue, track_uri, True),
-                timeout=2,
-            )
-        except asyncio.TimeoutError:
-            return False
+            self._persist_queue_state_to_disk()
         except Exception:
-            return False
-        return bool(ok)
+            pass
+        await self._queue_start_next_if_needed()
+        return True
 
     async def insert_track_to_queue(self, uri: Any, index: int = 0) -> bool:
-        if self._active_source() == 'youtube':
-            item: Dict[str, Any]
-            if isinstance(uri, dict):
-                item = dict(uri)
-                track_uri = item.get('uri')
-                if not isinstance(track_uri, str):
-                    return False
-                track_uri = track_uri.strip()
-            else:
-                track_uri = str(uri or '').strip()
-                item = {"uri": track_uri}
+        item = self._normalize_queue_item(uri, default_source=self._active_source())
+        if not item:
+            return False
 
-            if track_uri == '':
-                return False
-            if not self._is_allowed_youtube_url(track_uri):
-                return False
-
-            if 'external_url' not in item:
-                item['external_url'] = track_uri
+        if item.get('source') == 'youtube':
             try:
                 item = await self._yt_enrich_item(item)
+                item['source'] = 'youtube'
             except Exception:
                 pass
-            try:
-                idx = int(index)
-            except Exception:
-                idx = 0
-            if idx < 0:
-                idx = 0
-            async with self._yt_lock:
-                idx = min(idx, len(self._yt_queue))
-                self._yt_queue.insert(idx, item)
-            try:
-                self._persist_yt_queue_state_to_disk()
-            except Exception:
-                pass
-            await self._yt_start_next_if_needed()
-            return True
 
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            return False
-
-        track_uri = self._normalize_spotify_track_uri(uri)
-        if not track_uri:
-            return False
-
-        loop = asyncio.get_running_loop()
         try:
-            ok = await asyncio.wait_for(
-                loop.run_in_executor(None, self.actions.auto_dj.insert_song_to_queue, track_uri, int(index), True),
-                timeout=2,
-            )
-        except asyncio.TimeoutError:
-            return False
+            idx = int(index)
         except Exception:
-            return False
-        return bool(ok)
+            idx = 0
+        if idx < 0:
+            idx = 0
+
+        async with self._queue_lock:
+            idx = min(idx, len(self._queue_items))
+            self._queue_items.insert(idx, item)
+        try:
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+        await self._queue_start_next_if_needed()
+        return True
 
     async def search_spotify_tracks(self, query: str, limit: int = 10) -> list[dict]:
         loop = asyncio.get_running_loop()
@@ -2965,6 +3198,7 @@ class SongRequestService:
                     spotify_url = u
 
             item: Dict[str, Any] = {}
+            item['source'] = 'spotify'
             if uri is not None:
                 item['uri'] = uri
             if track_id is not None:
@@ -3060,6 +3294,7 @@ class SongRequestService:
                     url = u.strip()
 
             item: Dict[str, Any] = {}
+            item['source'] = 'youtube'
             if url is not None:
                 item['uri'] = url
                 item['external_url'] = url
@@ -3080,31 +3315,15 @@ class SongRequestService:
         return out
 
     async def delete_queue_item(self, index: int) -> bool:
-        if self._active_source() == 'youtube':
-            async with self._yt_lock:
-                if index < 0 or index >= len(self._yt_queue):
-                    return False
-                self._yt_queue.pop(index)
-            try:
-                self._persist_yt_queue_state_to_disk()
-            except Exception:
-                pass
-            return True
-
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            return False
-
-        loop = asyncio.get_running_loop()
+        async with self._queue_lock:
+            if index < 0 or index >= len(self._queue_items):
+                return False
+            self._queue_items.pop(index)
         try:
-            ok = await asyncio.wait_for(
-                loop.run_in_executor(None, self.actions.auto_dj.delete_queued_track, index),
-                timeout=2,
-            )
-        except asyncio.TimeoutError:
-            return False
-        return bool(ok)
+            self._persist_queue_state_to_disk()
+        except Exception:
+            pass
+        return True
 
     async def get_devices(self) -> list[dict]:
         if not getattr(self.actions, 'chatdj_enabled', False):
