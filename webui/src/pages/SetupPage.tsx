@@ -377,7 +377,6 @@ export function SetupPage() {
             host: v('OBS', 'host'),
             port: v('OBS', 'port'),
             password: secrets.obsPassword,
-            scene_name: v('OBS', 'scene_name'),
           },
         });
         setSecrets((s) => ({ ...s, obsPassword: '' }));
@@ -389,7 +388,12 @@ export function SetupPage() {
           await loadObsScenes().catch(() => {});
         }
       } else if (step === 'obs_sources') {
-        // No config to save here; this step is just to validate/create required sources.
+        await savePartial({
+          OBS: {
+            scene_name: v('OBS', 'scene_name'),
+          },
+        });
+        await loadConfig();
         setStatus('');
       } else if (step === 'general') {
         await savePartial({
@@ -447,7 +451,7 @@ export function SetupPage() {
   }, [currentStep, obsEnabled]);
 
   useEffect(() => {
-    if (currentStep !== 'obs') {
+    if (currentStep !== 'obs_sources') {
       setObsScenesMsg('');
       setObsScenes([]);
       return;
@@ -479,7 +483,8 @@ export function SetupPage() {
   const obsHost = norm(v('OBS', 'host'));
   const obsPort = norm(v('OBS', 'port'));
   const obsSceneName = norm(v('OBS', 'scene_name'));
-  const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '' && obsSceneName !== '');
+  const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '');
+  const obsSourcesOk = !obsEnabled || obsSceneName !== '';
 
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
@@ -500,7 +505,7 @@ export function SetupPage() {
             : currentStep === 'obs'
               ? obsOk
               : currentStep === 'obs_sources'
-                ? true
+                ? obsSourcesOk
                 : currentStep === 'general'
                   ? generalOk
                   : false;
@@ -627,28 +632,6 @@ export function SetupPage() {
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />
           <div className="muted">This is the password configured in OBS → Tools → WebSocket Server Settings.</div>
-
-          <label style={{ marginTop: 12 }}>Overlay scene</label>
-          <select
-            value={obsSceneName}
-            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), scene_name: e.target.value } }))}
-            disabled={!obsEnabled}
-          >
-            <option value="">(select a scene)</option>
-            {(obsScenes || []).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <div className="muted">Pick the scene where TipTune overlays (text sources) should be created/managed.</div>
-
-          <div className="actions" style={{ marginTop: 10 }}>
-            <button type="button" onClick={() => loadObsScenes().catch(() => {})} disabled={!obsEnabled}>
-              Refresh scenes
-            </button>
-          </div>
-          {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
         </div>
       ) : null}
 
@@ -671,6 +654,28 @@ export function SetupPage() {
               <code>{obsStatus?.status?.main_scene || '(unknown)'}</code>
             </div>
           </div>
+
+          <label style={{ marginTop: 12 }}>Overlay scene</label>
+          <select
+            value={obsSceneName}
+            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), scene_name: e.target.value } }))}
+            disabled={!obsEnabled}
+          >
+            <option value="">(select a scene)</option>
+            {(obsScenes || []).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <div className="muted">Pick the scene where TipTune overlays (text sources) should be created/managed.</div>
+
+          <div className="actions" style={{ marginTop: 10 }}>
+            <button type="button" onClick={() => loadObsScenes().catch(() => {})} disabled={!obsEnabled}>
+              Refresh scenes
+            </button>
+          </div>
+          {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
 
           <label style={{ marginTop: 12 }}>Required text sources</label>
           <div style={{ overflowX: 'auto', marginTop: 8 }}>
