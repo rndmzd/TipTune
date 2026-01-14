@@ -60,6 +60,7 @@ export function DashboardPage() {
 
   const nowPlayingRef = useRef<QueueItem | null>(null);
   const queueRef = useRef<(QueueItem | string)[]>([]);
+  const queueStateRef = useRef<QueueState | null>(null);
 
   function fmtTime(ms: number): string {
     const n = Number(ms);
@@ -223,7 +224,8 @@ export function DashboardPage() {
   async function refreshDevices() {
     const np = nowPlayingRef.current;
     const qitems = queueRef.current;
-    const baseSource = String(queueState?.source || 'spotify');
+    const qst = queueStateRef.current;
+    const baseSource = String(qst?.source || 'spotify');
     const needsSpotify = (() => {
       try {
         if (baseSource === 'spotify') return true;
@@ -244,7 +246,7 @@ export function DashboardPage() {
     })();
 
     if (!needsSpotify) {
-      const fallbackLabel = String(queueState?.playback_device_name || queueState?.playback_device_id || '');
+      const fallbackLabel = String(qst?.playback_device_name || qst?.playback_device_id || '');
       if (fallbackLabel) setActiveDeviceName(fallbackLabel);
       return;
     }
@@ -413,6 +415,10 @@ export function DashboardPage() {
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+
+  useEffect(() => {
+    queueStateRef.current = queueState;
+  }, [queueState]);
 
   useEffect(() => {
     refresh(true).catch(() => {});
