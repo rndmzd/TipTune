@@ -169,7 +169,7 @@ export function App() {
         <div className="card" style={{ maxWidth: 520, width: '100%' }}>
           <h2>TipTune</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
-            <div className="spinner" aria-hidden="true" />
+            {backendState === 'connecting' ? <div className="spinner" aria-hidden="true" /> : null}
             <div className="muted">
               {backendState === 'connecting'
                 ? 'Starting up…'
