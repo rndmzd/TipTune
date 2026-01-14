@@ -426,6 +426,20 @@ export function SetupPage() {
     setStepIdx((i) => Math.max(i - 1, 0));
   }
 
+  function onSkipOpenAI() {
+    if (currentStep !== 'openai') return;
+
+    if (!openaiOk) {
+      const ok = window.confirm(
+        'OpenAI settings are required for TipTune to function correctly. OpenAI is used to extract song information from request messages.\n\nIf you continue without configuring OpenAI, song request parsing will not work.\n\nDo you want to continue anyway?'
+      );
+      if (!ok) return;
+    }
+
+    setStatus('');
+    setStepIdx((i) => Math.min(i + 1, steps.length - 1));
+  }
+
   useEffect(() => {
     loadConfig().catch((e) => setStatus(`Error loading config: ${e?.message ? e.message : String(e)}`));
     loadSetupStatus().catch(() => {});
@@ -533,6 +547,11 @@ export function SetupPage() {
           <button type="button" onClick={() => onNext().catch(() => {})} disabled={!canNext}>
             {nextLabel}
           </button>
+          {currentStep === 'openai' && !openaiOk ? (
+            <button type="button" onClick={onSkipOpenAI}>
+              Skip
+            </button>
+          ) : null}
           <button type="button" onClick={() => navigate('/settings?dashboard=1')}>
             Open Full Settings
           </button>
