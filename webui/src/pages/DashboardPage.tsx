@@ -235,8 +235,19 @@ export function DashboardPage() {
             if (String((it as any).source || '') === 'spotify') return true;
             continue;
           }
-          const s = String(it ?? '').toLowerCase();
-          if (s.includes('youtube.com') || s.includes('youtu.be')) continue;
+          const s = String(it ?? '').trim();
+          let isYouTubeLink = false;
+          try {
+            const u = new URL(s);
+            const host = String(u.hostname || '').toLowerCase();
+            if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+              isYouTubeLink = true;
+            }
+          } catch {
+            const lower = s.toLowerCase();
+            isYouTubeLink = /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
+          }
+          if (isYouTubeLink) continue;
           if (s.trim() !== '') return true;
         }
         return false;
@@ -295,7 +306,7 @@ export function DashboardPage() {
       }
       hadSelectedDeviceAvailableRef.current = selectedAvailable;
     } catch {
-      const fallbackLabel = String(queueState?.playback_device_name || queueState?.playback_device_id || '');
+      const fallbackLabel = String(qst?.playback_device_name || qst?.playback_device_id || '');
       if (fallbackLabel) setActiveDeviceName(fallbackLabel);
     }
   }
@@ -498,8 +509,19 @@ export function DashboardPage() {
     (Array.isArray(queue)
       ? queue.some((it) => {
           if (it && typeof it === 'object') return String((it as any).source || '') === 'spotify';
-          const s = String(it ?? '').toLowerCase();
-          if (s.includes('youtube.com') || s.includes('youtu.be')) return false;
+          const s = String(it ?? '').trim();
+          let isYouTubeLink = false;
+          try {
+            const u = new URL(s);
+            const host = String(u.hostname || '').toLowerCase();
+            if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+              isYouTubeLink = true;
+            }
+          } catch {
+            const lower = s.toLowerCase();
+            isYouTubeLink = /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
+          }
+          if (isYouTubeLink) return false;
           return s.trim() !== '';
         })
       : false);
