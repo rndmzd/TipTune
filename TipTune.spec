@@ -15,6 +15,8 @@ hiddenimports += collect_submodules('simpleobsws')
 
 ROOT = os.path.abspath(SPECPATH)
 
+SIDECAR_CONSOLE = os.environ.get('TIPTUNE_SIDECAR_CONSOLE', '').strip() == '1'
+
 
 def _datas():
     root = ROOT
@@ -76,7 +78,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=SIDECAR_CONSOLE,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
