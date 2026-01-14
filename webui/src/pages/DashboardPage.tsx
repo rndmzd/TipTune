@@ -223,8 +223,10 @@ export function DashboardPage() {
   async function refreshDevices() {
     const np = nowPlayingRef.current;
     const qitems = queueRef.current;
+    const baseSource = String(queueState?.source || 'spotify');
     const needsSpotify = (() => {
       try {
+        if (baseSource === 'spotify') return true;
         if (String(np?.source || '') === 'spotify') return true;
         for (const it of Array.isArray(qitems) ? qitems : []) {
           if (it && typeof it === 'object') {
