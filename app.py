@@ -1391,6 +1391,13 @@ class SongRequestService:
 
         if isinstance(use_password, str) and use_password.strip() == "":
             use_password = None
+        if use_password is None and config.has_section("OBS"):
+            try:
+                cfg_pw = config.get("OBS", "password", fallback=None)
+            except Exception:
+                cfg_pw = None
+            if isinstance(cfg_pw, str) and cfg_pw.strip():
+                use_password = cfg_pw.strip()
         if not isinstance(use_password, str):
             use_password = None
 
