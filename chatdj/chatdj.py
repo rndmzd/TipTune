@@ -1179,42 +1179,19 @@ class AutoDJ:
     def clear_playback_context(self, persist: bool = True) -> bool:
         try:
             logger.info("Clearing playback context.")
-            if self.playback_active():
-                self.spotify.pause_playback(device_id=self.playback_device)
-            previous_track = None
-            attempts = 0
-            max_attempts = 5
-            while True:
+            try:
                 queue = self.spotify.queue()
-                if len(queue['queue']) == 0:
-                    logger.info("queue.clear.empty",
-                                message="Queue is now empty")
-                    break
-                current_track = queue['queue'][0]['uri']
-                if current_track == previous_track:
-
-                    attempts += 1
-                    if attempts >= max_attempts:
-                        logger.info("queue.clear.max_attempts",
-                                    message="Unable to clear the last track. Stopping.")
-                        break
-                else:
-
-                    attempts = 0
-                try:
-                    self.spotify.next_track()
-                    logger.info("queue.clear.skipped",
-                                message=f"Skipped track: {queue['queue'][0]['name']}")
-                    time.sleep(1)
-                except SpotifyException as exc:
-                    logger.error("queue.clear.error",
-                                message=f"Error skipping track: {exc}")
-                    break
-
-                previous_track = current_track
+                spotify_queue_len = len((queue or {}).get('queue') or [])
+                logger.debug(
+                    "queue.clear.spotify_queue",
+                    message="Read Spotify queue state (TipTune does not attempt to clear it by skipping)",
+                    data={"spotify_queue_len": spotify_queue_len},
+                )
+            except Exception:
+                pass
 
             try:
-                self.spotify.pause_playback()
+                self.spotify.pause_playback(device_id=self.playback_device)
                 logger.info("queue.clear.pause",
                             message="Playback paused.")
             except SpotifyException as exc:

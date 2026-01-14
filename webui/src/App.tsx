@@ -25,26 +25,52 @@ export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
   const location = useLocation();
 
+  const isTauri = isTauriRuntime();
+  const [backendState, setBackendState] = useState<'connecting' | 'ready' | 'failed'>(isTauri ? 'connecting' : 'ready');
+  const [backendRetryNonce, setBackendRetryNonce] = useState<number>(0);
+
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setBackendState('connecting');
+
+      const start = Date.now();
+      const maxMs = 20_000;
+      const pollMs = 500;
+      while (!cancelled && Date.now() - start < maxMs) {
+        try {
+          await apiJson('/api/setup/status', undefined, 750);
+          if (cancelled) return;
+          setBackendState('ready');
+          return;
+        } catch {
+          await new Promise((r) => window.setTimeout(r, pollMs));
+        }
+      }
+
+      if (cancelled) return;
+      setBackendState('failed');
+    };
+
+    run().catch(() => {
+      if (!cancelled) setBackendState('failed');
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isTauri, backendRetryNonce]);
+
   useEffect(() => {
     if (didAutoCheckRef.current) return;
     didAutoCheckRef.current = true;
 
-    if (!isTauriRuntime()) return;
+    if (!isTauri) return;
+    if (backendState !== 'ready') return;
 
     const run = async () => {
-      let backendReady = false;
-      for (let i = 0; i < 10; i++) {
-        try {
-          await apiJson('/api/setup/status');
-          backendReady = true;
-          break;
-        } catch {
-          await new Promise((r) => window.setTimeout(r, 1000));
-        }
-      }
-
-      if (!backendReady) return;
-
       let cfg: Record<string, Record<string, string>> | null = null;
       try {
         const resp = await apiJson<{ ok: true; config: Record<string, Record<string, string>> }>('/api/config');
@@ -91,7 +117,7 @@ export function App() {
     };
 
     run().catch(() => {});
-  }, []);
+  }, [isTauri, backendState]);
 
   function GatedRoute(props: { element: JSX.Element }) {
     const loc = useLocation();
@@ -135,6 +161,31 @@ export function App() {
 
     if (allowed === null) return null;
     return allowed ? props.element : <Navigate to="/setup" replace />;
+  }
+
+  if (isTauri && backendState !== 'ready') {
+    return (
+      <div style={{ minHeight: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="card" style={{ maxWidth: 520, width: '100%' }}>
+          <h2>TipTune</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
+            {backendState === 'connecting' ? <div className="spinner" aria-hidden="true" /> : null}
+            <div className="muted">
+              {backendState === 'connecting'
+                ? 'Starting up…'
+                : 'Unable to connect to the TipTune backend. Make sure TipTune is allowed through your firewall, then try again.'}
+            </div>
+          </div>
+          {backendState === 'failed' ? (
+            <div className="actions" style={{ marginTop: 14 }}>
+              <button type="button" onClick={() => setBackendRetryNonce((n) => n + 1)}>
+                Retry
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
   }
 
   return (
