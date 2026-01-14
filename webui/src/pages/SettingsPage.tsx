@@ -61,6 +61,8 @@ type ObsEnsureResp = {
   };
 };
 
+type ObsScenesResp = { ok: true; scenes: string[] };
+
 type ObsEnsureSpotifyAudioResp = {
   ok: true;
   result: {
@@ -168,6 +170,9 @@ export function SettingsPage() {
   const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState<string>('');
   const [obsBusy, setObsBusy] = useState<boolean>(false);
 
+  const [obsScenes, setObsScenes] = useState<string[]>([]);
+  const [obsScenesMsg, setObsScenesMsg] = useState<string>('');
+
   const [updateBusy, setUpdateBusy] = useState<boolean>(false);
   const [updateMsg, setUpdateMsg] = useState<string>('');
   const [updateObj, setUpdateObj] = useState<any>(null);
@@ -246,6 +251,28 @@ export function SettingsPage() {
     }
   }
 
+  async function loadObsScenes() {
+    setObsScenesMsg('Loading scenes...');
+    try {
+      const host = (v('OBS', 'host') || '').trim();
+      const port = (v('OBS', 'port') || '').trim();
+      const qs = `?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
+      const resp = await apiJson<ObsScenesResp>(`/api/obs/scenes${qs}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      const scenes = Array.isArray(resp.scenes) ? resp.scenes.filter((s) => typeof s === 'string' && s.trim() !== '') : [];
+      scenes.sort((a, b) => a.localeCompare(b));
+      setObsScenes(scenes);
+      setObsScenesMsg(scenes.length ? '' : 'No scenes returned from OBS.');
+    } catch (e: any) {
+      setObsScenes([]);
+      setObsScenesMsg(`Error loading scenes: ${e?.message ? e.message : String(e)}`);
+    }
+  }
+
   useEffect(() => {
     Promise.all([
       refreshCurrentDevice().catch((e) => setCurrentDeviceText(`Error: ${e?.message ? e.message : String(e)}`)),
@@ -299,9 +326,23 @@ export function SettingsPage() {
   })();
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
+  const obsHost = (v('OBS', 'host') || '').trim();
+  const obsPort = (v('OBS', 'port') || '').trim();
+  const obsSceneName = (v('OBS', 'scene_name') || '').trim();
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
   const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
+
+  useEffect(() => {
+    if (!obsEnabled) {
+      setObsScenes([]);
+      setObsScenesMsg('');
+      return;
+    }
+    if (obsHost && obsPort) {
+      loadObsScenes().catch(() => {});
+    }
+  }, [obsEnabled, obsHost, obsPort]);
 
   const eventsPlaceholder = setupStatus?.events_configured ? '(leave blank to keep)' : '';
   const openaiPlaceholder = setupStatus?.openai_configured ? '(leave blank to keep)' : '';
@@ -356,6 +397,7 @@ export function SettingsPage() {
         host: v('OBS', 'host'),
         port: v('OBS', 'port'),
         password: secrets.obsPassword,
+        scene_name: v('OBS', 'scene_name'),
       },
     };
 
@@ -566,6 +608,25 @@ export function SettingsPage() {
         </div>
 
         <div className="card">
+          <h2>Search</h2>
+          <label title={tooltip('Search', 'google_api_key')}>{humanizeKey('google_api_key')} (secret)</label>
+          <input
+            type="password"
+            placeholder={googleKeyPlaceholder}
+            title={tooltip('Search', 'google_api_key')}
+            value={secrets.googleKey}
+            onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
+          />
+          <label title={tooltip('Search', 'google_cx')}>{humanizeKey('google_cx')}</label>
+          <input
+            type="text"
+            title={tooltip('Search', 'google_cx')}
+            value={v('Search', 'google_cx')}
+            onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
+          />
+        </div>
+
+        <div className="card">
           <h2>OBS</h2>
           <label title={tooltip('OBS', 'enabled')}>{humanizeKey('enabled')}</label>
           <select
@@ -600,25 +661,6 @@ export function SettingsPage() {
           />
         </div>
 
-        <div className="card">
-          <h2>Search</h2>
-          <label title={tooltip('Search', 'google_api_key')}>{humanizeKey('google_api_key')} (secret)</label>
-          <input
-            type="password"
-            placeholder={googleKeyPlaceholder}
-            title={tooltip('Search', 'google_api_key')}
-            value={secrets.googleKey}
-            onChange={(e) => setSecrets((s) => ({ ...s, googleKey: e.target.value }))}
-          />
-          <label title={tooltip('Search', 'google_cx')}>{humanizeKey('google_cx')}</label>
-          <input
-            type="text"
-            title={tooltip('Search', 'google_cx')}
-            value={v('Search', 'google_cx')}
-            onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
-          />
-        </div>
-
         {obsEnabled ? (
           <div className="card settingsSpanFull">
             <h2>
@@ -636,6 +678,27 @@ export function SettingsPage() {
                 <code>{obsStatus?.status?.main_scene || '(unknown)'}</code>
               </div>
             </div>
+
+            <label style={{ marginTop: 12 }}>Overlay scene</label>
+            <select
+              value={obsSceneName}
+              onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), scene_name: e.target.value } }))}
+              disabled={!obsEnabled}
+            >
+              <option value="">(select a scene)</option>
+              {(obsScenes || []).map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button type="button" onClick={() => loadObsScenes().catch(() => {})} disabled={!obsEnabled}>
+                Refresh scenes
+              </button>
+            </div>
+            {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
 
             <label>Required text sources</label>
             <div style={{ overflowX: 'auto', marginTop: 8 }}>
