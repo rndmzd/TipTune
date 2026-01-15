@@ -1,4 +1,5 @@
 export type QueueItem = {
+  source?: string;
   uri?: string;
   track_id?: string;
   name?: string;

@@ -39,6 +39,7 @@ export function DashboardPage() {
   const obsNowPlayingMsgClearTimerRef = useRef<number | null>(null);
 
   const [addTrackOpen, setAddTrackOpen] = useState<boolean>(false);
+  const [addTrackSource, setAddTrackSource] = useState<string>('spotify');
   const [searchQ, setSearchQ] = useState<string>('');
   const [searchBusy, setSearchBusy] = useState<boolean>(false);
   const [searchErr, setSearchErr] = useState<string>('');
@@ -56,6 +57,10 @@ export function DashboardPage() {
   const playbackIsPlayingRef = useRef<boolean>(false);
 
   const youtubeAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const nowPlayingRef = useRef<QueueItem | null>(null);
+  const queueRef = useRef<(QueueItem | string)[]>([]);
+  const queueStateRef = useRef<QueueState | null>(null);
 
   function fmtTime(ms: number): string {
     const n = Number(ms);
@@ -217,10 +222,43 @@ export function DashboardPage() {
   }
 
   async function refreshDevices() {
-    if (String(queueState?.source || 'spotify') !== 'spotify') {
-      setActiveDeviceName('');
-      setActiveDeviceWarning('');
-      setSelectedDeviceWarning('');
+    const np = nowPlayingRef.current;
+    const qitems = queueRef.current;
+    const qst = queueStateRef.current;
+    const baseSource = String(qst?.source || 'spotify');
+    const needsSpotify = (() => {
+      try {
+        if (baseSource === 'spotify') return true;
+        if (String(np?.source || '') === 'spotify') return true;
+        for (const it of Array.isArray(qitems) ? qitems : []) {
+          if (it && typeof it === 'object') {
+            if (String((it as any).source || '') === 'spotify') return true;
+            continue;
+          }
+          const s = String(it ?? '').trim();
+          let isYouTubeLink = false;
+          try {
+            const u = new URL(s);
+            const host = String(u.hostname || '').toLowerCase();
+            if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+              isYouTubeLink = true;
+            }
+          } catch {
+            const lower = s.toLowerCase();
+            isYouTubeLink = /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
+          }
+          if (isYouTubeLink) continue;
+          if (s.trim() !== '') return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    })();
+
+    if (!needsSpotify) {
+      const fallbackLabel = String(qst?.playback_device_name || qst?.playback_device_id || '');
+      if (fallbackLabel) setActiveDeviceName(fallbackLabel);
       return;
     }
     try {
@@ -236,10 +274,15 @@ export function DashboardPage() {
       const activeId = (active && typeof active.id === 'string') ? active.id : '';
       const activeName = (active && typeof active.name === 'string') ? active.name : '';
 
+      const fallbackDevice = selectedDevice || (devices.length ? (devices[0] as Device) : undefined);
+      const fallbackId = (fallbackDevice && typeof fallbackDevice.id === 'string') ? fallbackDevice.id : '';
+      const fallbackName = (fallbackDevice && typeof fallbackDevice.name === 'string') ? fallbackDevice.name : '';
+
       const selectedName = (selectedDevice && typeof selectedDevice.name === 'string') ? selectedDevice.name : '';
       const selectedLabel = selectedName || (selectedDevice && typeof selectedDevice.id === 'string' ? selectedDevice.id : '');
       const activeLabel = activeName || activeId;
-      const displayLabel = activeLabel || selectedLabel;
+      const fallbackLabel = fallbackName || fallbackId;
+      const displayLabel = activeLabel || selectedLabel || fallbackLabel;
 
       setActiveDeviceName(displayLabel);
 
@@ -263,7 +306,7 @@ export function DashboardPage() {
       }
       hadSelectedDeviceAvailableRef.current = selectedAvailable;
     } catch {
-      const fallbackLabel = String(queueState?.playback_device_name || queueState?.playback_device_id || '');
+      const fallbackLabel = String(qst?.playback_device_name || qst?.playback_device_id || '');
       if (fallbackLabel) setActiveDeviceName(fallbackLabel);
     }
   }
@@ -298,11 +341,21 @@ export function DashboardPage() {
     const seq = ++searchSeqRef.current;
     setSearchBusy(true);
     try {
-      const data = await apiJson<SearchTracksResp>(`/api/music/search?q=${encodeURIComponent(qs)}&limit=10`);
+      const src = String(addTrackSource || 'spotify');
+      const data = await apiJson<SearchTracksResp>(
+        `/api/music/search?q=${encodeURIComponent(qs)}&limit=10&source=${encodeURIComponent(src)}`,
+      );
       if (seq !== searchSeqRef.current) return;
 
       const tracks = Array.isArray(data.tracks) ? data.tracks : [];
-      setSearchResults(tracks);
+      const normalized = tracks
+        .map((t) => {
+          if (!t || typeof t !== 'object') return null;
+          const obj: any = t;
+          return { ...obj, source: typeof obj.source === 'string' && obj.source.trim() ? obj.source : src } as QueueItem;
+        })
+        .filter(Boolean) as QueueItem[];
+      setSearchResults(normalized);
       setSearchErr('');
     } catch (e: any) {
       if (seq !== searchSeqRef.current) return;
@@ -320,7 +373,7 @@ export function DashboardPage() {
 
     setOpBusy(true);
     try {
-      await post('/api/queue/add', { uri, item });
+      await post('/api/queue/add', { uri, item, source: String(addTrackSource || 'spotify') });
     } finally {
       await refresh(true);
       setOpBusy(false);
@@ -365,6 +418,18 @@ export function DashboardPage() {
       setOpBusy(false);
     }
   }
+
+  useEffect(() => {
+    nowPlayingRef.current = nowPlaying;
+  }, [nowPlaying]);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
+  useEffect(() => {
+    queueStateRef.current = queueState;
+  }, [queueState]);
 
   useEffect(() => {
     refresh(true).catch(() => {});
@@ -436,13 +501,35 @@ export function DashboardPage() {
   }, [queueState?.playback_is_playing, queueState?.playback_track_uri, queueState?.playback_progress_ms]);
 
   const source = String(queueState?.source || 'spotify');
-  const isSpotify = source === 'spotify';
-  const isYouTube = source === 'youtube';
+  const nowSource = String(nowPlaying?.source || source);
+  const isSpotify = nowSource === 'spotify';
+  const isYouTube = nowSource === 'youtube';
+  const needsSpotify =
+    isSpotify ||
+    (Array.isArray(queue)
+      ? queue.some((it) => {
+          if (it && typeof it === 'object') return String((it as any).source || '') === 'spotify';
+          const s = String(it ?? '').trim();
+          let isYouTubeLink = false;
+          try {
+            const u = new URL(s);
+            const host = String(u.hostname || '').toLowerCase();
+            if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+              isYouTubeLink = true;
+            }
+          } catch {
+            const lower = s.toLowerCase();
+            isYouTubeLink = /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
+          }
+          if (isYouTubeLink) return false;
+          return s.trim() !== '';
+        })
+      : false);
 
-  const showDeviceWarning = status === 'ok' && queueState?.enabled === true && isSpotify && !queueState?.playback_device_id;
+  const showDeviceWarning = status === 'ok' && queueState?.enabled === true && needsSpotify && !queueState?.playback_device_id;
   const showPausedBanner = status === 'ok' && queueState?.enabled === true && paused;
-  const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && isSpotify && !!activeDeviceWarning;
-  const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && isSpotify && !!selectedDeviceWarning;
+  const showActiveDeviceWarning = status === 'ok' && queueState?.enabled === true && needsSpotify && !!activeDeviceWarning;
+  const showSelectedDeviceWarning = status === 'ok' && queueState?.enabled === true && needsSpotify && !!selectedDeviceWarning;
   const canUseQueueControls = status === 'ok' && queueState?.enabled === true;
 
   const durationMs = typeof nowPlaying?.duration_ms === 'number' ? nowPlaying.duration_ms : null;
@@ -557,7 +644,7 @@ export function DashboardPage() {
         <div className="card">
           <h2>Queue</h2>
 
-          {status === 'ok' && queueState?.enabled === true && isSpotify ? (
+          {status === 'ok' && queueState?.enabled === true && needsSpotify ? (
             <div className="muted" style={{ marginTop: -6, marginBottom: 10, fontSize: 13 }}>
               Active Spotify device: {activeDeviceName ? activeDeviceName : '(none)'}
             </div>
@@ -675,11 +762,9 @@ export function DashboardPage() {
             >
               Resume
             </button>
-            {isYouTube ? (
-              <button type="button" onClick={() => nextTrack().catch(() => {})} disabled={opBusy || !canUseQueueControls}>
-                Next
-              </button>
-            ) : null}
+            <button type="button" onClick={() => nextTrack().catch(() => {})} disabled={opBusy || !canUseQueueControls}>
+              Next
+            </button>
             <button type="button" onClick={() => refresh(true)} disabled={opBusy}>
               Refresh
             </button>
@@ -688,6 +773,9 @@ export function DashboardPage() {
               onClick={() => {
                 setAddTrackOpen((v) => {
                   const next = !v;
+                  if (next) {
+                    setAddTrackSource(String(queueState?.source || 'spotify'));
+                  }
                   if (!next) {
                     searchSeqRef.current += 1;
                     setSearchBusy(false);
@@ -720,6 +808,15 @@ export function DashboardPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <select
+                  value={addTrackSource}
+                  onChange={(e) => setAddTrackSource(e.target.value)}
+                  disabled={searchBusy || opBusy}
+                  style={{ minWidth: 120 }}
+                >
+                  <option value="spotify">Spotify</option>
+                  <option value="youtube">YouTube</option>
+                </select>
                 <input
                   type="text"
                   value={searchQ}
