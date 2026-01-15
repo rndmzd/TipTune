@@ -1,6 +1,6 @@
 # TipTune
 
-TipTune turns tips into queued music requests and provides a local dashboard for playback control, setup, and OBS overlays.
+TipTune turns tips into queued music requests (Spotify and/or YouTube) and provides a local dashboard for playback control, setup, and OBS overlays.
 
 This repo contains:
 
@@ -106,6 +106,8 @@ TipTune uses these sections/keys (see `config.ini.example`):
 
 - `[Spotify]` (required for playback)
   - `client_id`, `redirect_url`, `playback_device_id`
+- `[Music]` (required)
+  - `source` (`spotify` or `youtube`)
 - `[OpenAI]` (optional)
   - `api_key`, `model`
 - `[Events API]` (optional)
@@ -139,6 +141,25 @@ Behavior:
 
 ---
 
+## Music sources
+
+TipTune supports two music sources:
+
+- **Spotify**
+  - Full search + playback control through the Spotify Web API.
+  - Requires Spotify app setup + authorization.
+- **YouTube**
+  - Search + playback via `yt-dlp` and an in-dashboard audio player.
+  - Does not require Spotify credentials.
+
+Choose the default source in:
+
+- `Music.source=spotify|youtube`
+
+You can also override per-tip by including the word `spotify` or `youtube` in the tip message.
+
+---
+
 ## Spotify setup
 
 TipTune controls playback and queues tracks via the Spotify Web API.
@@ -163,6 +184,17 @@ Notes:
 
 - Spotify playback control typically requires Spotify Premium.
 - The redirect URL must be `http` and must use `127.0.0.1` or `localhost` with an explicit port.
+
+---
+
+## YouTube setup
+
+If you want to use YouTube as the music source:
+
+- Set `Music.source=youtube` (Setup Wizard → General Settings).
+- Ensure `yt-dlp` is available in your runtime.
+
+TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
 
 ---
 
