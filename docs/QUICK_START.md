@@ -58,7 +58,7 @@ If you need to bypass the redirect temporarily:
 
 ## 3) Spotify: configure + connect
 
-TipTune uses Spotify for search and playback control.
+TipTune can use Spotify for search and playback control.
 
 ### 3.1 Create a Spotify Developer app
 
@@ -142,7 +142,24 @@ In the dashboard:
 
 ---
 
-## 7) (Optional) OBS overlays
+## 7) (Optional) YouTube as your music source
+
+TipTune can also use YouTube for search and playback.
+
+1. In Setup Wizard → **General Settings** (or Settings → Music), set:
+
+   - `Music.source=youtube`
+
+1. Make sure TipTune has `yt-dlp` available in its runtime.
+
+Notes:
+
+- TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
+- The Dashboard will play YouTube audio using an in-page audio player.
+
+---
+
+## 8) (Optional) OBS overlays
 
 In Settings:
 

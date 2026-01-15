@@ -1,12 +1,13 @@
 # TipTune User Manual
 
-TipTune turns tip events into a **Spotify playback queue** and provides a **local dashboard** for setup, queue control, status, and OBS overlays.
+TipTune turns tip events into a **music request queue** (Spotify and/or YouTube) and provides a **local dashboard** for setup, queue control, status, and OBS overlays.
 
 ---
 
 ## Table of contents
 
 - [What TipTune is](#what-tiptune-is)
+- [What's changed recently](#whats-changed-recently)
 - [Quick mental model](#quick-mental-model)
 - [Install & launch](#install--launch)
 - [Web UI pages](#web-ui-pages)
@@ -32,9 +33,43 @@ TipTune consists of:
 - A **Python sidecar service** that:
   - Polls an Events API for tip events.
   - Parses tip messages into song requests.
-  - Uses Spotify Web API to search tracks and control playback.
+  - Uses Spotify and/or YouTube to search tracks and control playback.
   - Optionally drives OBS overlays via obs-websocket.
 - A **React Web UI** served locally by the Python service.
+
+---
+
+## What's changed recently
+
+This section summarizes major behavior changes that were introduced since this manual was last updated.
+
+### Unified queue (Spotify + YouTube)
+
+TipTune now supports a unified queue that can contain items from multiple sources.
+
+- Configure the default source with `Music.source=spotify|youtube`.
+- The Dashboard/Settings UI is source-aware.
+- Tip messages can override the default source by including the word `spotify` or `youtube`.
+
+### YouTube search + playback
+
+YouTube is supported as a first-class source:
+
+- Searching YouTube uses `yt-dlp`.
+- Playback is handled in the Dashboard via an audio player that streams from `/api/youtube/stream`.
+- TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
+
+### Setup Wizard now includes Music source
+
+The Setup Wizard includes a **Music source** choice under **General Settings**, which writes `Music.source`.
+
+### Device status improvements
+
+The Dashboard more proactively refreshes Spotify device state so the UI is less likely to show an incorrect `(none)` device state while Spotify is actually available.
+
+### Queue state persistence and migration
+
+Queue state is persisted under the TipTune cache directory. Older persisted formats (from earlier Spotify-only / YouTube-only queue implementations) are automatically migrated into the unified queue format.
 
 ---
 
@@ -47,8 +82,8 @@ TipTune consists of:
   - How many requests does it represent?
 - For song requests:
   - TipTune extracts one or more songs from the tip message.
-  - Each extracted song is resolved to a Spotify track URI.
-  - The track URI is added to TipTune’s internal queue and then to Spotify playback.
+  - Each extracted song is resolved to a Spotify track URI or a YouTube URL, depending on the active music source.
+  - The resolved item is added to TipTune’s internal queue and played via the appropriate source.
 - TipTune can also:
   - Show overlays in OBS (requester, warnings, general, now playing).
   - Show a live event stream and processing history.
@@ -145,6 +180,12 @@ You will enter:
 - `Spotify.client_id`
 - `Spotify.redirect_url`
 
+### Music
+
+- `Music.source`
+  - `spotify` or `youtube`
+  - Controls the default music provider used for searching and playback.
+
 Then:
 
 - Click **Connect Spotify** and complete login in your browser.
@@ -206,6 +247,7 @@ For song requests, TipTune reads the tip note/message text.
 Extraction behavior:
 
 - If the message contains a **Spotify track URI** (`spotify:track:...`) or a **Spotify track link** (`https://open.spotify.com/track/...`) and Spotify is available, TipTune can use that directly.
+- If YouTube is the active source and the message contains a YouTube URL, TipTune can use that directly.
 - Otherwise TipTune uses the **OpenAI Responses API** (if configured) to extract `request_count` song requests.
 - If an extracted song has no artist and Google keys are configured, TipTune can attempt an artist lookup using **Google Custom Search** + OpenAI.
 
@@ -224,7 +266,7 @@ Open: `/`
 The dashboard shows:
 
 - Queue status (Running / Paused)
-- Active playback device status
+- Active playback device status (Spotify)
 - Now playing
 - Up next queue
 
@@ -242,7 +284,7 @@ The dashboard shows:
 Use this for testing or manual queueing:
 
 - Click **Add Track**
-- Search Spotify
+- Search Spotify or YouTube (depending on selected source)
 - Click **+** to add to the end of the queue
 
 ### Reorder / remove
@@ -270,6 +312,7 @@ Settings are grouped into:
 - Events API
 - OpenAI
 - Spotify
+- Music
 - OBS
 - Search
 - General
