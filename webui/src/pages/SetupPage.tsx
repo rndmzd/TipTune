@@ -128,6 +128,7 @@ const DEFAULT_CFG: Record<string, Record<string, string>> = {
   General: {
     request_overlay_duration: '10',
     multi_request_tips: 'true',
+    allow_source_override_in_request_message: 'true',
   },
 };
 
@@ -169,6 +170,7 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
       ...general,
       request_overlay_duration: norm(general.request_overlay_duration) || DEFAULT_CFG.General.request_overlay_duration,
       multi_request_tips: norm(general.multi_request_tips) || DEFAULT_CFG.General.multi_request_tips,
+      allow_source_override_in_request_message: norm(general.allow_source_override_in_request_message) || DEFAULT_CFG.General.allow_source_override_in_request_message,
     },
   };
 }
@@ -403,6 +405,8 @@ export function SetupPage() {
           General: {
             song_cost: v('General', 'song_cost'),
             multi_request_tips: v('General', 'multi_request_tips') || DEFAULT_CFG.General.multi_request_tips,
+            allow_source_override_in_request_message:
+              v('General', 'allow_source_override_in_request_message') || DEFAULT_CFG.General.allow_source_override_in_request_message,
             skip_song_cost: v('General', 'skip_song_cost'),
             request_overlay_duration: v('General', 'request_overlay_duration'),
             setup_complete: 'true',
@@ -899,6 +903,21 @@ export function SetupPage() {
             <option value="false">false</option>
           </select>
           <div className="muted">If true, multiples of song_cost can request multiple songs in one tip.</div>
+
+          <label>{humanizeKey('allow_source_override_in_request_message')}</label>
+          <select
+            value={(v('General', 'allow_source_override_in_request_message') || DEFAULT_CFG.General.allow_source_override_in_request_message).toLowerCase()}
+            onChange={(e) =>
+              setCfg((c) => ({
+                ...c,
+                General: { ...(c.General || {}), allow_source_override_in_request_message: e.target.value },
+              }))
+            }
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </select>
+          <div className="muted">If true, users can include “spotify” or “youtube” in their request message to override the music source for that request.</div>
 
           <label>OBS overlay duration</label>
           <input

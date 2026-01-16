@@ -25,6 +25,7 @@ source = spotify
 # General application settings
 song_cost = 27
 multi_request_tips = true
+allow_source_override_in_request_message = true
 skip_song_cost = 51
 request_overlay_duration = 10
 debug_log_to_file = false

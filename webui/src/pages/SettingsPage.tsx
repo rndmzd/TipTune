@@ -122,6 +122,7 @@ function tooltip(section: string, key: string) {
     'Music.source': 'Select which music source TipTune will use to fulfill song requests and searches.',
     'General.song_cost': 'Default token cost to request a song.',
     'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
+    'General.allow_source_override_in_request_message': 'When enabled, users can include the word “spotify” or “youtube” in their request message to override the selected Music source for that request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
     'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
@@ -319,6 +320,12 @@ export function SettingsPage() {
     return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
   })();
 
+  const allowSourceOverrideInRequestMessageEnabled = (() => {
+    const raw = v('General', 'allow_source_override_in_request_message');
+    const s = (raw || 'true').trim().toLowerCase();
+    return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
+  })();
+
   const debugLogToFileEnabled = (() => {
     const raw = v('General', 'debug_log_to_file');
     const s = (raw || 'false').trim().toLowerCase();
@@ -386,6 +393,7 @@ export function SettingsPage() {
       General: {
         song_cost: v('General', 'song_cost'),
         multi_request_tips: multiRequestTipsEnabled ? 'true' : 'false',
+        allow_source_override_in_request_message: allowSourceOverrideInRequestMessageEnabled ? 'true' : 'false',
         skip_song_cost: v('General', 'skip_song_cost'),
         request_overlay_duration: v('General', 'request_overlay_duration'),
         auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
@@ -500,6 +508,27 @@ export function SettingsPage() {
               }
             />
             <span style={{ whiteSpace: 'nowrap' }}>{humanizeKey('multi_request_tips')}</span>
+          </label>
+
+          <label
+            title={tooltip('General', 'allow_source_override_in_request_message')}
+            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
+          >
+            <input
+              type="checkbox"
+              checked={allowSourceOverrideInRequestMessageEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: {
+                    ...(c.General || {}),
+                    allow_source_override_in_request_message: e.target.checked ? 'true' : 'false',
+                  },
+                }))
+              }
+            />
+            <span style={{ whiteSpace: 'nowrap' }}>{humanizeKey('allow_source_override_in_request_message')}</span>
           </label>
           <label title={tooltip('General', 'skip_song_cost')}>{humanizeKey('skip_song_cost')}</label>
           <input
