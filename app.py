@@ -1039,6 +1039,12 @@ class SongRequestService:
     def _active_source(self) -> str:
         return _active_music_source()
 
+    def _allow_source_override_in_request_message(self) -> bool:
+        try:
+            return config.getboolean("General", "allow_source_override_in_request_message", fallback=True)
+        except Exception:
+            return True
+
     def _source_override_from_text(self, text: str) -> Optional[str]:
         try:
             msg = text or ''
@@ -2470,7 +2476,7 @@ class SongRequestService:
             if not is_song_request:
                 return
 
-            source_override = self._source_override_from_text(tip_message)
+            source_override = self._source_override_from_text(tip_message) if self._allow_source_override_in_request_message() else None
             source = _normalize_music_source(source_override, default=active_source)
 
             request_count = max(1, self.checks.get_request_count(tip_amount))
@@ -3468,7 +3474,7 @@ class SongRequestService:
             "Spotify": {"client_id", "redirect_url", "playback_device_id"},
             "Search": {"google_api_key", "google_cx"},
             "Music": {"source"},
-            "General": {"song_cost", "skip_song_cost", "multi_request_tips", "request_overlay_duration", "setup_complete", "auto_check_updates", "debug_log_to_file", "debug_log_path"},
+            "General": {"song_cost", "skip_song_cost", "multi_request_tips", "allow_source_override_in_request_message", "request_overlay_duration", "setup_complete", "auto_check_updates", "debug_log_to_file", "debug_log_path"},
             "OBS": {"enabled", "host", "port", "password", "scene_name"},
             "Web": {"host", "port"},
         }
