@@ -572,7 +572,7 @@ export function DashboardPage() {
         title="TipTune"
       />
 
-      <div className="row" style={{ flexDirection: 'column', flexWrap: 'nowrap' }}>
+      <div className="dashboardGrid">
         <div className="card">
           <h2>Now Playing</h2>
 
@@ -588,14 +588,8 @@ export function DashboardPage() {
                 </div>
                 {durationMs && posClampedMs != null ? (
                   <div style={{ marginTop: 8 }}>
-                    <div style={{ height: 8, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>
-                      <div
-                        style={{
-                          height: '100%',
-                          width: `${Math.round((pct ?? 0) * 1000) / 10}%`,
-                          background: 'rgba(138, 180, 255, 0.65)',
-                        }}
-                      />
+                    <div className="progressTrack">
+                      <div className="progressFill" style={{ width: `${Math.round((pct ?? 0) * 1000) / 10}%` }} />
                     </div>
                     <div className="muted" style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
                       <span>{fmtTime(posClampedMs)}</span>
@@ -651,31 +645,15 @@ export function DashboardPage() {
           ) : null}
 
           {showActiveDeviceWarning ? (
-            <div
-              style={{
-                marginTop: 10,
-                border: '1px solid rgba(255, 193, 7, 0.35)',
-                background: 'rgba(255, 193, 7, 0.10)',
-                borderRadius: 10,
-                padding: '10px 12px',
-              }}
-            >
-              <div style={{ fontWeight: 650, marginBottom: 6 }}>Spotify device changed</div>
+            <div className="callout calloutWarn">
+              <div className="calloutTitle">Spotify device changed</div>
               <div className="muted">{activeDeviceWarning}</div>
             </div>
           ) : null}
 
           {showSelectedDeviceWarning ? (
-            <div
-              style={{
-                marginTop: 10,
-                border: '1px solid rgba(255, 193, 7, 0.35)',
-                background: 'rgba(255, 193, 7, 0.10)',
-                borderRadius: 10,
-                padding: '10px 12px',
-              }}
-            >
-              <div style={{ fontWeight: 650, marginBottom: 6 }}>Selected playback device unavailable</div>
+            <div className="callout calloutWarn">
+              <div className="calloutTitle">Selected playback device unavailable</div>
               <div className="muted">
                 {selectedDeviceWarning} Go to <Link to="/settings?dashboard=1">Settings</Link>.
               </div>
@@ -683,16 +661,8 @@ export function DashboardPage() {
           ) : null}
 
           {showDeviceWarning ? (
-            <div
-              style={{
-                marginTop: 10,
-                border: '1px solid rgba(255, 193, 7, 0.35)',
-                background: 'rgba(255, 193, 7, 0.10)',
-                borderRadius: 10,
-                padding: '10px 12px',
-              }}
-            >
-              <div style={{ fontWeight: 650, marginBottom: 6 }}>No Spotify playback device selected</div>
+            <div className="callout calloutWarn">
+              <div className="calloutTitle">No Spotify playback device selected</div>
               <div className="muted">
                 Make sure Spotify is open (so it can register a device), then go to{' '}
                 <Link to="/settings?dashboard=1">Settings</Link> and select a playback device.
@@ -701,16 +671,8 @@ export function DashboardPage() {
           ) : null}
 
           {showPausedBanner ? (
-            <div
-              style={{
-                marginTop: 10,
-                border: '1px solid rgba(220, 53, 69, 0.45)',
-                background: 'rgba(220, 53, 69, 0.12)',
-                borderRadius: 10,
-                padding: '10px 12px',
-              }}
-            >
-              <div style={{ fontWeight: 650, marginBottom: 6 }}>Queue is paused</div>
+            <div className="callout calloutDanger">
+              <div className="calloutTitle">Queue is paused</div>
               <div className="muted">Song queue is paused, but the currently playing song will finish first.</div>
             </div>
           ) : null}
@@ -793,16 +755,8 @@ export function DashboardPage() {
           </div>
 
           {addTrackOpen ? (
-            <div
-              style={{
-                marginTop: 12,
-                border: '1px solid #2a3a66',
-                background: '#0e1530',
-                borderRadius: 10,
-                padding: '10px 12px',
-              }}
-            >
-              <div style={{ fontWeight: 650, marginBottom: 6 }}>Add Track</div>
+            <div className="callout calloutInfo">
+              <div className="calloutTitle">Add Track</div>
               <div className="muted" style={{ marginBottom: 10 }}>
                 Search for a track, then add it to the end of the queue.
               </div>
@@ -850,7 +804,7 @@ export function DashboardPage() {
 
               {searchErr ? <div className="muted" style={{ marginTop: 8 }}>Error: {searchErr}</div> : null}
 
-              <div className="queueOut" style={{ maxHeight: 320, marginTop: 10 }}>
+              <div className="queueOut" style={{ maxHeight: 320 }}>
                 {searchResults.length ? (
                   searchResults.map((item, i) => (
                     <QueueCard

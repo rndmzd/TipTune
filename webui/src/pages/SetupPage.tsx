@@ -701,36 +701,36 @@ export function SetupPage() {
           {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
 
           <label style={{ marginTop: 12 }}>Required text sources</label>
-          <div style={{ overflowX: 'auto', marginTop: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <div className="tableWrap" style={{ marginTop: 8 }}>
+            <table className="dataTable">
               <thead>
-                <tr style={{ textAlign: 'left' }}>
-                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66' }}>Source</th>
-                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 110 }}>Present</th>
-                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 120 }}>Input</th>
-                  <th style={{ padding: '6px 8px', borderBottom: '1px solid #2a3a66', width: 150 }}>In main scene</th>
+                <tr>
+                  <th>Source</th>
+                  <th style={{ width: 110 }}>Present</th>
+                  <th style={{ width: 120 }}>Input</th>
+                  <th style={{ width: 150 }}>In main scene</th>
                 </tr>
               </thead>
               <tbody>
                 {(requiredSources || []).map((s) => (
                   <tr key={s.name}>
-                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                    <td>
                       <code style={{ whiteSpace: 'nowrap' }}>{s.name}</code>
                     </td>
-                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                    <td>
                       <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
                     </td>
-                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                    <td>
                       <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
                     </td>
-                    <td style={{ padding: '6px 8px', verticalAlign: 'top' }}>
+                    <td>
                       <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
                     </td>
                   </tr>
                 ))}
                 {!(requiredSources || []).length ? (
                   <tr>
-                    <td colSpan={4} className="muted" style={{ padding: '8px 8px' }}>
+                    <td colSpan={4} className="muted">
                       (no data)
                     </td>
                   </tr>
