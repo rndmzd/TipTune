@@ -524,48 +524,48 @@ export function StatsPage() {
       <div className="row" style={{ marginTop: 12 }}>
         <div className="card" style={{ flex: 1, minWidth: 420 }}>
           <h2>Users</h2>
-          <div style={{ overflow: 'auto', maxHeight: '60vh', borderRadius: 10, border: '1px solid #2a3a66' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div className="tableWrap" style={{ maxHeight: '60vh' }}>
+            <table className="dataTable">
               <thead>
-                <tr style={{ background: 'rgba(35, 54, 111, 0.35)' }}>
+                <tr>
                   <th
-                    style={{ textAlign: 'left', padding: '8px 10px', cursor: 'pointer' }}
+                    className="sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'user'))}
                   >
                     User
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'request_tips'))}
                   >
                     Tips
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'songs_added'))}
                   >
                     Added
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'songs_failed'))}
                   >
                     Failed
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'paid_slots'))}
                   >
                     Slots
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'tokens'))}
                   >
                     Tokens
                   </th>
                   <th
-                    style={{ textAlign: 'left', padding: '8px 10px', cursor: 'pointer' }}
+                    className="sortable"
                     onClick={() => setSortUsers((s) => toggleSort(s.key, s.dir, 'last_ts'))}
                   >
                     Last
@@ -579,26 +579,26 @@ export function StatsPage() {
                   return (
                     <tr
                       key={u.user}
-                      style={{ borderTop: '1px solid #2a3a66', cursor: 'pointer', background: active ? 'rgba(138, 180, 255, 0.08)' : undefined }}
+                      className={['clickable', active ? 'active' : ''].filter(Boolean).join(' ')}
                       onClick={() => {
                         setSelectedSongKey('');
                         setSelectedUser((prev) => (prev === u.user ? '' : u.user));
                       }}
                     >
-                      <td style={{ padding: '8px 10px', verticalAlign: 'top' }}>
+                      <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <span className={active ? 'pill pillInfo' : 'pill pillNeutral'}>{u.user}</span>
-                          <div style={{ height: 8, width: 140, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: barW, background: 'rgba(138, 180, 255, 0.55)' }} />
+                          <div className="progressTrack" style={{ width: 140 }}>
+                            <div className="progressFill" style={{ width: barW }} />
                           </div>
                         </div>
                       </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{u.requestTips}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{u.songsAdded}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{u.songsFailed}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{u.paidSlots}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{u.tokens}</td>
-                      <td style={{ padding: '8px 10px' }}>{toLocalTimeLabelMs(u.lastTs)}</td>
+                      <td className="right">{u.requestTips}</td>
+                      <td className="right">{u.songsAdded}</td>
+                      <td className="right">{u.songsFailed}</td>
+                      <td className="right">{u.paidSlots}</td>
+                      <td className="right">{u.tokens}</td>
+                      <td>{toLocalTimeLabelMs(u.lastTs)}</td>
                     </tr>
                   );
                 })}
@@ -609,42 +609,42 @@ export function StatsPage() {
 
         <div className="card" style={{ flex: 1, minWidth: 520 }}>
           <h2>Songs</h2>
-          <div style={{ overflow: 'auto', maxHeight: '60vh', borderRadius: 10, border: '1px solid #2a3a66' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div className="tableWrap" style={{ maxHeight: '60vh' }}>
+            <table className="dataTable">
               <thead>
-                <tr style={{ background: 'rgba(35, 54, 111, 0.35)' }}>
+                <tr>
                   <th
-                    style={{ textAlign: 'left', padding: '8px 10px', cursor: 'pointer' }}
+                    className="sortable"
                     onClick={() => setSortSongs((s) => toggleSort(s.key, s.dir, 'song'))}
                   >
                     Song
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortSongs((s) => toggleSort(s.key, s.dir, 'requests'))}
                   >
                     Req
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortSongs((s) => toggleSort(s.key, s.dir, 'added'))}
                   >
                     Added
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortSongs((s) => toggleSort(s.key, s.dir, 'failed'))}
                   >
                     Failed
                   </th>
                   <th
-                    style={{ textAlign: 'right', padding: '8px 10px', cursor: 'pointer' }}
+                    className="right sortable"
                     onClick={() => setSortSongs((s) => toggleSort(s.key, s.dir, 'unique_users'))}
                   >
                     Users
                   </th>
                   <th
-                    style={{ textAlign: 'left', padding: '8px 10px', cursor: 'pointer' }}
+                    className="sortable"
                     onClick={() => setSortSongs((s) => toggleSort(s.key, s.dir, 'last_ts'))}
                   >
                     Last
@@ -658,13 +658,13 @@ export function StatsPage() {
                   return (
                     <tr
                       key={s.key}
-                      style={{ borderTop: '1px solid #2a3a66', cursor: 'pointer', background: active ? 'rgba(138, 180, 255, 0.08)' : undefined }}
+                      className={['clickable', active ? 'active' : ''].filter(Boolean).join(' ')}
                       onClick={() => {
                         setSelectedUser('');
                         setSelectedSongKey((prev) => (prev === s.key ? '' : s.key));
                       }}
                     >
-                      <td style={{ padding: '8px 10px', verticalAlign: 'top' }}>
+                      <td>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                             <span className={active ? 'pill pillInfo' : 'pill pillNeutral'} style={{ maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -676,16 +676,16 @@ export function StatsPage() {
                               </a>
                             ) : null}
                           </div>
-                          <div style={{ height: 8, width: 160, borderRadius: 999, background: '#0b1020', border: '1px solid #2a3a66', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: barW, background: 'rgba(138, 180, 255, 0.55)' }} />
+                          <div className="progressTrack" style={{ width: 160 }}>
+                            <div className="progressFill" style={{ width: barW }} />
                           </div>
                         </div>
                       </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{s.requests}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{s.added}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{s.failed}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>{s.uniqueUsers}</td>
-                      <td style={{ padding: '8px 10px' }}>{toLocalTimeLabelMs(s.lastTs)}</td>
+                      <td className="right">{s.requests}</td>
+                      <td className="right">{s.added}</td>
+                      <td className="right">{s.failed}</td>
+                      <td className="right">{s.uniqueUsers}</td>
+                      <td>{toLocalTimeLabelMs(s.lastTs)}</td>
                     </tr>
                   );
                 })}
