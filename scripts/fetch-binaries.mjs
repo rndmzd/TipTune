@@ -40,62 +40,9 @@ function fileExistsNonEmpty(p) {
   }
 }
 
-function getText(url) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(
-      url,
-      {
-        headers: {
-          'User-Agent': 'TipTune fetch-binaries (node)',
-          Accept: '*/*',
-        },
-      },
-      (res) => {
-        const code = res.statusCode || 0;
-        if (code >= 300 && code < 400 && res.headers.location) {
-          res.resume();
-          getText(res.headers.location).then(resolve, reject);
-          return;
-        }
-        if (code !== 200) {
-          res.resume();
-          reject(new Error(`HTTP ${code} for ${url}`));
-          return;
-        }
-
-        res.setEncoding('utf8');
-        let data = '';
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        res.on('end', () => resolve(data));
-      },
-    );
-    req.on('error', reject);
-  });
-}
-
-async function getJson(url) {
-  const t = await getText(url);
-  try {
-    return JSON.parse(t);
-  } catch {
-    throw new Error(`Failed to parse JSON from: ${url}`);
-  }
-}
-
 function isLatestSpecifier(v) {
   const s = String(v || '').trim().toLowerCase();
   return s === '' || s === 'latest';
-}
-
-async function resolveLatestYtDlpTag() {
-  const j = await getJson('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest');
-  const tag = j && typeof j === 'object' ? j.tag_name : undefined;
-  if (typeof tag !== 'string' || !tag.trim()) {
-    throw new Error('Could not resolve latest yt-dlp release tag from GitHub API');
-  }
-  return tag.trim();
 }
 
 function downloadToFile(url, destPath) {
@@ -208,15 +155,16 @@ function copyFile(src, dst) {
 }
 
 async function ensureYtDlp(destDir, ytDlpVersion) {
-  const resolved = isLatestSpecifier(ytDlpVersion) ? await resolveLatestYtDlpTag() : String(ytDlpVersion).trim();
-
   const ext = platformKey() === 'windows' ? '.exe' : '';
   const destPath = path.join(destDir, `yt-dlp${ext}`);
   if (fileExistsNonEmpty(destPath)) return;
 
   const key = platformKey();
   const assetName = key === 'windows' ? 'yt-dlp.exe' : key === 'macos' ? 'yt-dlp_macos' : 'yt-dlp';
-  const url = `https://github.com/yt-dlp/yt-dlp/releases/download/${resolved}/${assetName}`;
+
+  const url = isLatestSpecifier(ytDlpVersion)
+    ? `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${assetName}`
+    : `https://github.com/yt-dlp/yt-dlp/releases/download/${String(ytDlpVersion).trim()}/${assetName}`;
   await downloadToFile(url, destPath);
 
   if (platformKey() !== 'windows') {
