@@ -214,7 +214,8 @@ async function ensureYtDlp(destDir, ytDlpVersion) {
   const destPath = path.join(destDir, `yt-dlp${ext}`);
   if (fileExistsNonEmpty(destPath)) return;
 
-  const assetName = platformKey() === 'windows' ? 'yt-dlp.exe' : 'yt-dlp';
+  const key = platformKey();
+  const assetName = key === 'windows' ? 'yt-dlp.exe' : key === 'macos' ? 'yt-dlp_macos' : 'yt-dlp';
   const url = `https://github.com/yt-dlp/yt-dlp/releases/download/${resolved}/${assetName}`;
   await downloadToFile(url, destPath);
 
