@@ -1607,14 +1607,18 @@ class SongRequestService:
             raise web.HTTPBadRequest(text='Missing url')
         if not self._is_allowed_youtube_url(url):
             raise web.HTTPBadRequest(text='Only YouTube URLs are supported')
-        if YoutubeDL is None:
-            raise web.HTTPServiceUnavailable(text='yt-dlp is not installed')
 
         loop = asyncio.get_running_loop()
         try:
             stream_url, guessed_ct = await asyncio.wait_for(loop.run_in_executor(None, lambda: self._yt_fetch_best_audio_url(url)), timeout=10)
         except asyncio.TimeoutError:
             raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
+        except RuntimeError as e:
+            logging.exception("Error extracting YouTube audio for URL %s", url)
+            msg = str(e)
+            if 'not installed' in msg.lower():
+                raise web.HTTPServiceUnavailable(text=msg)
+            raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
         except Exception:
             logging.exception("Error extracting YouTube audio for URL %s", url)
             raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
