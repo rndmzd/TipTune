@@ -5,6 +5,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   YTDLP_VERSION: "latest"
   FFMPEG_VERSION: "latest"
