@@ -75,6 +75,29 @@ def _yt_dlp_exe() -> Optional[str]:
     return None
 
 
+def _run_subprocess_no_window(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
+    kwargs: Dict[str, Any] = {
+        'capture_output': True,
+        'text': True,
+        'timeout': timeout,
+    }
+
+    if sys.platform == 'win32':
+        try:
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        except Exception:
+            pass
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0
+            kwargs['startupinfo'] = si
+        except Exception:
+            pass
+
+    return subprocess.run(cmd, **kwargs)
+
+
 def _yt_dlp_json(url: str, args: Optional[List[str]] = None, timeout: int = 12) -> Optional[dict]:
     exe = _yt_dlp_exe()
     if exe is None:
@@ -84,7 +107,7 @@ def _yt_dlp_json(url: str, args: Optional[List[str]] = None, timeout: int = 12) 
         cmd += list(args)
     cmd.append(url)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = _run_subprocess_no_window(cmd, timeout=timeout)
     except Exception:
         return None
     if proc.returncode != 0:
@@ -3333,7 +3356,7 @@ class SongRequestService:
                     f"ytsearch{lim}:{q}",
                 ]
                 try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                    proc = _run_subprocess_no_window(cmd, timeout=10)
                     if proc.returncode == 0:
                         payload = json.loads(proc.stdout)
                         if isinstance(payload, dict):

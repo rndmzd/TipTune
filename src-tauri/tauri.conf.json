@@ -31,7 +31,7 @@
   "bundle": {
     "active": true,
     "externalBin": ["binaries/TipTune"],
-    "resources": ["resources/**"],
+    "resources": ["resources/**/*"],
     "targets": "all",
     "icon": [
       "icons/icon.ico",

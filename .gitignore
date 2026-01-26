@@ -7,7 +7,7 @@ src-tauri/binaries
 src-tauri/target
 src-tauri/Cargo.lock
 src-tauri/gen
-src-tauri/resources
+src-tauri/resources/bin
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
