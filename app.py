@@ -8,6 +8,7 @@ import secrets
 import signal
 import sys
 import time
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
 from urllib.parse import urlparse
@@ -23,7 +24,7 @@ except Exception:
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
-from utils.runtime_paths import ensure_dir, ensure_parent_dir, get_cache_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
+from utils.runtime_paths import ensure_dir, ensure_parent_dir, get_cache_dir, get_bundled_bin_dir, get_bundled_bin_path, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
@@ -39,6 +40,85 @@ config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+
+
+def _prepend_bundled_bin_to_path() -> None:
+    try:
+        d = get_bundled_bin_dir()
+        if d is None:
+            return
+        if not d.exists():
+            return
+        sep = os.pathsep
+        cur = os.environ.get('PATH', '')
+        parts = [p for p in cur.split(sep) if p]
+        ds = str(d)
+        if parts and parts[0] == ds:
+            return
+        os.environ['PATH'] = ds + (sep + cur if cur else '')
+    except Exception:
+        return
+
+
+_prepend_bundled_bin_to_path()
+
+
+def _yt_dlp_exe() -> Optional[str]:
+    try:
+        p = get_bundled_bin_path('yt-dlp')
+        if p is None:
+            return None
+        if p.exists():
+            return str(p)
+    except Exception:
+        return None
+    return None
+
+
+def _run_subprocess_no_window(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
+    kwargs: Dict[str, Any] = {
+        'capture_output': True,
+        'text': True,
+        'timeout': timeout,
+    }
+
+    if sys.platform == 'win32':
+        try:
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        except Exception:
+            pass
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0
+            kwargs['startupinfo'] = si
+        except Exception:
+            pass
+
+    return subprocess.run(cmd, **kwargs)
+
+
+def _yt_dlp_json(url: str, args: Optional[List[str]] = None, timeout: int = 12) -> Optional[dict]:
+    exe = _yt_dlp_exe()
+    if exe is None:
+        return None
+    cmd = [exe, '-J', '--no-warnings', '--no-playlist']
+    if args:
+        cmd += list(args)
+    cmd.append(url)
+    try:
+        proc = _run_subprocess_no_window(cmd, timeout=timeout)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
 
 
 def _music_source_from_config(cfg: configparser.ConfigParser) -> str:
@@ -1395,6 +1475,10 @@ class SongRequestService:
             return
 
     def _yt_extract_video_meta(self, video_url: str) -> Optional[dict]:
+        payload = _yt_dlp_json(video_url, args=['--skip-download'], timeout=12)
+        if isinstance(payload, dict):
+            return payload
+
         if YoutubeDL is None:
             return None
         if not self._is_allowed_youtube_url(video_url):
@@ -1458,20 +1542,26 @@ class SongRequestService:
         return enriched
 
     def _yt_fetch_best_audio_url(self, video_url: str) -> tuple[str, Optional[str]]:
-        if YoutubeDL is None:
-            raise RuntimeError('yt-dlp is not installed')
+        payload = _yt_dlp_json(video_url, args=['--skip-download', '-f', 'bestaudio/best'], timeout=12)
+        if isinstance(payload, dict):
+            info = payload
+        else:
+            if YoutubeDL is None:
+                raise RuntimeError('yt-dlp is not installed')
+            info = None
         if not self._is_allowed_youtube_url(video_url):
             raise RuntimeError('Only YouTube URLs are supported')
 
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-            'noplaylist': True,
-            'format': 'bestaudio/best',
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False) or {}
+        if info is None:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'noplaylist': True,
+                'format': 'bestaudio/best',
+            }
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=False) or {}
 
         if not isinstance(info, dict):
             raise RuntimeError('Failed to extract YouTube info')
@@ -1540,14 +1630,18 @@ class SongRequestService:
             raise web.HTTPBadRequest(text='Missing url')
         if not self._is_allowed_youtube_url(url):
             raise web.HTTPBadRequest(text='Only YouTube URLs are supported')
-        if YoutubeDL is None:
-            raise web.HTTPServiceUnavailable(text='yt-dlp is not installed')
 
         loop = asyncio.get_running_loop()
         try:
             stream_url, guessed_ct = await asyncio.wait_for(loop.run_in_executor(None, lambda: self._yt_fetch_best_audio_url(url)), timeout=10)
         except asyncio.TimeoutError:
             raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
+        except RuntimeError as e:
+            logging.exception("Error extracting YouTube audio for URL %s", url)
+            msg = str(e)
+            if 'not installed' in msg.lower():
+                raise web.HTTPServiceUnavailable(text='Required YouTube audio extraction dependency is not installed on the server')
+            raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
         except Exception:
             logging.exception("Error extracting YouTube audio for URL %s", url)
             raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
@@ -3235,8 +3329,6 @@ class SongRequestService:
         return await self.search_spotify_tracks(query, limit=limit)
 
     async def search_youtube_tracks(self, query: str, limit: int = 10) -> list[dict]:
-        if YoutubeDL is None:
-            raise RuntimeError('yt-dlp is not installed')
         q = query.strip() if isinstance(query, str) else ''
         if q == '' or len(q) < 2:
             return []
@@ -3252,6 +3344,29 @@ class SongRequestService:
         loop = asyncio.get_running_loop()
 
         def _do_search() -> dict:
+            exe = _yt_dlp_exe()
+            if exe is not None:
+                cmd = [
+                    exe,
+                    '-J',
+                    '--no-warnings',
+                    '--no-playlist',
+                    '--skip-download',
+                    '--extract-flat',
+                    f"ytsearch{lim}:{q}",
+                ]
+                try:
+                    proc = _run_subprocess_no_window(cmd, timeout=10)
+                    if proc.returncode == 0:
+                        payload = json.loads(proc.stdout)
+                        if isinstance(payload, dict):
+                            return payload
+                except Exception:
+                    pass
+
+            if YoutubeDL is None:
+                raise RuntimeError('yt-dlp is not installed')
+
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,

@@ -1,0 +1,376 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import https from 'node:https';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, '..');
+
+function die(msg) {
+  console.error(msg);
+  process.exit(1);
+}
+
+function ensureDir(p) {
+  fs.mkdirSync(p, { recursive: true });
+}
+
+function platformKey() {
+  const runnerOs = String(process.env.RUNNER_OS || '').trim();
+  if (runnerOs === 'Windows') return 'windows';
+  if (runnerOs === 'macOS') return 'macos';
+  if (runnerOs === 'Linux') return 'linux';
+
+  if (process.platform === 'win32') return 'windows';
+  if (process.platform === 'darwin') return 'macos';
+  if (process.platform === 'linux') return 'linux';
+
+  die(`Unsupported platform: RUNNER_OS=${runnerOs || '<unset>'} process.platform=${process.platform}`);
+}
+
+function fileExistsNonEmpty(p) {
+  try {
+    const st = fs.statSync(p);
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function getText(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent': 'TipTune fetch-binaries (node)',
+          Accept: '*/*',
+        },
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          res.resume();
+          getText(res.headers.location).then(resolve, reject);
+          return;
+        }
+        if (code !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${code} for ${url}`));
+          return;
+        }
+
+        res.setEncoding('utf8');
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => resolve(data));
+      },
+    );
+    req.on('error', reject);
+  });
+}
+
+async function getJson(url) {
+  const t = await getText(url);
+  try {
+    return JSON.parse(t);
+  } catch {
+    throw new Error(`Failed to parse JSON from: ${url}`);
+  }
+}
+
+function isLatestSpecifier(v) {
+  const s = String(v || '').trim().toLowerCase();
+  return s === '' || s === 'latest';
+}
+
+async function resolveLatestYtDlpTag() {
+  const j = await getJson('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest');
+  const tag = j && typeof j === 'object' ? j.tag_name : undefined;
+  if (typeof tag !== 'string' || !tag.trim()) {
+    throw new Error('Could not resolve latest yt-dlp release tag from GitHub API');
+  }
+  return tag.trim();
+}
+
+function downloadToFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = destPath + `.tmp-${process.pid}-${Date.now()}`;
+    const out = fs.createWriteStream(tmpPath);
+
+    const onError = (err) => {
+      try {
+        out.close();
+      } catch {
+      }
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {
+      }
+      reject(err);
+    };
+
+    const req = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent': 'TipTune fetch-binaries (node)',
+          Accept: '*/*',
+        },
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          res.resume();
+          out.close();
+          try {
+            if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+          } catch {
+          }
+          downloadToFile(res.headers.location, destPath).then(resolve, reject);
+          return;
+        }
+
+        if (code !== 200) {
+          res.resume();
+          onError(new Error(`HTTP ${code} for ${url}`));
+          return;
+        }
+
+        res.pipe(out);
+        out.on('finish', () => {
+          out.close(() => {
+            try {
+              fs.renameSync(tmpPath, destPath);
+              resolve();
+            } catch (err) {
+              onError(err);
+            }
+          });
+        });
+      },
+    );
+
+    req.on('error', onError);
+    out.on('error', onError);
+  });
+}
+
+function sh(cmd, args, opts) {
+  execFileSync(cmd, args, { stdio: 'inherit', ...opts });
+}
+
+function trySh(cmd, args, opts) {
+  try {
+    execFileSync(cmd, args, { stdio: 'ignore', ...opts });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function extractZip(zipPath, destDir) {
+  ensureDir(destDir);
+
+  if (trySh('tar', ['-xf', zipPath, '-C', destDir])) return;
+  if (trySh('unzip', ['-o', zipPath, '-d', destDir])) return;
+
+  if (process.platform === 'win32') {
+    const ps = process.env.SystemRoot
+      ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+      : 'powershell.exe';
+
+    sh(
+      ps,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Expand-Archive -LiteralPath ${JSON.stringify(zipPath)} -DestinationPath ${JSON.stringify(destDir)} -Force`,
+      ],
+    );
+    return;
+  }
+
+  throw new Error('Unable to extract zip (tar/unzip not available)');
+}
+
+function copyFile(src, dst) {
+  ensureDir(path.dirname(dst));
+  fs.copyFileSync(src, dst);
+}
+
+async function ensureYtDlp(destDir, ytDlpVersion) {
+  const resolved = isLatestSpecifier(ytDlpVersion) ? await resolveLatestYtDlpTag() : String(ytDlpVersion).trim();
+
+  const ext = platformKey() === 'windows' ? '.exe' : '';
+  const destPath = path.join(destDir, `yt-dlp${ext}`);
+  if (fileExistsNonEmpty(destPath)) return;
+
+  const key = platformKey();
+  const assetName = key === 'windows' ? 'yt-dlp.exe' : key === 'macos' ? 'yt-dlp_macos' : 'yt-dlp';
+  const url = `https://github.com/yt-dlp/yt-dlp/releases/download/${resolved}/${assetName}`;
+  await downloadToFile(url, destPath);
+
+  if (platformKey() !== 'windows') {
+    try {
+      fs.chmodSync(destPath, 0o755);
+    } catch {
+    }
+  }
+}
+
+async function ensureFfmpeg(destDir, ffmpegVersion) {
+  const key = platformKey();
+  const ffmpegName = key === 'windows' ? 'ffmpeg.exe' : 'ffmpeg';
+  const ffprobeName = key === 'windows' ? 'ffprobe.exe' : 'ffprobe';
+
+  const ffmpegDest = path.join(destDir, ffmpegName);
+  const ffprobeDest = path.join(destDir, ffprobeName);
+
+  if (fileExistsNonEmpty(ffmpegDest) && fileExistsNonEmpty(ffprobeDest)) return;
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tiptune-bins-'));
+  try {
+    if (key === 'linux') {
+      const archive = path.join(tmpRoot, 'ffmpeg.tar.xz');
+      const url = 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz';
+      await downloadToFile(url, archive);
+      sh('tar', ['-xJf', archive, '-C', tmpRoot]);
+
+      const extractedDir = fs
+        .readdirSync(tmpRoot)
+        .map((n) => path.join(tmpRoot, n))
+        .find((p) => {
+          try {
+            return fs.statSync(p).isDirectory() && path.basename(p).startsWith('ffmpeg-');
+          } catch {
+            return false;
+          }
+        });
+
+      if (!extractedDir) throw new Error('Failed to locate extracted ffmpeg directory');
+
+      const ffmpegSrc = path.join(extractedDir, 'ffmpeg');
+      const ffprobeSrc = path.join(extractedDir, 'ffprobe');
+      if (!fileExistsNonEmpty(ffmpegSrc) || !fileExistsNonEmpty(ffprobeSrc)) {
+        throw new Error('Extracted ffmpeg/ffprobe not found');
+      }
+
+      copyFile(ffmpegSrc, ffmpegDest);
+      copyFile(ffprobeSrc, ffprobeDest);
+    } else if (key === 'macos') {
+      const ffmpegZip = path.join(tmpRoot, 'ffmpeg.zip');
+      const ffprobeZip = path.join(tmpRoot, 'ffprobe.zip');
+
+      const resolvedIsLatest = isLatestSpecifier(ffmpegVersion);
+      const ffmpegUrl = resolvedIsLatest
+        ? 'https://evermeet.cx/ffmpeg/getrelease/zip'
+        : `https://evermeet.cx/pub/ffmpeg/ffmpeg-${String(ffmpegVersion).trim()}.zip`;
+      const ffprobeUrl = resolvedIsLatest
+        ? 'https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip'
+        : `https://evermeet.cx/pub/ffprobe/ffprobe-${String(ffmpegVersion).trim()}.zip`;
+
+      await downloadToFile(ffmpegUrl, ffmpegZip);
+      await downloadToFile(ffprobeUrl, ffprobeZip);
+
+      const ffmpegOut = path.join(tmpRoot, 'ffmpeg-out');
+      const ffprobeOut = path.join(tmpRoot, 'ffprobe-out');
+      ensureDir(ffmpegOut);
+      ensureDir(ffprobeOut);
+
+      extractZip(ffmpegZip, ffmpegOut);
+      extractZip(ffprobeZip, ffprobeOut);
+
+      const ffmpegSrc = path.join(ffmpegOut, 'ffmpeg');
+      const ffprobeSrc = path.join(ffprobeOut, 'ffprobe');
+      if (!fileExistsNonEmpty(ffmpegSrc) || !fileExistsNonEmpty(ffprobeSrc)) {
+        throw new Error('Unzipped ffmpeg/ffprobe not found');
+      }
+
+      copyFile(ffmpegSrc, ffmpegDest);
+      copyFile(ffprobeSrc, ffprobeDest);
+
+      try {
+        fs.chmodSync(ffmpegDest, 0o755);
+        fs.chmodSync(ffprobeDest, 0o755);
+      } catch {
+      }
+    } else if (key === 'windows') {
+      const zip = path.join(tmpRoot, 'ffmpeg.zip');
+      const url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
+      await downloadToFile(url, zip);
+
+      const outDir = path.join(tmpRoot, 'out');
+      ensureDir(outDir);
+      extractZip(zip, outDir);
+
+      const ffmpegSrc = findFirstMatch(outDir, /\\bin\\ffmpeg\.exe$/i);
+      const ffprobeSrc = findFirstMatch(outDir, /\\bin\\ffprobe\.exe$/i);
+      if (!ffmpegSrc || !ffprobeSrc) {
+        throw new Error('Unzipped ffmpeg/ffprobe not found (expected */bin/ffmpeg.exe and */bin/ffprobe.exe)');
+      }
+
+      copyFile(ffmpegSrc, ffmpegDest);
+      copyFile(ffprobeSrc, ffprobeDest);
+    } else {
+      throw new Error(`Unsupported platform key: ${key}`);
+    }
+  } finally {
+    try {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
+
+function findFirstMatch(rootDir, regex) {
+  const stack = [rootDir];
+  while (stack.length) {
+    const cur = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const p = path.join(cur, e.name);
+      if (e.isDirectory()) stack.push(p);
+      else if (e.isFile()) {
+        const norm = p.replace(/\//g, '\\');
+        if (regex.test(norm)) return p;
+      }
+    }
+  }
+  return null;
+}
+
+async function main() {
+  const key = platformKey();
+
+  const ytDlpVersion = String(process.env.YTDLP_VERSION || '').trim() || 'latest';
+  const ffmpegVersion = String(process.env.FFMPEG_VERSION || '').trim() || 'latest';
+
+  const destDir = path.join(repoRoot, 'src-tauri', 'resources', 'bin', key);
+  ensureDir(destDir);
+
+  await ensureYtDlp(destDir, ytDlpVersion);
+  await ensureFfmpeg(destDir, ffmpegVersion);
+
+  const files = fs.readdirSync(destDir);
+  console.log(`Fetched binaries into: ${destDir}`);
+  for (const f of files) console.log(`- ${f}`);
+}
+
+main().catch((e) => {
+  console.error(e?.stack || e?.message || String(e));
+  process.exit(1);
+});

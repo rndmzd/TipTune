@@ -68,6 +68,13 @@ pub fn run() {
                     sidecar_command
                 };
 
+                if env::var("TIPTUNE_RESOURCE_DIR").is_err() {
+                    if let Ok(rd) = app.path().resource_dir() {
+                        sidecar_command = sidecar_command
+                            .env("TIPTUNE_RESOURCE_DIR", rd.to_string_lossy().to_string());
+                    }
+                }
+
                 // In `tauri dev` the CLI watches the project directory.
                 // If the sidecar writes logs into the repo, it can trigger an infinite rebuild/restart loop.
                 // In debug builds, always force the sidecar log file into the app data dir.
