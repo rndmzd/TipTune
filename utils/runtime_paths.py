@@ -90,3 +90,43 @@ def read_text_if_exists(path: Path, encoding: str = 'utf-8') -> Optional[str]:
         return path.read_text(encoding=encoding, errors='replace')
     except Exception:
         return None
+
+
+def platform_key() -> str:
+    p = sys.platform
+    if p.startswith('win'):
+        return 'windows'
+    if p == 'darwin':
+        return 'macos'
+    return 'linux'
+
+
+def get_bundled_bin_base_dir() -> Optional[Path]:
+    raw = os.getenv('TIPTUNE_RESOURCE_DIR')
+    if raw:
+        rd = Path(raw)
+        candidates = [rd / 'bin', rd / 'resources' / 'bin']
+        for c in candidates:
+            try:
+                if c.exists():
+                    return c
+            except Exception:
+                continue
+        return candidates[-1]
+
+    return _repo_root() / 'src-tauri' / 'resources' / 'bin'
+
+
+def get_bundled_bin_dir() -> Optional[Path]:
+    base = get_bundled_bin_base_dir()
+    if base is None:
+        return None
+    return base / platform_key()
+
+
+def get_bundled_bin_path(name: str) -> Optional[Path]:
+    d = get_bundled_bin_dir()
+    if d is None:
+        return None
+    ext = '.exe' if platform_key() == 'windows' and not name.lower().endswith('.exe') else ''
+    return d / f"{name}{ext}"
