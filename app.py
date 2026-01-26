@@ -1640,7 +1640,7 @@ class SongRequestService:
             logging.exception("Error extracting YouTube audio for URL %s", url)
             msg = str(e)
             if 'not installed' in msg.lower():
-                raise web.HTTPServiceUnavailable(text=msg)
+                raise web.HTTPServiceUnavailable(text='Required YouTube audio extraction dependency is not installed on the server')
             raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
         except Exception:
             logging.exception("Error extracting YouTube audio for URL %s", url)
