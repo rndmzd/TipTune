@@ -73,13 +73,20 @@ function downloadToFile(url, destPath) {
       (res) => {
         const code = res.statusCode || 0;
         if (code >= 300 && code < 400 && res.headers.location) {
+          const redirectUrl = (() => {
+            try {
+              return new URL(String(res.headers.location), url).toString();
+            } catch {
+              return String(res.headers.location);
+            }
+          })();
           res.resume();
           out.close();
           try {
             if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
           } catch {
           }
-          downloadToFile(res.headers.location, destPath).then(resolve, reject);
+          downloadToFile(redirectUrl, destPath).then(resolve, reject);
           return;
         }
 
