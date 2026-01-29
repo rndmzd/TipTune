@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  YTDLP_VERSION: "2025.12.8"
+  YTDLP_VERSION: "2025.12.08"
   FFMPEG_VERSION: "6.0.1"
 
 jobs:
