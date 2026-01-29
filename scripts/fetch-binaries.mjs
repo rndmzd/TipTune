@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const DEFAULT_YTDLP_VERSION = '2024.12.08';
+const DEFAULT_YTDLP_VERSION = '2025.12.08';
 const DEFAULT_FFMPEG_VERSION = '7.1.1';
 
 function die(msg) {
