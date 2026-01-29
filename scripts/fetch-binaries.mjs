@@ -9,6 +9,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
+const DEFAULT_YTDLP_VERSION = '2025.12.08';
+const DEFAULT_FFMPEG_VERSION = '7.1.1';
+
 function die(msg) {
   console.error(msg);
   process.exit(1);
@@ -196,7 +199,10 @@ async function ensureFfmpeg(destDir, ffmpegVersion) {
   try {
     if (key === 'linux') {
       const archive = path.join(tmpRoot, 'ffmpeg.tar.xz');
-      const url = 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz';
+      const resolvedIsLatest = isLatestSpecifier(ffmpegVersion);
+      const url = resolvedIsLatest
+        ? 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz'
+        : `https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-${String(ffmpegVersion).trim()}-amd64-static.tar.xz`;
       await downloadToFile(url, archive);
       sh('tar', ['-xJf', archive, '-C', tmpRoot]);
 
@@ -260,7 +266,10 @@ async function ensureFfmpeg(destDir, ffmpegVersion) {
       }
     } else if (key === 'windows') {
       const zip = path.join(tmpRoot, 'ffmpeg.zip');
-      const url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
+      const resolvedIsLatest = isLatestSpecifier(ffmpegVersion);
+      const url = resolvedIsLatest
+        ? 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+        : `https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-${String(ffmpegVersion).trim()}-essentials_build.zip`;
       await downloadToFile(url, zip);
 
       const outDir = path.join(tmpRoot, 'out');
@@ -311,8 +320,8 @@ function findFirstMatch(rootDir, regex) {
 async function main() {
   const key = platformKey();
 
-  const ytDlpVersion = String(process.env.YTDLP_VERSION || '').trim() || 'latest';
-  const ffmpegVersion = String(process.env.FFMPEG_VERSION || '').trim() || 'latest';
+  const ytDlpVersion = String(process.env.YTDLP_VERSION || '').trim() || DEFAULT_YTDLP_VERSION;
+  const ffmpegVersion = String(process.env.FFMPEG_VERSION || '').trim() || DEFAULT_FFMPEG_VERSION;
 
   const destDir = path.join(repoRoot, 'src-tauri', 'resources', 'bin', key);
   ensureDir(destDir);

@@ -9,15 +9,15 @@ permissions:
   contents: read
 
 env:
-  YTDLP_VERSION: "latest"
-  FFMPEG_VERSION: "latest"
+  YTDLP_VERSION: "2025.12.08"
+  FFMPEG_VERSION: "7.1.1"
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -33,20 +33,6 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            pkg-config \
-            patchelf
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -70,9 +56,9 @@ jobs:
       - name: Ensure executable bits (non-Windows)
         if: runner.os != 'Windows'
         run: |
-          chmod +x src-tauri/resources/bin/${{ runner.os == 'macOS' && 'macos' || 'linux' }}/yt-dlp
-          chmod +x src-tauri/resources/bin/${{ runner.os == 'macOS' && 'macos' || 'linux' }}/ffmpeg
-          chmod +x src-tauri/resources/bin/${{ runner.os == 'macOS' && 'macos' || 'linux' }}/ffprobe
+          chmod +x src-tauri/resources/bin/macos/yt-dlp
+          chmod +x src-tauri/resources/bin/macos/ffmpeg
+          chmod +x src-tauri/resources/bin/macos/ffprobe
 
       - name: Install frontend deps
         run: npm ci

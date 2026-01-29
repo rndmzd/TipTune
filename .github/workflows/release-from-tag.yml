@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  YTDLP_VERSION: "2025.12.08"
+  FFMPEG_VERSION: "7.1.1"
+
 jobs:
   build:
     strategy:
@@ -15,8 +19,6 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: ""
-          - platform: ubuntu-22.04
             args: ""
           - platform: windows-latest
             args: ""
@@ -55,16 +57,16 @@ jobs:
         run: |
           python -m compileall -q .
 
-      # Linux only deps for Tauri bundling
-      - name: Install Linux deps
-        if: startsWith(matrix.platform, 'ubuntu')
+      - name: Fetch platform binaries (yt-dlp + ffmpeg)
+        run: node scripts/fetch-binaries.mjs
+        shell: bash
+
+      - name: Ensure executable bits (macOS)
+        if: runner.os == 'macOS'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
+          chmod +x src-tauri/resources/bin/macos/yt-dlp
+          chmod +x src-tauri/resources/bin/macos/ffmpeg
+          chmod +x src-tauri/resources/bin/macos/ffprobe
 
       - name: Build + Release
         uses: tauri-apps/tauri-action@v0
