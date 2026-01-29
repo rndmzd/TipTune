@@ -24,7 +24,7 @@ except Exception:
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
-from utils.runtime_paths import ensure_dir, ensure_parent_dir, get_cache_dir, get_bundled_bin_dir, get_bundled_bin_path, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
+from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_bundled_bin_path, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
@@ -46,7 +46,10 @@ def _prepend_bundled_bin_to_path() -> None:
     try:
         d = get_bundled_bin_dir()
         if d is None:
-            return
+            d2 = find_bundled_bin_path('yt-dlp')
+            if d2 is None:
+                return
+            d = d2.parent
         if not d.exists():
             return
         sep = os.pathsep
@@ -65,10 +68,8 @@ _prepend_bundled_bin_to_path()
 
 def _yt_dlp_exe() -> Optional[str]:
     try:
-        p = get_bundled_bin_path('yt-dlp')
-        if p is None:
-            return None
-        if p.exists():
+        p = find_bundled_bin_path('yt-dlp')
+        if p is not None:
             return str(p)
     except Exception:
         return None
@@ -3341,10 +3342,22 @@ class SongRequestService:
             lim = 10
         lim = min(lim, 25)
 
+        exe_path = _yt_dlp_exe()
+        try:
+            logger.info(
+                "music.youtube.search.backend",
+                data={
+                    "backend": "yt-dlp-exe" if exe_path is not None else "python-yt-dlp",
+                    "yt_dlp_exe": exe_path,
+                },
+            )
+        except Exception:
+            pass
+
         loop = asyncio.get_running_loop()
 
         def _do_search() -> dict:
-            exe = _yt_dlp_exe()
+            exe = exe_path
             if exe is not None:
                 cmd = [
                     exe,
@@ -3357,12 +3370,15 @@ class SongRequestService:
                 ]
                 try:
                     proc = _run_subprocess_no_window(cmd, timeout=10)
-                    if proc.returncode == 0:
-                        payload = json.loads(proc.stdout)
-                        if isinstance(payload, dict):
-                            return payload
+                    if proc.returncode != 0:
+                        err = (proc.stderr or '').strip()
+                        raise RuntimeError(err or f"yt-dlp exited with code {proc.returncode}")
+                    payload = json.loads(proc.stdout)
+                    if isinstance(payload, dict):
+                        return payload
+                    raise RuntimeError('yt-dlp returned non-JSON output')
                 except Exception:
-                    pass
+                    raise
 
             if YoutubeDL is None:
                 raise RuntimeError('yt-dlp is not installed')

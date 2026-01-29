@@ -1,5 +1,6 @@
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -130,3 +131,49 @@ def get_bundled_bin_path(name: str) -> Optional[Path]:
         return None
     ext = '.exe' if platform_key() == 'windows' and not name.lower().endswith('.exe') else ''
     return d / f"{name}{ext}"
+
+
+@lru_cache(maxsize=32)
+def find_bundled_bin_path(name: str) -> Optional[Path]:
+    p = get_bundled_bin_path(name)
+    if p is not None:
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            pass
+
+    ext = '.exe' if platform_key() == 'windows' and not str(name).lower().endswith('.exe') else ''
+    filename = f"{name}{ext}"
+
+    candidates: list[Path] = []
+    try:
+        rr = resource_root()
+        candidates += [
+            rr / 'bin',
+            rr / 'resources' / 'bin',
+            rr / 'resources' / 'resources' / 'bin',
+        ]
+    except Exception:
+        pass
+
+    try:
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / 'bin')
+        candidates.append(exe_dir / 'resources' / 'bin')
+    except Exception:
+        pass
+
+    for base in candidates:
+        try:
+            plat_dir = base / platform_key()
+            for c in (plat_dir / filename, base / filename):
+                try:
+                    if c.exists():
+                        return c
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    return None
