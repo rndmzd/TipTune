@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 const DEFAULT_YTDLP_VERSION = '2024.12.08';
-const DEFAULT_FFMPEG_VERSION = '6.0.1';
+const DEFAULT_FFMPEG_VERSION = '7.1.1';
 
 function die(msg) {
   console.error(msg);
