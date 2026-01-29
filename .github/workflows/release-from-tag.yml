@@ -16,8 +16,6 @@ jobs:
         include:
           - platform: macos-latest
             args: ""
-          - platform: ubuntu-22.04
-            args: ""
           - platform: windows-latest
             args: ""
 
@@ -54,17 +52,6 @@ jobs:
       - name: Python sanity check (compile)
         run: |
           python -m compileall -q .
-
-      # Linux only deps for Tauri bundling
-      - name: Install Linux deps
-        if: startsWith(matrix.platform, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
 
       - name: Build + Release
         uses: tauri-apps/tauri-action@v0
