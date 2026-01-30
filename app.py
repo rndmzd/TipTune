@@ -5,9 +5,12 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import signal
+import subprocess
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
 from urllib.parse import urlparse
@@ -15,15 +18,10 @@ from urllib.parse import urlparse
 import httpx
 from aiohttp import web, ClientSession
 
-try:
-    from yt_dlp import YoutubeDL
-except Exception:
-    YoutubeDL = None
-
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
-from utils.runtime_paths import ensure_dir, ensure_parent_dir, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
+from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
@@ -60,6 +58,61 @@ def _prepend_bundled_bin_to_path() -> None:
 
 
 _prepend_bundled_bin_to_path()
+
+
+@lru_cache(maxsize=1)
+def _yt_dlp_bin_path() -> Optional[str]:
+    try:
+        p = find_bundled_bin_path('yt-dlp')
+        if p and p.exists():
+            return str(p)
+    except Exception:
+        pass
+    return shutil.which('yt-dlp')
+
+
+def _yt_dlp_dump_json(args: list[str], timeout: int = 10) -> list[dict]:
+    bin_path = _yt_dlp_bin_path()
+    if not bin_path:
+        raise RuntimeError('yt-dlp is not installed')
+    cmd = [
+        bin_path,
+        '--dump-json',
+        '--skip-download',
+        '--no-warnings',
+        '--quiet',
+        *args,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError('yt-dlp timed out') from exc
+
+    if proc.returncode != 0:
+        raw = (proc.stderr or proc.stdout or '').strip()
+        raise RuntimeError(raw or 'yt-dlp failed')
+
+    items: list[dict] = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            items.append(payload)
+
+    if not items:
+        raise RuntimeError('yt-dlp returned no data')
+    return items
 
 def _music_source_from_config(cfg: configparser.ConfigParser) -> str:
     try:
@@ -706,6 +759,10 @@ class WebUI:
         url = url.strip() if isinstance(url, str) else ''
         if url == '':
             raise web.HTTPBadRequest(text='Missing url')
+        try:
+            logger.info("webui.api.youtube.stream.request", url=url, range=request.headers.get('Range'))
+        except Exception:
+            pass
         return await self._service.stream_youtube_audio(url, request)
 
     async def _api_set_device(self, request: web.Request) -> web.Response:
@@ -1415,22 +1472,13 @@ class SongRequestService:
             return
 
     def _yt_extract_video_meta(self, video_url: str) -> Optional[dict]:
-        if YoutubeDL is None:
-            return None
         if not self._is_allowed_youtube_url(video_url):
             return None
-
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-            'noplaylist': True,
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False) or {}
-        if not isinstance(info, dict):
+        try:
+            info = _yt_dlp_dump_json(['--no-playlist', video_url], timeout=10)[0]
+        except Exception:
             return None
-        return info
+        return info if isinstance(info, dict) else None
 
     async def _yt_enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         enriched = dict(item)
@@ -1478,23 +1526,10 @@ class SongRequestService:
         return enriched
 
     def _yt_fetch_best_audio_url(self, video_url: str) -> tuple[str, Optional[str], Dict[str, str]]:
-        if YoutubeDL is None:
-            raise RuntimeError('yt-dlp is not installed')
-        info = None
         if not self._is_allowed_youtube_url(video_url):
             raise RuntimeError('Only YouTube URLs are supported')
-
-        if info is None:
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'noplaylist': True,
-                'format': 'bestaudio/best',
-            }
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=False) or {}
-
+        items = _yt_dlp_dump_json(['--no-playlist', '-f', 'bestaudio/best', video_url], timeout=10)
+        info = items[0] if items else None
         if not isinstance(info, dict):
             raise RuntimeError('Failed to extract YouTube info')
 
@@ -1504,31 +1539,74 @@ class SongRequestService:
 
         formats = info.get('formats')
         if isinstance(formats, list) and formats:
-            best = None
-            best_score = -1.0
-            for f in formats:
-                if not isinstance(f, dict):
-                    continue
-                u = f.get('url')
-                if not isinstance(u, str) or u.strip() == '':
-                    continue
-                vcodec = f.get('vcodec')
-                acodec = f.get('acodec')
-                if vcodec not in (None, 'none'):
-                    continue
-                if acodec in (None, 'none'):
-                    continue
-                abr = f.get('abr')
-                try:
-                    score = float(abr) if abr is not None else 0.0
-                except Exception:
-                    score = 0.0
-                if score > best_score:
-                    best_score = score
-                    best = f
+            def _pick_best_audio(
+                candidates: list[dict],
+                allow_streaming_protocols: bool,
+                preferred_exts: Optional[set[str]] = None,
+                preferred_mimes: Optional[set[str]] = None,
+            ) -> Optional[dict]:
+                if preferred_exts or preferred_mimes:
+                    filtered: list[dict] = []
+                    for f in candidates:
+                        if not isinstance(f, dict):
+                            continue
+                        ext = f.get('ext')
+                        mime = f.get('mime_type')
+                        ext_norm = str(ext or '').lower().strip()
+                        mime_norm = str(mime or '').lower().split(';', 1)[0].strip()
+                        if preferred_exts and ext_norm in preferred_exts:
+                            filtered.append(f)
+                            continue
+                        if preferred_mimes and mime_norm in preferred_mimes:
+                            filtered.append(f)
+                    if filtered:
+                        candidates = filtered
 
+                best: Optional[dict] = None
+                best_score = -1.0
+                for f in candidates:
+                    if not isinstance(f, dict):
+                        continue
+                    u = f.get('url')
+                    if not isinstance(u, str) or u.strip() == '':
+                        continue
+                    vcodec = f.get('vcodec')
+                    acodec = f.get('acodec')
+                    if vcodec not in (None, 'none'):
+                        continue
+                    if acodec in (None, 'none'):
+                        continue
+                    if not allow_streaming_protocols:
+                        protocol = str(f.get('protocol') or '').lower()
+                        if 'm3u8' in protocol or 'dash' in protocol:
+                            continue
+                        ext = f.get('ext')
+                        if isinstance(ext, str) and ext.lower().strip() in ('m3u8', 'mpd'):
+                            continue
+                    abr = f.get('abr')
+                    try:
+                        score = float(abr) if abr is not None else 0.0
+                    except Exception:
+                        score = 0.0
+                    if score > best_score:
+                        best_score = score
+                        best = f
+                return best
+
+            preferred_exts = {'m4a', 'mp4', 'mp3'}
+            preferred_mimes = {'audio/mp4', 'audio/mpeg'}
+            best = _pick_best_audio(
+                formats,
+                allow_streaming_protocols=False,
+                preferred_exts=preferred_exts,
+                preferred_mimes=preferred_mimes,
+            )
             if best is None:
-                best = formats[0] if isinstance(formats[0], dict) else None
+                best = _pick_best_audio(formats, allow_streaming_protocols=False)
+            if best is None:
+                best = _pick_best_audio(formats, allow_streaming_protocols=True)
+            if best is None and isinstance(formats[0], dict):
+                best = formats[0]
 
             if isinstance(best, dict):
                 u = best.get('url')
@@ -1546,6 +1624,8 @@ class SongRequestService:
                 if content_type is None and isinstance(ext, str):
                     ext = ext.lower().strip()
                     if ext == 'm4a':
+                        content_type = 'audio/mp4'
+                    elif ext == 'mp4':
                         content_type = 'audio/mp4'
                     elif ext == 'webm':
                         content_type = 'audio/webm'
@@ -1594,6 +1674,18 @@ class SongRequestService:
             logging.exception("Error extracting YouTube audio for URL %s", url)
             raise web.HTTPBadRequest(text='Failed to extract YouTube audio')
 
+        try:
+            parsed = urlparse(stream_url)
+            logger.info(
+                "youtube.stream.extracted",
+                url=url,
+                stream_host=parsed.hostname,
+                stream_path=(parsed.path or '')[:120],
+                content_type=guessed_ct,
+            )
+        except Exception:
+            pass
+
         range_header = request.headers.get('Range')
         headers: Dict[str, str] = dict(request_headers or {})
         if isinstance(range_header, str) and range_header.strip() != '':
@@ -1601,6 +1693,18 @@ class SongRequestService:
 
         async with ClientSession() as session:
             async with session.get(stream_url, headers=headers) as upstream:
+                try:
+                    logger.info(
+                        "youtube.stream.upstream",
+                        url=url,
+                        status=upstream.status,
+                        content_type=upstream.headers.get('Content-Type'),
+                        content_length=upstream.headers.get('Content-Length'),
+                        accept_ranges=upstream.headers.get('Accept-Ranges'),
+                        content_range=upstream.headers.get('Content-Range'),
+                    )
+                except Exception:
+                    pass
                 resp_headers: Dict[str, str] = {}
                 ct = upstream.headers.get('Content-Type')
                 if isinstance(ct, str) and ct.strip() != '':
@@ -3291,20 +3395,17 @@ class SongRequestService:
 
         loop = asyncio.get_running_loop()
 
-        def _do_search() -> dict:
-            if YoutubeDL is None:
-                raise RuntimeError('yt-dlp is not installed')
-
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'extract_flat': True,
-                'noplaylist': True,
-                'default_search': 'ytsearch',
-            }
-            with YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(f"ytsearch{lim}:{q}", download=False) or {}
+        def _do_search() -> list[dict]:
+            return _yt_dlp_dump_json(
+                [
+                    '--extract-flat',
+                    '--no-playlist',
+                    '--default-search',
+                    'ytsearch',
+                    f"ytsearch{lim}:{q}",
+                ],
+                timeout=8,
+            )
 
         try:
             payload = await asyncio.wait_for(loop.run_in_executor(None, _do_search), timeout=8)
@@ -3313,9 +3414,12 @@ class SongRequestService:
         except Exception as exc:
             raise RuntimeError(str(exc))
 
-        entries = payload.get('entries', []) if isinstance(payload, dict) else []
-        if not isinstance(entries, list):
-            entries = []
+        entries: list[dict] = []
+        if isinstance(payload, list):
+            if len(payload) == 1 and isinstance(payload[0], dict) and isinstance(payload[0].get('entries'), list):
+                entries = [e for e in payload[0].get('entries', []) if isinstance(e, dict)]
+            else:
+                entries = [e for e in payload if isinstance(e, dict)]
 
         out: list[dict] = []
         for e in entries:
