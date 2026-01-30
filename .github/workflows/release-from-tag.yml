@@ -9,7 +9,6 @@ permissions:
   contents: write
 
 env:
-  YTDLP_VERSION: "2025.12.08"
   FFMPEG_VERSION: "7.1.1"
 
 jobs:
@@ -57,14 +56,13 @@ jobs:
         run: |
           python -m compileall -q .
 
-      - name: Fetch platform binaries (yt-dlp + ffmpeg)
+      - name: Fetch platform binaries (ffmpeg)
         run: node scripts/fetch-binaries.mjs
         shell: bash
 
       - name: Ensure executable bits (macOS)
         if: runner.os == 'macOS'
         run: |
-          chmod +x src-tauri/resources/bin/macos/yt-dlp
           chmod +x src-tauri/resources/bin/macos/ffmpeg
           chmod +x src-tauri/resources/bin/macos/ffprobe
 

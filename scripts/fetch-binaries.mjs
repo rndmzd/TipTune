@@ -9,7 +9,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const DEFAULT_YTDLP_VERSION = '2025.12.08';
 const DEFAULT_FFMPEG_VERSION = '7.1.1';
 
 function die(msg) {
@@ -164,27 +163,6 @@ function copyFile(src, dst) {
   fs.copyFileSync(src, dst);
 }
 
-async function ensureYtDlp(destDir, ytDlpVersion) {
-  const ext = platformKey() === 'windows' ? '.exe' : '';
-  const destPath = path.join(destDir, `yt-dlp${ext}`);
-  if (fileExistsNonEmpty(destPath)) return;
-
-  const key = platformKey();
-  const assetName = key === 'windows' ? 'yt-dlp.exe' : key === 'macos' ? 'yt-dlp_macos' : 'yt-dlp';
-
-  const url = isLatestSpecifier(ytDlpVersion)
-    ? `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${assetName}`
-    : `https://github.com/yt-dlp/yt-dlp/releases/download/${String(ytDlpVersion).trim()}/${assetName}`;
-  await downloadToFile(url, destPath);
-
-  if (platformKey() !== 'windows') {
-    try {
-      fs.chmodSync(destPath, 0o755);
-    } catch {
-    }
-  }
-}
-
 async function ensureFfmpeg(destDir, ffmpegVersion) {
   const key = platformKey();
   const ffmpegName = key === 'windows' ? 'ffmpeg.exe' : 'ffmpeg';
@@ -319,14 +297,11 @@ function findFirstMatch(rootDir, regex) {
 
 async function main() {
   const key = platformKey();
-
-  const ytDlpVersion = String(process.env.YTDLP_VERSION || '').trim() || DEFAULT_YTDLP_VERSION;
   const ffmpegVersion = String(process.env.FFMPEG_VERSION || '').trim() || DEFAULT_FFMPEG_VERSION;
 
   const destDir = path.join(repoRoot, 'src-tauri', 'resources', 'bin', key);
   ensureDir(destDir);
 
-  await ensureYtDlp(destDir, ytDlpVersion);
   await ensureFfmpeg(destDir, ffmpegVersion);
 
   const files = fs.readdirSync(destDir);
