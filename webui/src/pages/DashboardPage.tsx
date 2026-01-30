@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-import { apiJson } from '../api';
+import { apiJson, sseUrl } from '../api';
 import type { Device, QueueItem, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { QueueCard } from '../components/QueueCard';
@@ -10,6 +10,32 @@ type QueueResp = { ok: true; queue: QueueState };
 type DevicesResp = { ok: true; devices: Device[] };
 type SearchTracksResp = { ok: true; tracks: QueueItem[] };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
+type YoutubeDebugInfo = {
+  event: string;
+  src: string;
+  currentSrc: string;
+  readyState: number;
+  networkState: number;
+  errorCode: number | null;
+  paused: boolean;
+  duration: number | null;
+  currentTime: number | null;
+};
+
+function mediaErrorLabel(code?: number | null): string {
+  switch (code) {
+    case 1:
+      return 'MEDIA_ERR_ABORTED';
+    case 2:
+      return 'MEDIA_ERR_NETWORK';
+    case 3:
+      return 'MEDIA_ERR_DECODE';
+    case 4:
+      return 'MEDIA_ERR_SRC_NOT_SUPPORTED';
+    default:
+      return '';
+  }
+}
 
 export function DashboardPage() {
   const location = useLocation();
@@ -44,6 +70,7 @@ export function DashboardPage() {
   const [searchBusy, setSearchBusy] = useState<boolean>(false);
   const [searchErr, setSearchErr] = useState<string>('');
   const [searchResults, setSearchResults] = useState<QueueItem[]>([]);
+  const [youtubeDebugInfo, setYoutubeDebugInfo] = useState<YoutubeDebugInfo | null>(null);
   const searchSeqRef = useRef<number>(0);
 
   const selectedDeviceIdRef = useRef<string>('');
@@ -70,6 +97,22 @@ export function DashboardPage() {
     const m = Math.floor(s / 60);
     const r = s % 60;
     return `${m}:${String(r).padStart(2, '0')}`;
+  }
+
+  function isYouTubeLink(value: string): boolean {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    try {
+      const u = new URL(s);
+      const host = String(u.hostname || '').toLowerCase();
+      if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+        return true;
+      }
+    } catch {
+      const lower = s.toLowerCase();
+      return /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
+    }
+    return false;
   }
 
   async function sendNowPlayingToObs() {
@@ -237,18 +280,7 @@ export function DashboardPage() {
             continue;
           }
           const s = String(it ?? '').trim();
-          let isYouTubeLink = false;
-          try {
-            const u = new URL(s);
-            const host = String(u.hostname || '').toLowerCase();
-            if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
-              isYouTubeLink = true;
-            }
-          } catch {
-            const lower = s.toLowerCase();
-            isYouTubeLink = /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
-          }
-          if (isYouTubeLink) continue;
+          if (isYouTubeLink(s)) continue;
           if (s.trim() !== '') return true;
         }
         return false;
@@ -502,27 +534,51 @@ export function DashboardPage() {
   }, [queueState?.playback_is_playing, queueState?.playback_track_uri, queueState?.playback_progress_ms]);
 
   const source = String(queueState?.source || 'spotify');
-  const nowSource = String(nowPlaying?.source || source);
+  const inferredYoutube = isYouTubeLink(typeof nowPlaying?.uri === 'string' ? nowPlaying.uri : '');
+  const nowSource = inferredYoutube ? 'youtube' : String(nowPlaying?.source || source);
   const isSpotify = nowSource === 'spotify';
   const isYouTube = nowSource === 'youtube';
+  const youtubeStreamUrl =
+    isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== ''
+      ? sseUrl(`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`)
+      : '';
+  const showYoutubeDebug = isYouTube;
+  const updateYoutubeDebug = (event: string) => {
+    if (!showYoutubeDebug) return;
+    const a = youtubeAudioRef.current;
+    if (!a) {
+      setYoutubeDebugInfo({
+        event,
+        src: youtubeStreamUrl,
+        currentSrc: '',
+        readyState: -1,
+        networkState: -1,
+        errorCode: null,
+        paused: true,
+        duration: null,
+        currentTime: null,
+      });
+      return;
+    }
+    setYoutubeDebugInfo({
+      event,
+      src: youtubeStreamUrl,
+      currentSrc: a.currentSrc || a.src || '',
+      readyState: a.readyState,
+      networkState: a.networkState,
+      errorCode: a.error ? a.error.code : null,
+      paused: a.paused,
+      duration: Number.isFinite(a.duration) ? a.duration : null,
+      currentTime: Number.isFinite(a.currentTime) ? a.currentTime : null,
+    });
+  };
   const needsSpotify =
     isSpotify ||
     (Array.isArray(queue)
       ? queue.some((it) => {
           if (it && typeof it === 'object') return String((it as any).source || '') === 'spotify';
           const s = String(it ?? '').trim();
-          let isYouTubeLink = false;
-          try {
-            const u = new URL(s);
-            const host = String(u.hostname || '').toLowerCase();
-            if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
-              isYouTubeLink = true;
-            }
-          } catch {
-            const lower = s.toLowerCase();
-            isYouTubeLink = /(^|\W)(youtube\.com|youtu\.be)(\/|$|\?)/i.test(lower);
-          }
-          if (isYouTubeLink) return false;
+          if (isYouTubeLink(s)) return false;
           return s.trim() !== '';
         })
       : false);
@@ -543,21 +599,30 @@ export function DashboardPage() {
   }, [isYouTube, nowPlaying?.uri]);
 
   useEffect(() => {
+    if (!showYoutubeDebug) {
+      setYoutubeDebugInfo(null);
+    }
+  }, [showYoutubeDebug]);
+
+  useEffect(() => {
     if (!isYouTube) return;
     if (paused) return;
     const uri = typeof nowPlaying?.uri === 'string' ? nowPlaying.uri.trim() : '';
     if (!uri) return;
 
+    updateYoutubeDebug('effect');
     const a = youtubeAudioRef.current;
     if (!a) return;
 
     try {
       a.load();
+      updateYoutubeDebug('load');
     } catch {
     }
 
     const t = window.setTimeout(() => {
       try {
+        updateYoutubeDebug('play-attempt');
         const p = a.play();
         if (p && typeof (p as any).catch === 'function') {
           (p as any).catch(() => {});
@@ -610,12 +675,17 @@ export function DashboardPage() {
                       autoPlay
                       controls
                       preload="auto"
-                      src={`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`}
+                      src={youtubeStreamUrl}
+                      onLoadedMetadata={() => {
+                        updateYoutubeDebug('loadedmetadata');
+                      }}
                       onPlaying={() => {
+                        updateYoutubeDebug('playing');
                         youtubePlaybackStartedRef.current = true;
                       }}
                       onCanPlay={() => {
                         if (paused) return;
+                        updateYoutubeDebug('canplay');
                         try {
                           const a = youtubeAudioRef.current;
                           if (!a) return;
@@ -627,15 +697,36 @@ export function DashboardPage() {
                         }
                       }}
                       onEnded={() => {
+                        updateYoutubeDebug('ended');
                         if (!youtubePlaybackStartedRef.current) return;
                         nextTrack().catch(() => {});
                       }}
                       onError={() => {
+                        updateYoutubeDebug('error');
                         if (!youtubePlaybackStartedRef.current) return;
                         nextTrack().catch(() => {});
                       }}
                       style={{ width: '100%' }}
                     />
+                    {showYoutubeDebug ? (
+                      <div className="muted" style={{ marginTop: 6, fontSize: 12, wordBreak: 'break-all' }}>
+                        <div>YT debug: {youtubeDebugInfo?.event || 'idle'}</div>
+                        <div>src: {youtubeStreamUrl || '(empty)'}</div>
+                        <div>currentSrc: {youtubeDebugInfo?.currentSrc || '(none)'}</div>
+                        <div>
+                          readyState: {youtubeDebugInfo?.readyState ?? '-'} | networkState:{' '}
+                          {youtubeDebugInfo?.networkState ?? '-'}
+                        </div>
+                        <div>
+                          error: {youtubeDebugInfo?.errorCode ?? '-'}{' '}
+                          {mediaErrorLabel(youtubeDebugInfo?.errorCode)}
+                        </div>
+                        <div>
+                          paused: {String(youtubeDebugInfo?.paused ?? '-')} | time:{' '}
+                          {youtubeDebugInfo?.currentTime ?? '-'} / {youtubeDebugInfo?.duration ?? '-'}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
