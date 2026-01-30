@@ -57,6 +57,7 @@ export function DashboardPage() {
   const playbackIsPlayingRef = useRef<boolean>(false);
 
   const youtubeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const youtubePlaybackStartedRef = useRef<boolean>(false);
 
   const nowPlayingRef = useRef<QueueItem | null>(null);
   const queueRef = useRef<(QueueItem | string)[]>([]);
@@ -538,6 +539,10 @@ export function DashboardPage() {
   const pct = durationMs && posClampedMs != null && durationMs > 0 ? Math.max(0, Math.min(1, posClampedMs / durationMs)) : null;
 
   useEffect(() => {
+    youtubePlaybackStartedRef.current = false;
+  }, [isYouTube, nowPlaying?.uri]);
+
+  useEffect(() => {
     if (!isYouTube) return;
     if (paused) return;
     const uri = typeof nowPlaying?.uri === 'string' ? nowPlaying.uri.trim() : '';
@@ -606,6 +611,9 @@ export function DashboardPage() {
                       controls
                       preload="auto"
                       src={`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`}
+                      onPlaying={() => {
+                        youtubePlaybackStartedRef.current = true;
+                      }}
                       onCanPlay={() => {
                         if (paused) return;
                         try {
@@ -619,9 +627,11 @@ export function DashboardPage() {
                         }
                       }}
                       onEnded={() => {
+                        if (!youtubePlaybackStartedRef.current) return;
                         nextTrack().catch(() => {});
                       }}
                       onError={() => {
+                        if (!youtubePlaybackStartedRef.current) return;
                         nextTrack().catch(() => {});
                       }}
                       style={{ width: '100%' }}
