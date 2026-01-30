@@ -11,7 +11,6 @@ hiddenimports += collect_submodules('aiohttp')
 hiddenimports += collect_submodules('httpx')
 hiddenimports += collect_submodules('spotipy')
 hiddenimports += collect_submodules('simpleobsws')
-hiddenimports += collect_submodules('yt_dlp')
 
 
 ROOT = os.path.abspath(SPECPATH)

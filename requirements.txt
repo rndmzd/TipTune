@@ -7,4 +7,3 @@ spotipy
 simpleobsws
 PyYAML
 aiohttp
-yt-dlp
