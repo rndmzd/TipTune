@@ -1530,7 +1530,8 @@ class SongRequestService:
     def _yt_fetch_best_audio_url(self, video_url: str) -> tuple[str, Optional[str], Dict[str, str]]:
         if not self._is_allowed_youtube_url(video_url):
             raise RuntimeError('Only YouTube URLs are supported')
-        items = _yt_dlp_dump_json(['--no-playlist', '-f', 'bestaudio/best', video_url], timeout=10)
+        format_sel = 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=mp3]/bestaudio'
+        items = _yt_dlp_dump_json(['--no-playlist', '-f', format_sel, video_url], timeout=10)
         info = items[0] if items else None
         if not isinstance(info, dict):
             raise RuntimeError('Failed to extract YouTube info')
