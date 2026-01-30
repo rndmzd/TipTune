@@ -48,6 +48,14 @@ type ObsStatusResp = {
     in_main_scene?: boolean;
     present?: boolean;
   } | null;
+  tiptune_audio_capture?: {
+    target_exe?: string;
+    input_name?: string | null;
+    input_kind?: string | null;
+    input_exists?: boolean;
+    in_main_scene?: boolean;
+    present?: boolean;
+  } | null;
 };
 
 type ObsEnsureResp = {
@@ -357,6 +365,7 @@ export function SettingsPage() {
   const obsPasswordPlaceholder = setupStatus?.obs_configured ? '(leave blank to keep)' : '';
 
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
+  const tiptuneAudio = obsStatus?.tiptune_audio_capture || null;
   const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
 
   const appVersion = runtimeAppVersion || (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '');
@@ -767,6 +776,81 @@ export function SettingsPage() {
                 </tbody>
               </table>
             </div>
+
+            <label style={{ marginTop: 14 }}>TipTune audio capture (YouTube sync)</label>
+            <div className="tableWrap" style={{ marginTop: 8 }}>
+              <table className="dataTable">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <code>Application Audio Capture</code>
+                    </td>
+                    <td>
+                      <span className={tiptuneAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{tiptuneAudio?.present ? 'present' : 'missing'}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted">
+                      Target exe
+                    </td>
+                    <td>{tiptuneAudio?.target_exe || 'TipTune.exe'}</td>
+                  </tr>
+                  <tr>
+                    <td className="muted">
+                      Input exists
+                    </td>
+                    <td>
+                      <span className={tiptuneAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
+                        {tiptuneAudio?.input_exists ? 'yes' : 'no'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted">
+                      In main scene
+                    </td>
+                    <td>
+                      <span className={tiptuneAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
+                        {tiptuneAudio?.in_main_scene ? 'yes' : 'no'}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="muted">
+                      Matched input
+                    </td>
+                    <td>
+                      {tiptuneAudio?.input_name ? <code>{tiptuneAudio.input_name}</code> : <span className="muted">(none)</span>}
+                      {tiptuneAudio?.input_kind ? (
+                        <>
+                          {' '}<span className="muted">(</span>
+                          <code>{tiptuneAudio.input_kind}</code>
+                          <span className="muted">)</span>
+                        </>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {!tiptuneAudio ? (
+                    <tr>
+                      <td colSpan={2} className="muted">
+                        (no data)
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            {tiptuneAudio?.present ? null : (
+              <div className="muted" style={{ marginTop: 8 }}>
+                Create an Application Audio Capture input in OBS targeting TipTune.exe to sync YouTube playback audio.
+              </div>
+            )}
 
             <label style={{ marginTop: 14 }}>Spotify audio capture</label>
             <div className="tableWrap" style={{ marginTop: 8 }}>

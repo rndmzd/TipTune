@@ -514,7 +514,7 @@ class OBSHandler:
             'sources': sources,
         }
 
-    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def _get_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         main_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
         inputs = await self._get_inputs()
         if inputs is None:
@@ -562,6 +562,12 @@ class OBSHandler:
             'in_main_scene': bool(in_main_scene),
             'present': bool(input_exists and in_main_scene),
         }
+
+    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._get_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=scene_name)
+
+    async def get_app_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._get_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=scene_name)
 
     async def ensure_spotify_audio_capture(self,
                                           scene_key: str = 'main',

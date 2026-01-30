@@ -1803,12 +1803,23 @@ class SongRequestService:
             return {"enabled": True, "connected": False}
 
         spotify_audio_capture = None
+        tiptune_audio_capture = None
         try:
             spotify_audio_capture = await obs.get_spotify_audio_capture_status(scene_key='main', exe_name='Spotify.exe', scene_name=scene_name or None)
         except Exception:
             spotify_audio_capture = None
+        try:
+            tiptune_audio_capture = await obs.get_app_audio_capture_status(scene_key='main', exe_name='TipTune.exe', scene_name=scene_name or None)
+        except Exception:
+            tiptune_audio_capture = None
 
-        return {"enabled": True, "connected": True, "status": status, "spotify_audio_capture": spotify_audio_capture}
+        return {
+            "enabled": True,
+            "connected": True,
+            "status": status,
+            "spotify_audio_capture": spotify_audio_capture,
+            "tiptune_audio_capture": tiptune_audio_capture,
+        }
 
     async def ensure_obs_text_sources(self) -> Optional[Dict[str, Any]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
