@@ -58,7 +58,9 @@ YouTube is supported as a first-class source:
 - Searching YouTube uses `yt-dlp`.
 - Playback is handled in the Dashboard via an audio player that streams from `/api/youtube/stream`.
 - TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
-- Install Python deps (`pip install -r requirements.txt`) which include `yt-dlp`, or use a packaged build where it is bundled.
+- Install Python deps (`pip install -r requirements.txt`).
+- Download bundled binaries (`node scripts/fetch-binaries.mjs`) to get `yt-dlp` (and ffmpeg), or ensure `yt-dlp` is on your PATH.
+- Packaged builds already bundle `yt-dlp`.
 
 ### Setup Wizard now includes Music source
 
