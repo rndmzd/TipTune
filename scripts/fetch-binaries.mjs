@@ -10,6 +10,11 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 const DEFAULT_FFMPEG_VERSION = '7.1.1';
+const YT_DLP_URLS = {
+  windows: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
+  macos: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos',
+  linux: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux',
+};
 
 function die(msg) {
   console.error(msg);
@@ -163,6 +168,52 @@ function copyFile(src, dst) {
   fs.copyFileSync(src, dst);
 }
 
+function ytDlpFilename(key) {
+  return key === 'windows' ? 'yt-dlp.exe' : 'yt-dlp';
+}
+
+async function ensureYtDlp(destDir) {
+  const key = platformKey();
+  const url = YT_DLP_URLS[key];
+  if (!url) throw new Error(`Unsupported platform for yt-dlp download: ${key}`);
+
+  const filename = ytDlpFilename(key);
+  const destPath = path.join(destDir, filename);
+
+  if (!fileExistsNonEmpty(destPath)) {
+    await downloadToFile(url, destPath);
+  }
+
+  if (key !== 'windows') {
+    try {
+      fs.chmodSync(destPath, 0o755);
+    } catch {
+    }
+  }
+
+  try {
+    const env = {
+      ...process.env,
+      PATH: `${destDir}${path.delimiter}${process.env.PATH || ''}`,
+    };
+    execFileSync(ytDlpFilename(key), ['-U'], {
+      cwd: destDir,
+      env,
+      stdio: 'inherit',
+    });
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.warn(`yt-dlp update failed: ${msg}`);
+  }
+
+  if (key !== 'windows') {
+    try {
+      fs.chmodSync(destPath, 0o755);
+    } catch {
+    }
+  }
+}
+
 async function ensureFfmpeg(destDir, ffmpegVersion) {
   const key = platformKey();
   const ffmpegName = key === 'windows' ? 'ffmpeg.exe' : 'ffmpeg';
@@ -303,6 +354,7 @@ async function main() {
   ensureDir(destDir);
 
   await ensureFfmpeg(destDir, ffmpegVersion);
+  await ensureYtDlp(destDir);
 
   const files = fs.readdirSync(destDir);
   console.log(`Fetched binaries into: ${destDir}`);
