@@ -84,13 +84,15 @@ def _yt_dlp_dump_json(args: list[str], timeout: int = 10) -> list[dict]:
         *args,
     ]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        run_kwargs = {
+            'capture_output': True,
+            'text': True,
+            'timeout': timeout,
+            'check': False,
+        }
+        if os.name == 'nt':
+            run_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        proc = subprocess.run(cmd, **run_kwargs)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError('yt-dlp timed out') from exc
 
