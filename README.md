@@ -192,7 +192,8 @@ Notes:
 If you want to use YouTube as the music source:
 
 - Set `Music.source=youtube` (Setup Wizard → General Settings).
-- Ensure `yt-dlp` is available in your runtime.
+- Install Python deps (`pip install -r requirements.txt`) which include `yt-dlp`.
+- Packaged builds include `yt-dlp` automatically.
 
 TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
 
