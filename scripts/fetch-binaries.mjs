@@ -9,8 +9,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const DEFAULT_YTDLP_VERSION = '2025.12.08';
 const DEFAULT_FFMPEG_VERSION = '7.1.1';
+const YT_DLP_URLS = {
+  windows: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
+  macos: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos',
+  linux: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux',
+};
 
 function die(msg) {
   console.error(msg);
@@ -164,20 +168,45 @@ function copyFile(src, dst) {
   fs.copyFileSync(src, dst);
 }
 
-async function ensureYtDlp(destDir, ytDlpVersion) {
-  const ext = platformKey() === 'windows' ? '.exe' : '';
-  const destPath = path.join(destDir, `yt-dlp${ext}`);
-  if (fileExistsNonEmpty(destPath)) return;
+function ytDlpFilename(key) {
+  return key === 'windows' ? 'yt-dlp.exe' : 'yt-dlp';
+}
 
+async function ensureYtDlp(destDir) {
   const key = platformKey();
-  const assetName = key === 'windows' ? 'yt-dlp.exe' : key === 'macos' ? 'yt-dlp_macos' : 'yt-dlp';
+  const url = YT_DLP_URLS[key];
+  if (!url) throw new Error(`Unsupported platform for yt-dlp download: ${key}`);
 
-  const url = isLatestSpecifier(ytDlpVersion)
-    ? `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${assetName}`
-    : `https://github.com/yt-dlp/yt-dlp/releases/download/${String(ytDlpVersion).trim()}/${assetName}`;
-  await downloadToFile(url, destPath);
+  const filename = ytDlpFilename(key);
+  const destPath = path.join(destDir, filename);
 
-  if (platformKey() !== 'windows') {
+  if (!fileExistsNonEmpty(destPath)) {
+    await downloadToFile(url, destPath);
+  }
+
+  if (key !== 'windows') {
+    try {
+      fs.chmodSync(destPath, 0o755);
+    } catch {
+    }
+  }
+
+  try {
+    const env = {
+      ...process.env,
+      PATH: `${destDir}${path.delimiter}${process.env.PATH || ''}`,
+    };
+    execFileSync(destPath, ['-U'], {
+      cwd: destDir,
+      env,
+      stdio: 'inherit',
+    });
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.warn(`yt-dlp update failed: ${msg}`);
+  }
+
+  if (key !== 'windows') {
     try {
       fs.chmodSync(destPath, 0o755);
     } catch {
@@ -319,15 +348,13 @@ function findFirstMatch(rootDir, regex) {
 
 async function main() {
   const key = platformKey();
-
-  const ytDlpVersion = String(process.env.YTDLP_VERSION || '').trim() || DEFAULT_YTDLP_VERSION;
   const ffmpegVersion = String(process.env.FFMPEG_VERSION || '').trim() || DEFAULT_FFMPEG_VERSION;
 
   const destDir = path.join(repoRoot, 'src-tauri', 'resources', 'bin', key);
   ensureDir(destDir);
 
-  await ensureYtDlp(destDir, ytDlpVersion);
   await ensureFfmpeg(destDir, ffmpegVersion);
+  await ensureYtDlp(destDir);
 
   const files = fs.readdirSync(destDir);
   console.log(`Fetched binaries into: ${destDir}`);

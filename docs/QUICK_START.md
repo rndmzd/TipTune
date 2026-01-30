@@ -150,7 +150,9 @@ TipTune can also use YouTube for search and playback.
 
    - `Music.source=youtube`
 
-1. Make sure TipTune has `yt-dlp` available in its runtime.
+1. Install Python deps (`pip install -r requirements.txt`).
+1. Download bundled binaries (`node scripts/fetch-binaries.mjs`) to get `yt-dlp` (and ffmpeg), or ensure `yt-dlp` is on your PATH.
+1. Packaged builds already bundle `yt-dlp`.
 
 Notes:
 
