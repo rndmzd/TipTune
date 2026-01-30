@@ -3398,7 +3398,7 @@ class SongRequestService:
         def _do_search() -> list[dict]:
             return _yt_dlp_dump_json(
                 [
-                    '--extract-flat',
+                    '--flat-playlist',
                     '--no-playlist',
                     '--default-search',
                     'ytsearch',
