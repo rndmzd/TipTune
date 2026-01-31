@@ -133,6 +133,7 @@ function tooltip(section: string, key: string) {
     'General.allow_source_override_in_request_message': 'When enabled, users can include the word “spotify” or “youtube” in their request message to override the selected Music source for that request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
+    'General.show_debug_data': 'Show extra debug information in the dashboard (like YouTube playback details).',
     'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
     'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
   };
@@ -314,7 +315,10 @@ export function SettingsPage() {
     };
   }, []);
 
-  const v = (section: string, key: string) => ((cfg[section] || {})[key] || '').toString();
+  const v = (section: string, key: string) => {
+    const value = (cfg[section] || {})[key];
+    return value === undefined || value === null ? '' : String(value);
+  };
 
   const autoCheckUpdatesEnabled = (() => {
     const raw = v('General', 'auto_check_updates');
@@ -338,6 +342,12 @@ export function SettingsPage() {
     const raw = v('General', 'debug_log_to_file');
     const s = (raw || 'false').trim().toLowerCase();
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  })();
+
+  const showDebugDataEnabled = (() => {
+    const raw = v('General', 'show_debug_data');
+    const s = (raw || '').trim().toLowerCase();
+    return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
   })();
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
@@ -406,6 +416,7 @@ export function SettingsPage() {
         skip_song_cost: v('General', 'skip_song_cost'),
         request_overlay_duration: v('General', 'request_overlay_duration'),
         auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
+        show_debug_data: showDebugDataEnabled ? 'true' : 'false',
         debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
         debug_log_path: v('General', 'debug_log_path'),
       },
@@ -553,6 +564,24 @@ export function SettingsPage() {
             value={v('General', 'request_overlay_duration')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
           />
+
+          <label
+            title={tooltip('General', 'show_debug_data')}
+            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
+          >
+            <input
+              type="checkbox"
+              checked={showDebugDataEnabled}
+              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), show_debug_data: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span style={{ whiteSpace: 'nowrap' }}>Show debug data in dashboard</span>
+          </label>
 
           <label
             title={tooltip('General', 'debug_log_to_file')}

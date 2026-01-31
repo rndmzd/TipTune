@@ -196,7 +196,7 @@ async function ensureYtDlp(destDir) {
       ...process.env,
       PATH: `${destDir}${path.delimiter}${process.env.PATH || ''}`,
     };
-    execFileSync(destPath, ['-U'], {
+     execFileSync(destPath, ['-U'], {
       cwd: destDir,
       env,
       stdio: 'inherit',

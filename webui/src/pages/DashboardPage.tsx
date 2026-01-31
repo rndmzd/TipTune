@@ -70,6 +70,7 @@ export function DashboardPage() {
   const [searchBusy, setSearchBusy] = useState<boolean>(false);
   const [searchErr, setSearchErr] = useState<string>('');
   const [searchResults, setSearchResults] = useState<QueueItem[]>([]);
+  const [showDebugData, setShowDebugData] = useState<boolean>(true);
   const [youtubeDebugInfo, setYoutubeDebugInfo] = useState<YoutubeDebugInfo | null>(null);
   const searchSeqRef = useRef<number>(0);
 
@@ -469,9 +470,14 @@ export function DashboardPage() {
     refreshDevices().catch(() => {});
     apiJson<ConfigResp>('/api/config')
       .then((data) => {
-        const raw = (data?.config?.General?.request_overlay_duration ?? '').trim();
-        const n = Number.parseInt(String(raw || '10'), 10);
+        const general = data?.config?.General || {};
+        const rawDuration = String(general.request_overlay_duration ?? '').trim();
+        const n = Number.parseInt(String(rawDuration || '10'), 10);
         setObsOverlayDurationSec(Number.isFinite(n) && n >= 0 ? n : 10);
+
+        const rawDebug = String(general.show_debug_data ?? '').trim().toLowerCase();
+        const debugEnabled = rawDebug === '' ? true : !(rawDebug === 'false' || rawDebug === '0' || rawDebug === 'no' || rawDebug === 'off');
+        setShowDebugData(debugEnabled);
       })
       .catch(() => {});
     const t = window.setInterval(() => {
@@ -542,7 +548,7 @@ export function DashboardPage() {
     isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== ''
       ? sseUrl(`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`)
       : '';
-  const showYoutubeDebug = isYouTube;
+  const showYoutubeDebug = isYouTube && showDebugData;
   const updateYoutubeDebug = (event: string) => {
     if (!showYoutubeDebug) return;
     const a = youtubeAudioRef.current;
