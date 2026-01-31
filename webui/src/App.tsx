@@ -9,6 +9,7 @@ import { EventsPage } from './pages/EventsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { StatsPage } from './pages/StatsPage';
 import { apiJson } from './api';
+import { PlaybackProvider } from './components/PlaybackContext';
 
 function isTauriRuntime(): boolean {
   const w: any = window as any;
@@ -23,7 +24,6 @@ function autoCheckUpdatesEnabled(cfg: Record<string, Record<string, string>>): b
 
 export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
-  const location = useLocation();
 
   const isTauri = isTauriRuntime();
   const [backendState, setBackendState] = useState<'connecting' | 'ready' | 'failed'>(isTauri ? 'connecting' : 'ready');
@@ -189,15 +189,17 @@ export function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/" element={<GatedRoute element={<DashboardPage />} />} />
-      <Route path="/settings" element={<GatedRoute element={<SettingsPage />} />} />
-      <Route path="/events" element={<GatedRoute element={<EventsPage />} />} />
-      <Route path="/history" element={<GatedRoute element={<HistoryPage />} />} />
-      <Route path="/stats" element={<GatedRoute element={<StatsPage />} />} />
-      <Route path="/setup" element={<SetupPage />} />
-      <Route path="/help" element={<HelpPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <PlaybackProvider>
+      <Routes>
+        <Route path="/" element={<GatedRoute element={<DashboardPage />} />} />
+        <Route path="/settings" element={<GatedRoute element={<SettingsPage />} />} />
+        <Route path="/events" element={<GatedRoute element={<EventsPage />} />} />
+        <Route path="/history" element={<GatedRoute element={<HistoryPage />} />} />
+        <Route path="/stats" element={<GatedRoute element={<StatsPage />} />} />
+        <Route path="/setup" element={<SetupPage />} />
+        <Route path="/help" element={<HelpPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </PlaybackProvider>
   );
 }

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 
 import { apiJson } from '../api';
+import { MiniPlayer } from './PlaybackContext';
 
 import type { ReactNode } from 'react';
 
@@ -14,6 +15,7 @@ type SetupStatusResp = {
 export function HeaderBar(props: {
   title: string;
   right?: ReactNode;
+  showMiniPlayer?: boolean;
 }) {
   const location = useLocation();
 
@@ -40,9 +42,14 @@ export function HeaderBar(props: {
 
   const showGatedNav = setupComplete === true;
 
+  const showMiniPlayer = props.showMiniPlayer ?? location.pathname !== '/';
+
   return (
     <div className="headerBar">
-      <h1 className="headerTitle">{props.title}</h1>
+      <div className="headerTitleWrap">
+        <h1 className="headerTitle">{props.title}</h1>
+        {showMiniPlayer ? <MiniPlayer /> : null}
+      </div>
       <div className="headerNav">
         {showGatedNav ? (
           <>

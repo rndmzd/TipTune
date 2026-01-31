@@ -1,27 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-import { apiJson, sseUrl } from '../api';
+import { apiJson } from '../api';
 import type { Device, QueueItem, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { QueueCard } from '../components/QueueCard';
+import { usePlayback } from '../components/PlaybackContext';
 
 type QueueResp = { ok: true; queue: QueueState };
 type DevicesResp = { ok: true; devices: Device[] };
 type SearchTracksResp = { ok: true; tracks: QueueItem[] };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
-type YoutubeDebugInfo = {
-  event: string;
-  src: string;
-  currentSrc: string;
-  readyState: number;
-  networkState: number;
-  errorCode: number | null;
-  paused: boolean;
-  duration: number | null;
-  currentTime: number | null;
-};
-
 function mediaErrorLabel(code?: number | null): string {
   switch (code) {
     case 1:
@@ -39,6 +28,8 @@ function mediaErrorLabel(code?: number | null): string {
 
 export function DashboardPage() {
   const location = useLocation();
+  const playback = usePlayback();
+  const { youtubeDebugInfo, youtubeStreamUrl, refresh: refreshPlayback } = playback;
 
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [paused, setPaused] = useState<boolean>(false);
@@ -71,7 +62,6 @@ export function DashboardPage() {
   const [searchErr, setSearchErr] = useState<string>('');
   const [searchResults, setSearchResults] = useState<QueueItem[]>([]);
   const [showDebugData, setShowDebugData] = useState<boolean>(true);
-  const [youtubeDebugInfo, setYoutubeDebugInfo] = useState<YoutubeDebugInfo | null>(null);
   const searchSeqRef = useRef<number>(0);
 
   const selectedDeviceIdRef = useRef<string>('');
@@ -83,9 +73,6 @@ export function DashboardPage() {
   const playbackTickRef = useRef<number | null>(null);
   const playbackTickLastRef = useRef<number>(0);
   const playbackIsPlayingRef = useRef<boolean>(false);
-
-  const youtubeAudioRef = useRef<HTMLAudioElement | null>(null);
-  const youtubePlaybackStartedRef = useRef<boolean>(false);
 
   const nowPlayingRef = useRef<QueueItem | null>(null);
   const queueRef = useRef<(QueueItem | string)[]>([]);
@@ -544,40 +531,7 @@ export function DashboardPage() {
   const nowSource = inferredYoutube ? 'youtube' : String(nowPlaying?.source || source);
   const isSpotify = nowSource === 'spotify';
   const isYouTube = nowSource === 'youtube';
-  const youtubeStreamUrl =
-    isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== ''
-      ? sseUrl(`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`)
-      : '';
   const showYoutubeDebug = isYouTube && showDebugData;
-  const updateYoutubeDebug = (event: string) => {
-    if (!showYoutubeDebug) return;
-    const a = youtubeAudioRef.current;
-    if (!a) {
-      setYoutubeDebugInfo({
-        event,
-        src: youtubeStreamUrl,
-        currentSrc: '',
-        readyState: -1,
-        networkState: -1,
-        errorCode: null,
-        paused: true,
-        duration: null,
-        currentTime: null,
-      });
-      return;
-    }
-    setYoutubeDebugInfo({
-      event,
-      src: youtubeStreamUrl,
-      currentSrc: a.currentSrc || a.src || '',
-      readyState: a.readyState,
-      networkState: a.networkState,
-      errorCode: a.error ? a.error.code : null,
-      paused: a.paused,
-      duration: Number.isFinite(a.duration) ? a.duration : null,
-      currentTime: Number.isFinite(a.currentTime) ? a.currentTime : null,
-    });
-  };
   const needsSpotify =
     isSpotify ||
     (Array.isArray(queue)
@@ -599,48 +553,6 @@ export function DashboardPage() {
   const safePosMs = typeof playbackPosMs === 'number' ? playbackPosMs : null;
   const posClampedMs = safePosMs != null && durationMs != null ? Math.max(0, Math.min(safePosMs, durationMs)) : safePosMs;
   const pct = durationMs && posClampedMs != null && durationMs > 0 ? Math.max(0, Math.min(1, posClampedMs / durationMs)) : null;
-
-  useEffect(() => {
-    youtubePlaybackStartedRef.current = false;
-  }, [isYouTube, nowPlaying?.uri]);
-
-  useEffect(() => {
-    if (!showYoutubeDebug) {
-      setYoutubeDebugInfo(null);
-    }
-  }, [showYoutubeDebug]);
-
-  useEffect(() => {
-    if (!isYouTube) return;
-    if (paused) return;
-    const uri = typeof nowPlaying?.uri === 'string' ? nowPlaying.uri.trim() : '';
-    if (!uri) return;
-
-    updateYoutubeDebug('effect');
-    const a = youtubeAudioRef.current;
-    if (!a) return;
-
-    try {
-      a.load();
-      updateYoutubeDebug('load');
-    } catch {
-    }
-
-    const t = window.setTimeout(() => {
-      try {
-        updateYoutubeDebug('play-attempt');
-        const p = a.play();
-        if (p && typeof (p as any).catch === 'function') {
-          (p as any).catch(() => {});
-        }
-      } catch {
-      }
-    }, 50);
-
-    return () => {
-      window.clearTimeout(t);
-    };
-  }, [isYouTube, paused, nowPlaying?.uri]);
 
   return (
     <>
@@ -676,44 +588,6 @@ export function DashboardPage() {
 
                 {isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== '' ? (
                   <div style={{ marginTop: 10 }}>
-                    <audio
-                      ref={youtubeAudioRef}
-                      autoPlay
-                      controls
-                      preload="auto"
-                      src={youtubeStreamUrl}
-                      onLoadedMetadata={() => {
-                        updateYoutubeDebug('loadedmetadata');
-                      }}
-                      onPlaying={() => {
-                        updateYoutubeDebug('playing');
-                        youtubePlaybackStartedRef.current = true;
-                      }}
-                      onCanPlay={() => {
-                        if (paused) return;
-                        updateYoutubeDebug('canplay');
-                        try {
-                          const a = youtubeAudioRef.current;
-                          if (!a) return;
-                          const p = a.play();
-                          if (p && typeof (p as any).catch === 'function') {
-                            (p as any).catch(() => {});
-                          }
-                        } catch {
-                        }
-                      }}
-                      onEnded={() => {
-                        updateYoutubeDebug('ended');
-                        if (!youtubePlaybackStartedRef.current) return;
-                        nextTrack().catch(() => {});
-                      }}
-                      onError={() => {
-                        updateYoutubeDebug('error');
-                        if (!youtubePlaybackStartedRef.current) return;
-                        nextTrack().catch(() => {});
-                      }}
-                      style={{ width: '100%' }}
-                    />
                     {showYoutubeDebug ? (
                       <div className="muted" style={{ marginTop: 6, fontSize: 12, wordBreak: 'break-all' }}>
                         <div>YT debug: {youtubeDebugInfo?.event || 'idle'}</div>
@@ -803,13 +677,8 @@ export function DashboardPage() {
               type="button"
               onClick={async () => {
                 await post('/api/queue/pause');
-                if (youtubeAudioRef.current) {
-                  try {
-                    youtubeAudioRef.current.pause();
-                  } catch {
-                  }
-                }
                 await refresh(true);
+                refreshPlayback().catch(() => {});
               }}
               disabled={opBusy || paused}
             >
@@ -819,13 +688,8 @@ export function DashboardPage() {
               type="button"
               onClick={async () => {
                 await post('/api/queue/resume');
-                if (youtubeAudioRef.current) {
-                  try {
-                    await youtubeAudioRef.current.play();
-                  } catch {
-                  }
-                }
                 await refresh(true);
+                refreshPlayback().catch(() => {});
               }}
               disabled={opBusy || !paused}
             >
