@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { apiJson, sseUrl } from '../api';
 import type { QueueItem, QueueState } from '../types';
@@ -30,6 +31,9 @@ type PlaybackContextValue = {
   youtubeDebugInfo: YoutubeDebugInfo | null;
   refresh: () => Promise<void>;
   seekTo: (ms: number) => void;
+  pausePlayback: () => Promise<void>;
+  resumePlayback: () => Promise<void>;
+  setPlayerDock: (el: HTMLElement | null) => void;
 };
 
 const PlaybackContext = createContext<PlaybackContextValue | null>(null);
@@ -72,6 +76,14 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
   const [nowPlaying, setNowPlaying] = useState<QueueItem | null>(null);
   const [paused, setPaused] = useState<boolean>(false);
 
+  const [dockEl, setDockEl] = useState<HTMLElement | null>(null);
+  const playerHostRef = useRef<HTMLDivElement | null>(null);
+  if (playerHostRef.current == null && typeof document !== 'undefined') {
+    const host = document.createElement('div');
+    host.className = 'youtubePlayerHost';
+    playerHostRef.current = host;
+  }
+
   const [playbackPosMs, setPlaybackPosMs] = useState<number | null>(null);
   const playbackTickRef = useRef<number | null>(null);
   const playbackTickLastRef = useRef<number>(0);
@@ -110,6 +122,29 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       window.clearInterval(t);
     };
   }, []);
+
+  useEffect(() => {
+    const host = playerHostRef.current;
+    if (!host) return;
+    if (!host.parentElement) {
+      document.body.appendChild(host);
+    }
+    return () => {
+      host.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    const host = playerHostRef.current;
+    if (!host) return;
+    if (dockEl) {
+      dockEl.appendChild(host);
+      return;
+    }
+    if (host.parentElement !== document.body) {
+      document.body.appendChild(host);
+    }
+  }, [dockEl]);
 
   useEffect(() => {
     const serverPos = typeof queueState?.playback_progress_ms === 'number' ? queueState!.playback_progress_ms! : null;
@@ -245,6 +280,51 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     }
   }
 
+  const pausePlayback = useCallback(async () => {
+    try {
+      await apiJson('/api/queue/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    } catch {
+    }
+    const a = youtubeAudioRef.current;
+    if (a) {
+      try {
+        a.pause();
+      } catch {
+      }
+    }
+    refresh().catch(() => {});
+  }, [refresh]);
+
+  const resumePlayback = useCallback(async () => {
+    try {
+      await apiJson('/api/queue/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    } catch {
+    }
+    const a = youtubeAudioRef.current;
+    if (a) {
+      try {
+        const p = a.play();
+        if (p && typeof (p as any).catch === 'function') {
+          (p as any).catch(() => {});
+        }
+      } catch {
+      }
+    }
+    refresh().catch(() => {});
+  }, [refresh]);
+
+  const setPlayerDock = useCallback((el: HTMLElement | null) => {
+    setDockEl(el);
+  }, []);
+
   async function nextTrack() {
     try {
       await apiJson('/api/queue/next', {
@@ -308,6 +388,9 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       youtubeDebugInfo,
       refresh,
       seekTo,
+      pausePlayback,
+      resumePlayback,
+      setPlayerDock,
     }),
     [
       nowPlaying,
@@ -321,54 +404,66 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       youtubeStreamUrl,
       youtubeDebugInfo,
       refresh,
+      pausePlayback,
+      resumePlayback,
+      setPlayerDock,
     ],
   );
+
+  const portalTarget = playerHostRef.current;
+  const isDocked = !!dockEl;
 
   return (
     <PlaybackContext.Provider value={ctxValue}>
       {props.children}
-      <audio
-        ref={youtubeAudioRef}
-        autoPlay
-        preload="auto"
-        src={youtubeStreamUrl}
-        className="youtubeAudio"
-        onLoadedMetadata={() => updateYoutubeDebug('loadedmetadata')}
-        onPlaying={() => {
-          updateYoutubeDebug('playing');
-          youtubePlaybackStartedRef.current = true;
-        }}
-        onCanPlay={() => {
-          if (paused) return;
-          updateYoutubeDebug('canplay');
-          try {
-            const a = youtubeAudioRef.current;
-            if (!a) return;
-            const p = a.play();
-            if (p && typeof (p as any).catch === 'function') {
-              (p as any).catch(() => {});
-            }
-          } catch {
-          }
-        }}
-        onTimeUpdate={() => updateYoutubeDebug('timeupdate')}
-        onEnded={() => {
-          updateYoutubeDebug('ended');
-          if (!youtubePlaybackStartedRef.current) return;
-          nextTrack().catch(() => {});
-        }}
-        onError={() => {
-          updateYoutubeDebug('error');
-          if (!youtubePlaybackStartedRef.current) return;
-          nextTrack().catch(() => {});
-        }}
-      />
+      {portalTarget
+        ? createPortal(
+            <audio
+              ref={youtubeAudioRef}
+              autoPlay
+              preload="auto"
+              src={youtubeStreamUrl}
+              controls={isDocked}
+              className={isDocked ? 'youtubeAudio youtubeAudioDocked' : 'youtubeAudio'}
+              onLoadedMetadata={() => updateYoutubeDebug('loadedmetadata')}
+              onPlaying={() => {
+                updateYoutubeDebug('playing');
+                youtubePlaybackStartedRef.current = true;
+              }}
+              onCanPlay={() => {
+                if (paused) return;
+                updateYoutubeDebug('canplay');
+                try {
+                  const a = youtubeAudioRef.current;
+                  if (!a) return;
+                  const p = a.play();
+                  if (p && typeof (p as any).catch === 'function') {
+                    (p as any).catch(() => {});
+                  }
+                } catch {
+                }
+              }}
+              onTimeUpdate={() => updateYoutubeDebug('timeupdate')}
+              onEnded={() => {
+                updateYoutubeDebug('ended');
+                if (!youtubePlaybackStartedRef.current) return;
+                nextTrack().catch(() => {});
+              }}
+              onError={() => {
+                updateYoutubeDebug('error');
+                if (!youtubePlaybackStartedRef.current) return;
+                nextTrack().catch(() => {});
+              }}
+            />,
+            portalTarget,
+          )
+        : null}
     </PlaybackContext.Provider>
   );
 }
 
 export function MiniPlayer() {
-  const { nowPlaying, isYouTube, durationMs, posClampedMs, seekTo } = usePlayback();
+  const { nowPlaying, isYouTube, durationMs, posClampedMs, seekTo, paused, pausePlayback, resumePlayback } = usePlayback();
 
   if (!isYouTube || !nowPlaying) return null;
 
@@ -381,6 +476,14 @@ export function MiniPlayer() {
 
   return (
     <div className="headerMiniPlayer">
+      <div className="headerMiniControls">
+        <button type="button" className="miniControlBtn" onClick={() => resumePlayback()} disabled={!paused}>
+          Play
+        </button>
+        <button type="button" className="miniControlBtn" onClick={() => pausePlayback()} disabled={paused}>
+          Pause
+        </button>
+      </div>
       <div className="headerMiniInfo">
         <div className="headerMiniTitle">{name || fallback}</div>
         {subtitle ? <div className="headerMiniSubtitle">{subtitle}</div> : null}
@@ -402,4 +505,18 @@ export function MiniPlayer() {
       </div>
     </div>
   );
+}
+
+export function YouTubePlayerDock(props: { className?: string }) {
+  const { setPlayerDock } = usePlayback();
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setPlayerDock(ref.current);
+    return () => {
+      setPlayerDock(null);
+    };
+  }, [setPlayerDock]);
+
+  return <div ref={ref} className={props.className ? `youtubePlayerDock ${props.className}` : 'youtubePlayerDock'} />;
 }

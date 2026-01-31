@@ -5,7 +5,7 @@ import { apiJson } from '../api';
 import type { Device, QueueItem, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { QueueCard } from '../components/QueueCard';
-import { usePlayback } from '../components/PlaybackContext';
+import { usePlayback, YouTubePlayerDock } from '../components/PlaybackContext';
 
 type QueueResp = { ok: true; queue: QueueState };
 type DevicesResp = { ok: true; devices: Device[] };
@@ -588,6 +588,7 @@ export function DashboardPage() {
 
                 {isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== '' ? (
                   <div style={{ marginTop: 10 }}>
+                    <YouTubePlayerDock />
                     {showYoutubeDebug ? (
                       <div className="muted" style={{ marginTop: 6, fontSize: 12, wordBreak: 'break-all' }}>
                         <div>YT debug: {youtubeDebugInfo?.event || 'idle'}</div>
