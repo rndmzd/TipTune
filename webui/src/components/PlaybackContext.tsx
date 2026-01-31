@@ -477,11 +477,25 @@ export function MiniPlayer() {
   return (
     <div className="headerMiniPlayer">
       <div className="headerMiniControls">
-        <button type="button" className="miniControlBtn" onClick={() => resumePlayback()} disabled={!paused}>
-          Play
+        <button
+          type="button"
+          className="miniControlBtn"
+          title="Play"
+          aria-label="Play"
+          onClick={() => resumePlayback()}
+          disabled={!paused}
+        >
+          ▶
         </button>
-        <button type="button" className="miniControlBtn" onClick={() => pausePlayback()} disabled={paused}>
-          Pause
+        <button
+          type="button"
+          className="miniControlBtn"
+          title="Pause"
+          aria-label="Pause"
+          onClick={() => pausePlayback()}
+          disabled={paused}
+        >
+          ⏸
         </button>
       </div>
       <div className="headerMiniInfo">

@@ -676,6 +676,9 @@ export function DashboardPage() {
             </span>
             <button
               type="button"
+              className="queueIconBtn"
+              title="Pause"
+              aria-label="Pause"
               onClick={async () => {
                 await post('/api/queue/pause');
                 await refresh(true);
@@ -683,10 +686,13 @@ export function DashboardPage() {
               }}
               disabled={opBusy || paused}
             >
-              Pause
+              ⏸
             </button>
             <button
               type="button"
+              className="queueIconBtn"
+              title="Play"
+              aria-label="Play"
               onClick={async () => {
                 await post('/api/queue/resume');
                 await refresh(true);
@@ -694,7 +700,7 @@ export function DashboardPage() {
               }}
               disabled={opBusy || !paused}
             >
-              Resume
+              ▶
             </button>
             <button type="button" onClick={() => nextTrack().catch(() => {})} disabled={opBusy || !canUseQueueControls}>
               Next
