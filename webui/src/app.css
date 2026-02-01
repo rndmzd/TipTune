@@ -218,6 +218,11 @@
    cursor: pointer;
  }
 
+ .miniControlBtnBare {
+   border: none;
+   background: transparent;
+ }
+
  .miniControlBtn:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--border-strong); }
  .miniControlBtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -333,9 +338,22 @@
  .queueTitleSub { color: var(--muted); font-size: 12px; }
  .queueArt { width: 42px; height: 42px; border-radius: 10px; object-fit: cover; border: 1px solid var(--border); }
 
- .queueIconBtn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 12px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); color: rgba(255, 255, 255, 0.90); }
+ .queueIconBtn {
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   width: 28px;
+   height: 28px;
+   padding: 0;
+   border-radius: 12px;
+   border: 1px solid var(--border);
+   background: rgba(255, 255, 255, 0.02);
+   color: rgba(255, 255, 255, 0.90);
+ }
+
  .queueIconBtn:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--border-strong); }
  .queueIconBtnLarge { width: 38px; height: 38px; font-size: 20px; line-height: 1; border-radius: 14px; }
+ .queueIconBtnBare { border: none; background: transparent; }
 
  .queueDragItem { cursor: default; }
  .queueCardDragging { opacity: 0.55; }

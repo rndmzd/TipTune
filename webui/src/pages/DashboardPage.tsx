@@ -676,7 +676,7 @@ export function DashboardPage() {
             </span>
             <button
               type="button"
-              className="queueIconBtn"
+              className="queueIconBtn queueIconBtnBare"
               title="Pause"
               aria-label="Pause"
               onClick={async () => {
@@ -690,7 +690,7 @@ export function DashboardPage() {
             </button>
             <button
               type="button"
-              className="queueIconBtn"
+              className="queueIconBtn queueIconBtnBare"
               title="Play"
               aria-label="Play"
               onClick={async () => {
@@ -702,8 +702,15 @@ export function DashboardPage() {
             >
               ▶
             </button>
-            <button type="button" onClick={() => nextTrack().catch(() => {})} disabled={opBusy || !canUseQueueControls}>
-              Next
+            <button
+              type="button"
+              className="queueIconBtn queueIconBtnBare"
+              title="Next"
+              aria-label="Next"
+              onClick={() => nextTrack().catch(() => {})}
+              disabled={opBusy || !canUseQueueControls}
+            >
+              ⏭
             </button>
             <button type="button" onClick={() => refresh(true)} disabled={opBusy}>
               Refresh

@@ -479,7 +479,7 @@ export function MiniPlayer() {
       <div className="headerMiniControls">
         <button
           type="button"
-          className="miniControlBtn"
+          className="miniControlBtn miniControlBtnBare"
           title="Play"
           aria-label="Play"
           onClick={() => resumePlayback()}
@@ -489,7 +489,7 @@ export function MiniPlayer() {
         </button>
         <button
           type="button"
-          className="miniControlBtn"
+          className="miniControlBtn miniControlBtnBare"
           title="Pause"
           aria-label="Pause"
           onClick={() => pausePlayback()}
