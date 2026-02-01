@@ -21,7 +21,7 @@ from aiohttp import web, ClientSession
 from chatdj.chatdj import SongRequest
 from helpers.actions import Actions
 from helpers.checks import Checks
-from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists
+from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists, get_app_dir
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
 try:
@@ -154,6 +154,13 @@ def _setup_logging() -> None:
         s = str(raw or '').strip().lower()
         return s in ('1', 'true', 'yes', 'y', 'on')
 
+    def _expand_path(raw: str) -> str:
+        expanded = os.path.expandvars(os.path.expanduser(raw))
+        if '%CD%' in expanded or '%cd%' in expanded:
+            cwd = os.getcwd()
+            expanded = expanded.replace('%CD%', cwd).replace('%cd%', cwd)
+        return expanded if expanded else raw
+
     level_name = str(os.getenv('TIPTUNE_LOG_LEVEL', 'INFO') or 'INFO').strip().upper()
     env_console_level = getattr(logging, level_name, logging.INFO)
 
@@ -165,16 +172,21 @@ def _setup_logging() -> None:
 
     level_force = _truthy(os.getenv('TIPTUNE_LOG_LEVEL_FORCE'))
     console_level = env_console_level if (debug_enabled or level_force) else logging.INFO
+    file_level = env_console_level if level_force else (logging.DEBUG if debug_enabled else logging.INFO)
 
-    file_enabled = debug_enabled
+    file_enabled = True
     file_path: Optional[str] = None
 
     env_log_path = os.getenv('TIPTUNE_LOG_PATH')
     log_path_force = _truthy(os.getenv('TIPTUNE_LOG_PATH_FORCE'))
     if (isinstance(env_log_path, str) and env_log_path.strip()) and (file_enabled or log_path_force):
         file_enabled = True
-        file_path = env_log_path.strip()
-    elif file_enabled:
+        raw_env_path = _expand_path(env_log_path.strip())
+        if os.path.isabs(raw_env_path):
+            file_path = raw_env_path
+        else:
+            file_path = str(get_app_dir() / raw_env_path)
+    else:
         cfg_path = ''
         try:
             cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
@@ -183,20 +195,17 @@ def _setup_logging() -> None:
 
         if cfg_path:
             try:
-                if os.path.isabs(cfg_path):
-                    file_path = cfg_path
+                expanded_cfg_path = _expand_path(cfg_path)
+                if os.path.isabs(expanded_cfg_path):
+                    file_path = expanded_cfg_path
                 else:
-                    file_path = str(get_cache_dir() / cfg_path)
+                    file_path = str(get_app_dir() / expanded_cfg_path)
             except Exception:
                 file_path = cfg_path
         else:
-            default_path = os.getenv('TIPTUNE_DEFAULT_LOG_PATH')
-            if isinstance(default_path, str) and default_path.strip():
-                file_path = default_path.strip()
-            else:
-                file_path = str(get_cache_dir() / 'tiptune-debug.log')
+            file_path = str(_default_log_path())
 
-    root.setLevel(logging.DEBUG if file_enabled else console_level)
+    root.setLevel(min(console_level, file_level))
 
     formatter = StructuredLogFormatter()
 
@@ -256,8 +265,19 @@ def _setup_logging() -> None:
             keep = None
 
     if keep is not None:
-        keep.setLevel(logging.DEBUG)
+        keep.setLevel(file_level)
         keep.setFormatter(formatter)
+
+
+def _default_log_path() -> Path:
+    try:
+        default_path = os.getenv('TIPTUNE_DEFAULT_LOG_PATH')
+        if isinstance(default_path, str) and default_path.strip():
+            return Path(default_path.strip())
+    except Exception:
+        pass
+
+    return get_app_dir() / 'logs' / 'tiptune-debug.log'
 
 
 _setup_logging()
@@ -3696,6 +3716,9 @@ class SongRequestService:
                     cfg[section][key] = ""
                 else:
                     cfg[section][key] = val
+        general_cfg = cfg.setdefault("General", {})
+        if not str(general_cfg.get("debug_log_path", "")).strip():
+            general_cfg["debug_log_path"] = str(_default_log_path())
         return cfg
 
     async def update_config_from_ui(self, payload: Any) -> tuple[bool, Optional[str]]:
