@@ -27,6 +27,7 @@ type PlaybackContextValue = {
   posClampedMs: number | null;
   pct: number | null;
   isYouTube: boolean;
+  isSpotify: boolean;
   youtubeStreamUrl: string;
   youtubeDebugInfo: YoutubeDebugInfo | null;
   refresh: () => Promise<void>;
@@ -192,6 +193,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
   const inferredYoutube = isYouTubeLink(typeof nowPlaying?.uri === 'string' ? nowPlaying.uri : '');
   const nowSource = inferredYoutube ? 'youtube' : String(nowPlaying?.source || source);
   const isYouTube = nowSource === 'youtube';
+  const isSpotify = nowSource === 'spotify';
   const youtubeStreamUrl =
     isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== ''
       ? sseUrl(`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`)
@@ -269,15 +271,30 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
   }
 
   function seekTo(ms: number) {
-    const a = youtubeAudioRef.current;
-    if (!a) return;
     const next = Number(ms);
     if (!Number.isFinite(next) || next < 0) return;
-    try {
-      a.currentTime = next / 1000;
-      updateYoutubeDebug('seek');
-    } catch {
+
+    if (isYouTube) {
+      const a = youtubeAudioRef.current;
+      if (!a) return;
+      try {
+        a.currentTime = next / 1000;
+        updateYoutubeDebug('seek');
+      } catch {
+      }
+      return;
     }
+
+    if (!isSpotify) return;
+    apiJson('/api/queue/seek', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position_ms: Math.round(next) }),
+    })
+      .catch(() => {})
+      .finally(() => {
+        refresh().catch(() => {});
+      });
   }
 
   const pausePlayback = useCallback(async () => {
@@ -384,6 +401,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       posClampedMs,
       pct,
       isYouTube,
+      isSpotify,
       youtubeStreamUrl,
       youtubeDebugInfo,
       refresh,
@@ -401,6 +419,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       posClampedMs,
       pct,
       isYouTube,
+      isSpotify,
       youtubeStreamUrl,
       youtubeDebugInfo,
       refresh,
@@ -463,11 +482,11 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
 }
 
 export function MiniPlayer() {
-  const { nowPlaying, isYouTube, durationMs, posClampedMs, seekTo, paused, pausePlayback, resumePlayback } = usePlayback();
+  const { nowPlaying, isYouTube, isSpotify, durationMs, posClampedMs, seekTo, paused, pausePlayback, resumePlayback } = usePlayback();
 
   if (!nowPlaying) return null;
 
-  const canSeek = isYouTube;
+  const canSeek = isYouTube || isSpotify;
 
   const name = typeof nowPlaying.name === 'string' && nowPlaying.name.trim() !== '' ? nowPlaying.name.trim() : null;
   const artists = Array.isArray(nowPlaying.artists)
