@@ -174,19 +174,20 @@ def _setup_logging() -> None:
     console_level = env_console_level if (debug_enabled or level_force) else logging.INFO
     file_level = env_console_level if level_force else (logging.DEBUG if debug_enabled else logging.INFO)
 
-    file_enabled = True
-    file_path: Optional[str] = None
-
     env_log_path = os.getenv('TIPTUNE_LOG_PATH')
     log_path_force = _truthy(os.getenv('TIPTUNE_LOG_PATH_FORCE'))
-    if (isinstance(env_log_path, str) and env_log_path.strip()) and (file_enabled or log_path_force):
-        file_enabled = True
+    has_env_log_path = isinstance(env_log_path, str) and env_log_path.strip()
+
+    file_enabled = debug_enabled or (log_path_force and has_env_log_path)
+    file_path: Optional[str] = None
+
+    if has_env_log_path and (debug_enabled or log_path_force):
         raw_env_path = _expand_path(env_log_path.strip())
         if os.path.isabs(raw_env_path):
             file_path = raw_env_path
         else:
             file_path = str(get_app_dir() / raw_env_path)
-    else:
+    elif debug_enabled:
         cfg_path = ''
         try:
             cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
@@ -204,8 +205,13 @@ def _setup_logging() -> None:
                 file_path = cfg_path
         else:
             file_path = str(_default_log_path())
+    else:
+        file_enabled = False
 
-    root.setLevel(min(console_level, file_level))
+    if file_enabled:
+        root.setLevel(min(console_level, file_level))
+    else:
+        root.setLevel(console_level)
 
     formatter = StructuredLogFormatter()
 
