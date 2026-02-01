@@ -524,6 +524,7 @@ class WebUI:
             web.post('/api/queue/add', self._api_queue_add),
             web.post('/api/queue/pause', self._api_pause),
             web.post('/api/queue/resume', self._api_resume),
+            web.post('/api/queue/seek', self._api_queue_seek),
             web.post('/api/queue/move', self._api_queue_move),
             web.post('/api/queue/delete', self._api_queue_delete),
             web.get('/api/obs/status', self._api_obs_status),
@@ -609,6 +610,28 @@ class WebUI:
     async def _api_resume(self, _request: web.Request) -> web.Response:
         ok = await self._service.resume_queue()
         return web.json_response({"ok": bool(ok)})
+
+    async def _api_queue_seek(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
+
+        try:
+            position_ms = int(payload.get('position_ms'))
+        except Exception:
+            return web.json_response({"ok": False, "error": "Invalid position_ms"}, status=400)
+
+        if position_ms < 0:
+            return web.json_response({"ok": False, "error": "Invalid position_ms"}, status=400)
+
+        ok = await self._service.seek_playback(position_ms)
+        if not ok:
+            return web.json_response({"ok": False, "error": "Failed to seek playback"}, status=400)
+        return web.json_response({"ok": True})
 
     async def _api_queue_move(self, request: web.Request) -> web.Response:
         try:
@@ -3191,6 +3214,56 @@ class SongRequestService:
             await self.actions.trigger_queue_state_overlay("Song request queue resumed")
         except Exception:
             pass
+        return True
+
+    async def seek_playback(self, position_ms: int) -> bool:
+        try:
+            pos = int(position_ms)
+        except Exception:
+            return False
+
+        if pos < 0:
+            return False
+
+        async with self._queue_lock:
+            now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+
+        src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src != 'spotify':
+            return False
+
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            return await self.actions.seek_playback(pos)
+
+        loop = asyncio.get_running_loop()
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return False
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return False
+
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.seek_track, pos),
+                timeout=8,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
         return True
 
     async def move_queue_item(self, from_index: int, to_index: int) -> bool:

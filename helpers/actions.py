@@ -214,6 +214,41 @@ class Actions:
             logger.exception("spotify.playback.error", message="Failed to skip song", exc=exc)
             return False
 
+    async def seek_playback(self, position_ms: int) -> bool:
+        """Seek Spotify playback to the provided position in milliseconds."""
+        if not self.chatdj_enabled:
+            return False
+        if not hasattr(self, 'auto_dj'):
+            return False
+
+        try:
+            pos = int(position_ms)
+        except Exception:
+            return False
+
+        if pos < 0:
+            return False
+
+        logger.debug("spotify.playback.seek.start", message="Attempting to seek playback", data={"position_ms": pos})
+        try:
+            loop = asyncio.get_running_loop()
+
+            def _do_seek() -> bool:
+                try:
+                    device_id = getattr(self.auto_dj, 'playback_device', None)
+                    self.auto_dj.spotify.seek_track(pos, device_id=device_id)
+                    return True
+                except Exception:
+                    return False
+
+            ok = await loop.run_in_executor(None, _do_seek)
+            if ok:
+                logger.info("spotify.playback.seek.success", message="Seeked playback", data={"position_ms": pos})
+            return bool(ok)
+        except Exception as exc:
+            logger.exception("spotify.playback.seek.error", message="Failed to seek playback", exc=exc)
+            return False
+
     async def trigger_song_requester_overlay(self, requester: str, song: str, duration: int) -> None:
         if not self.obs_integration_enabled:
             return
