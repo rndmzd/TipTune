@@ -72,6 +72,50 @@ function isSongRequestTip(tokens: number | null, songCost: number | null, multiR
   return multiRequestTips ? tokens % songCost === 0 : tokens === songCost;
 }
 
+function GatedRoute(props: { element: JSX.Element }) {
+  const loc = useLocation();
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+
+  const forceDashboard = useMemo(() => {
+    try {
+      const params = new URLSearchParams(loc.search || '');
+      const v = (params.get('dashboard') || '').trim().toLowerCase();
+      return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+    } catch {
+      return false;
+    }
+  }, [loc.search]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (forceDashboard) {
+      setAllowed(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      try {
+        const data = await apiJson<{ ok: true; setup_complete: boolean }>('/api/setup/status');
+        if (cancelled) return;
+        setAllowed(!!data.setup_complete);
+      } catch {
+        if (cancelled) return;
+        setAllowed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loc.pathname, loc.search, forceDashboard]);
+
+  if (allowed === null) return null;
+  return allowed ? props.element : <Navigate to="/setup" replace />;
+}
+
 export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
   const toastIdRef = useRef<number>(0);
@@ -190,10 +234,13 @@ export function App() {
         if (cancelled) return;
         const general = resp?.config?.General || {};
         const parsedCost = parseSongCost((general as any).song_cost);
-        setRequestConfig({
+        const nextConfig: RequestConfig = {
           songCost: parsedCost ?? 27,
           multiRequestTips: parseBool((general as any).multi_request_tips, true),
-        });
+        };
+        setRequestConfig((prev) =>
+          prev.songCost === nextConfig.songCost && prev.multiRequestTips === nextConfig.multiRequestTips ? prev : nextConfig,
+        );
       } catch {
       }
     };
@@ -281,50 +328,6 @@ export function App() {
       es.close();
     };
   }, [backendReady]);
-
-  function GatedRoute(props: { element: JSX.Element }) {
-    const loc = useLocation();
-    const [allowed, setAllowed] = useState<boolean | null>(null);
-
-    const forceDashboard = useMemo(() => {
-      try {
-        const params = new URLSearchParams(loc.search || '');
-        const v = (params.get('dashboard') || '').trim().toLowerCase();
-        return v === '1' || v === 'true' || v === 'yes' || v === 'on';
-      } catch {
-        return false;
-      }
-    }, [loc.search]);
-
-    useEffect(() => {
-      let cancelled = false;
-
-      if (forceDashboard) {
-        setAllowed(true);
-        return () => {
-          cancelled = true;
-        };
-      }
-
-      (async () => {
-        try {
-          const data = await apiJson<{ ok: true; setup_complete: boolean }>('/api/setup/status');
-          if (cancelled) return;
-          setAllowed(!!data.setup_complete);
-        } catch {
-          if (cancelled) return;
-          setAllowed(true);
-        }
-      })();
-
-      return () => {
-        cancelled = true;
-      };
-    }, [loc.pathname, loc.search, forceDashboard]);
-
-    if (allowed === null) return null;
-    return allowed ? props.element : <Navigate to="/setup" replace />;
-  }
 
   if (isTauri && backendState !== 'ready') {
     return (
