@@ -399,6 +399,13 @@ Used to improve song metadata when the artist is missing.
 - `General.debug_log_to_file`
 - `General.debug_log_path`
 
+Logging notes:
+
+- `debug_log_to_file=true` enables `DEBUG` level file logging.
+- `debug_log_to_file=false` keeps file logging at `INFO` level.
+- `debug_log_path` defaults to `<app_dir>/logs/tiptune-debug.log` when empty.
+- Relative paths are resolved from `<app_dir>` (the TipTune app/executable directory).
+
 `General.multi_request_tips` controls whether a single tip can request multiple songs when the tip amount is a multiple of `song_cost`.
 
 - When `true` (default):
@@ -530,20 +537,54 @@ Supported environment overrides:
 - `TIPTUNE_WEB_PORT`: override Web UI bind port
 - `TIPTUNE_LOG_LEVEL`: log level (example: `INFO`, `DEBUG`)
 - `TIPTUNE_LOG_PATH`: write logs to a file at this path
+- `TIPTUNE_LOG_LEVEL_FORCE`: apply `TIPTUNE_LOG_LEVEL` even if debug logging is disabled
+- `TIPTUNE_LOG_PATH_FORCE`: honor `TIPTUNE_LOG_PATH` even if debug logging is disabled
+- `TIPTUNE_DEFAULT_LOG_PATH`: override the default log path when `debug_log_path` is empty
 
 ---
 
 ## Logging
 
-By default, TipTune logs to standard output.
+TipTune writes logs to both standard output and a log file.
 
-To write logs to a file:
+### Default location
 
-- Set `TIPTUNE_LOG_PATH` to a writable path.
+If you do not set a custom path, TipTune writes to:
 
-To change verbosity:
+- `<app_dir>/logs/tiptune-debug.log`
+  - `<app_dir>` is the TipTune app/executable directory (for example, where `TipTune.exe` lives).
 
-- Set `TIPTUNE_LOG_LEVEL` (example: `DEBUG`).
+### Log level behavior
+
+- Default file and console log level is `INFO`.
+- Enabling `General.debug_log_to_file` switches file logging to `DEBUG`.
+- `TIPTUNE_LOG_LEVEL` is only honored when:
+  - `General.debug_log_to_file` is enabled, or
+  - `TIPTUNE_LOG_LEVEL_FORCE` is set.
+
+### Path resolution
+
+- `General.debug_log_path` overrides the default log path.
+- Relative paths are resolved from `<app_dir>`.
+- Environment variables and `~` are expanded.
+- `%CD%` is replaced with the current working directory.
+- TipTune creates the parent directory for the log file if needed.
+
+### Examples
+
+- Windows: `C:\\TipTune\\logs\\tiptune-debug.log`
+- macOS: `/Applications/TipTune/logs/tiptune-debug.log`
+- Linux: `/opt/tiptune/logs/tiptune-debug.log`
+- Relative path (resolved from `<app_dir>`): `logs\\tiptune-debug.log`
+- Use `%CD%`: `%CD%\\logs\\tiptune-debug.log`
+- Use env var: `%USERPROFILE%\\TipTune\\logs\\tiptune-debug.log`
+
+### Override precedence (highest to lowest)
+
+1. `TIPTUNE_LOG_PATH` (with optional `TIPTUNE_LOG_PATH_FORCE`)
+2. `General.debug_log_path`
+3. `TIPTUNE_DEFAULT_LOG_PATH`
+4. `<app_dir>/logs/tiptune-debug.log`
 
 ---
 

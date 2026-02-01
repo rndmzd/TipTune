@@ -67,6 +67,12 @@ def get_cache_dir(app_name: str = 'TipTune') -> Path:
     return _repo_root() / '.cache'
 
 
+def get_app_dir() -> Path:
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return _repo_root()
+
+
 def get_spotipy_cache_path(app_name: str = 'TipTune') -> Path:
     override = os.getenv('TIPTUNE_SPOTIPY_CACHE')
     if override:
