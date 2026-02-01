@@ -29,7 +29,7 @@ function mediaErrorLabel(code?: number | null): string {
 export function DashboardPage() {
   const location = useLocation();
   const playback = usePlayback();
-  const { youtubeDebugInfo, youtubeStreamUrl, refresh: refreshPlayback } = playback;
+  const { youtubeDebugInfo, youtubeStreamUrl, refresh: refreshPlayback, seekTo } = playback;
 
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [paused, setPaused] = useState<boolean>(false);
@@ -553,6 +553,7 @@ export function DashboardPage() {
   const safePosMs = typeof playbackPosMs === 'number' ? playbackPosMs : null;
   const posClampedMs = safePosMs != null && durationMs != null ? Math.max(0, Math.min(safePosMs, durationMs)) : safePosMs;
   const pct = durationMs && posClampedMs != null && durationMs > 0 ? Math.max(0, Math.min(1, posClampedMs / durationMs)) : null;
+  const canSeek = isYouTube || isSpotify;
 
   return (
     <>
@@ -574,11 +575,63 @@ export function DashboardPage() {
                   </button>
                   {obsNowPlayingMsg ? <div className="muted">{obsNowPlayingMsg}</div> : null}
                 </div>
+                <div className="actions" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="queueIconBtn queueIconBtnBare"
+                    title="Play"
+                    aria-label="Play"
+                    onClick={async () => {
+                      await post('/api/queue/resume');
+                      await refresh(true);
+                      refreshPlayback().catch(() => {});
+                    }}
+                    disabled={opBusy || !paused}
+                  >
+                    ▶
+                  </button>
+                  <button
+                    type="button"
+                    className="queueIconBtn queueIconBtnBare"
+                    title="Pause"
+                    aria-label="Pause"
+                    onClick={async () => {
+                      await post('/api/queue/pause');
+                      await refresh(true);
+                      refreshPlayback().catch(() => {});
+                    }}
+                    disabled={opBusy || paused}
+                  >
+                    ⏸
+                  </button>
+                  <button
+                    type="button"
+                    className="queueIconBtn queueIconBtnBare"
+                    title="Next"
+                    aria-label="Next"
+                    onClick={() => nextTrack().catch(() => {})}
+                    disabled={opBusy || !canUseQueueControls}
+                  >
+                    ⏭
+                  </button>
+                </div>
                 {durationMs && posClampedMs != null ? (
                   <div style={{ marginTop: 8 }}>
-                    <div className="progressTrack">
-                      <div className="progressFill" style={{ width: `${Math.round((pct ?? 0) * 1000) / 10}%` }} />
-                    </div>
+                    <input
+                      className="progressRange"
+                      type="range"
+                      min={0}
+                      max={durationMs || 0}
+                      value={posClampedMs || 0}
+                      onChange={(e) => {
+                        if (!canSeek) return;
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setPlaybackPosMs(next);
+                        seekTo(next);
+                      }}
+                      disabled={!canSeek}
+                    />
                     <div className="muted" style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
                       <span>{fmtTime(posClampedMs)}</span>
                       <span>{fmtTime(durationMs)}</span>
@@ -676,41 +729,18 @@ export function DashboardPage() {
             </span>
             <button
               type="button"
-              className="queueIconBtn queueIconBtnBare"
-              title="Pause"
-              aria-label="Pause"
               onClick={async () => {
-                await post('/api/queue/pause');
+                if (paused) {
+                  await post('/api/queue/resume');
+                } else {
+                  await post('/api/queue/pause');
+                }
                 await refresh(true);
                 refreshPlayback().catch(() => {});
               }}
-              disabled={opBusy || paused}
-            >
-              ⏸
-            </button>
-            <button
-              type="button"
-              className="queueIconBtn queueIconBtnBare"
-              title="Play"
-              aria-label="Play"
-              onClick={async () => {
-                await post('/api/queue/resume');
-                await refresh(true);
-                refreshPlayback().catch(() => {});
-              }}
-              disabled={opBusy || !paused}
-            >
-              ▶
-            </button>
-            <button
-              type="button"
-              className="queueIconBtn queueIconBtnBare"
-              title="Next"
-              aria-label="Next"
-              onClick={() => nextTrack().catch(() => {})}
               disabled={opBusy || !canUseQueueControls}
             >
-              ⏭
+              {paused ? 'Resume Queue' : 'Pause Queue'}
             </button>
             <button type="button" onClick={() => refresh(true)} disabled={opBusy}>
               Refresh
