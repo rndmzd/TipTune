@@ -465,14 +465,16 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
 export function MiniPlayer() {
   const { nowPlaying, isYouTube, durationMs, posClampedMs, seekTo, paused, pausePlayback, resumePlayback } = usePlayback();
 
-  if (!isYouTube || !nowPlaying) return null;
+  if (!nowPlaying) return null;
+
+  const canSeek = isYouTube;
 
   const name = typeof nowPlaying.name === 'string' && nowPlaying.name.trim() !== '' ? nowPlaying.name.trim() : null;
   const artists = Array.isArray(nowPlaying.artists)
     ? nowPlaying.artists.filter((v) => typeof v === 'string' && v.trim() !== '')
     : [];
   const subtitle = artists.length ? artists.join(', ') : null;
-  const fallback = typeof nowPlaying.uri === 'string' && nowPlaying.uri.trim() !== '' ? nowPlaying.uri.trim() : 'YouTube track';
+  const fallback = typeof nowPlaying.uri === 'string' && nowPlaying.uri.trim() !== '' ? nowPlaying.uri.trim() : 'Now playing';
 
   return (
     <div className="headerMiniPlayer">
@@ -509,8 +511,11 @@ export function MiniPlayer() {
           min={0}
           max={durationMs || 0}
           value={posClampedMs || 0}
-          onChange={(e) => seekTo(Number(e.target.value))}
-          disabled={!durationMs}
+          onChange={(e) => {
+            if (!canSeek) return;
+            seekTo(Number(e.target.value));
+          }}
+          disabled={!durationMs || !canSeek}
         />
         <div className="headerMiniTime">
           <span>{fmtTime(posClampedMs)}</span>
