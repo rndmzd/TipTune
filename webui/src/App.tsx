@@ -8,8 +8,20 @@ import { HelpPage } from './pages/HelpPage';
 import { EventsPage } from './pages/EventsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { StatsPage } from './pages/StatsPage';
-import { apiJson } from './api';
+import { apiJson, sseUrl } from './api';
 import { PlaybackProvider } from './components/PlaybackContext';
+
+type RequestConfig = {
+  songCost: number | null;
+  multiRequestTips: boolean;
+};
+
+type TipToast = {
+  id: number;
+  username: string;
+  message: string;
+  tokens: number;
+};
 
 function isTauriRuntime(): boolean {
   const w: any = window as any;
@@ -22,12 +34,55 @@ function autoCheckUpdatesEnabled(cfg: Record<string, Record<string, string>>): b
   return !(s === 'false' || s === '0' || s === 'no');
 }
 
+function safeParseJSON(s: string): any {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function get(obj: any, path: string[], fallback: any) {
+  try {
+    let cur = obj;
+    for (const key of path) {
+      if (!cur || typeof cur !== 'object' || !(key in cur)) return fallback;
+      cur = cur[key];
+    }
+    return cur == null ? fallback : cur;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseBool(raw: unknown, fallback: boolean): boolean {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return fallback;
+  return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
+}
+
+function parseSongCost(raw: unknown): number | null {
+  const n = Number.parseInt(String(raw ?? ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function isSongRequestTip(tokens: number | null, songCost: number | null, multiRequestTips: boolean): boolean {
+  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0) return false;
+  if (songCost == null || !Number.isFinite(songCost) || songCost <= 0) return false;
+  return multiRequestTips ? tokens % songCost === 0 : tokens === songCost;
+}
+
 export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
+  const toastIdRef = useRef<number>(0);
+  const toastTimersRef = useRef<Map<number, number>>(new Map());
+  const requestConfigRef = useRef<RequestConfig>({ songCost: 27, multiRequestTips: true });
 
   const isTauri = isTauriRuntime();
   const [backendState, setBackendState] = useState<'connecting' | 'ready' | 'failed'>(isTauri ? 'connecting' : 'ready');
   const [backendRetryNonce, setBackendRetryNonce] = useState<number>(0);
+  const [requestConfig, setRequestConfig] = useState<RequestConfig>({ songCost: 27, multiRequestTips: true });
+  const [tipToasts, setTipToasts] = useState<TipToast[]>([]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -119,6 +174,114 @@ export function App() {
     run().catch(() => {});
   }, [isTauri, backendState]);
 
+  const backendReady = !isTauri || backendState === 'ready';
+
+  useEffect(() => {
+    requestConfigRef.current = requestConfig;
+  }, [requestConfig]);
+
+  useEffect(() => {
+    if (!backendReady) return;
+    let cancelled = false;
+
+    const loadConfig = async () => {
+      try {
+        const resp = await apiJson<{ ok: true; config: Record<string, Record<string, string>> }>('/api/config');
+        if (cancelled) return;
+        const general = resp?.config?.General || {};
+        const parsedCost = parseSongCost((general as any).song_cost);
+        setRequestConfig({
+          songCost: parsedCost ?? 27,
+          multiRequestTips: parseBool((general as any).multi_request_tips, true),
+        });
+      } catch {
+      }
+    };
+
+    loadConfig().catch(() => {});
+    const t = window.setInterval(() => {
+      loadConfig().catch(() => {});
+    }, 30000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [backendReady]);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of toastTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      toastTimersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!backendReady) return;
+
+    const es = new EventSource(sseUrl('/api/events/sse'));
+    es.onmessage = (e) => {
+      const parsed = safeParseJSON(e.data);
+      const ev = parsed && typeof parsed === 'object' ? (parsed as any).event || parsed : null;
+      if (!ev || typeof ev !== 'object') return;
+      const method = get(ev, ['method'], null);
+      if (method !== 'tip') return;
+
+      const tokensRaw = get(ev, ['object', 'tip', 'tokens'], null);
+      const tokens =
+        typeof tokensRaw === 'number' ? tokensRaw : Number.isFinite(Number(tokensRaw)) ? Number(tokensRaw) : null;
+
+      const { songCost, multiRequestTips } = requestConfigRef.current;
+      if (!isSongRequestTip(tokens, songCost, multiRequestTips)) return;
+
+      const isAnon = get(ev, ['object', 'tip', 'isAnon'], false);
+      const userFromUserObj = get(ev, ['object', 'user', 'username'], null);
+      const userFromMessage = get(ev, ['object', 'message', 'fromUser'], null);
+      const username = isAnon ? 'Anonymous' : userFromUserObj || userFromMessage || 'Unknown';
+
+      const tipMessage = get(ev, ['object', 'tip', 'message'], null);
+      const chatMessage = get(ev, ['object', 'message', 'message'], null);
+      const messageRaw =
+        typeof tipMessage === 'string' && tipMessage.trim() !== ''
+          ? tipMessage.trim()
+          : typeof chatMessage === 'string'
+            ? chatMessage.trim()
+            : '';
+      const message = messageRaw || 'No message provided.';
+
+      const id = (toastIdRef.current += 1);
+      const toast: TipToast = { id, username, message, tokens: tokens ?? 0 };
+
+      setTipToasts((prev) => {
+        const next = [...prev, toast];
+        const overflow = Math.max(0, next.length - 3);
+        if (overflow > 0) {
+          const removed = next.slice(0, overflow);
+          for (const item of removed) {
+            const timer = toastTimersRef.current.get(item.id);
+            if (timer != null) {
+              window.clearTimeout(timer);
+              toastTimersRef.current.delete(item.id);
+            }
+          }
+        }
+        return next.slice(overflow);
+      });
+
+      const timer = window.setTimeout(() => {
+        setTipToasts((prev) => prev.filter((t) => t.id !== id));
+        toastTimersRef.current.delete(id);
+      }, 5000);
+      toastTimersRef.current.set(id, timer);
+    };
+
+    return () => {
+      es.close();
+    };
+  }, [backendReady]);
+
   function GatedRoute(props: { element: JSX.Element }) {
     const loc = useLocation();
     const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -200,6 +363,16 @@ export function App() {
         <Route path="/help" element={<HelpPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {tipToasts.length ? (
+        <div className="tipToastStack" role="status" aria-live="polite">
+          {tipToasts.map((toast) => (
+            <div key={toast.id} className="tipToast">
+              <div className="tipToastTitle">Song request from {toast.username} · {toast.tokens} tokens</div>
+              <div className="tipToastMessage">{toast.message}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </PlaybackProvider>
   );
 }
