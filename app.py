@@ -181,19 +181,22 @@ def _setup_logging() -> None:
     file_enabled = debug_enabled or (log_path_force and has_env_log_path)
     file_path: Optional[str] = None
 
-    if has_env_log_path and (debug_enabled or log_path_force):
+    cfg_path = ''
+    if debug_enabled:
+        try:
+            cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
+        except Exception:
+            cfg_path = ''
+
+    has_cfg_path = bool(cfg_path)
+
+    if has_env_log_path and (log_path_force or (debug_enabled and not has_cfg_path)):
         raw_env_path = _expand_path(env_log_path.strip())
         if os.path.isabs(raw_env_path):
             file_path = raw_env_path
         else:
             file_path = str(get_app_dir() / raw_env_path)
     elif debug_enabled:
-        cfg_path = ''
-        try:
-            cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
-        except Exception:
-            cfg_path = ''
-
         if cfg_path:
             try:
                 expanded_cfg_path = _expand_path(cfg_path)
