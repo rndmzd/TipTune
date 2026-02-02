@@ -553,6 +553,8 @@ class WebUI:
             web.post('/api/queue/add', self._api_queue_add),
             web.post('/api/queue/pause', self._api_pause),
             web.post('/api/queue/resume', self._api_resume),
+            web.post('/api/playback/pause', self._api_playback_pause),
+            web.post('/api/playback/resume', self._api_playback_resume),
             web.post('/api/queue/seek', self._api_queue_seek),
             web.post('/api/queue/move', self._api_queue_move),
             web.post('/api/queue/delete', self._api_queue_delete),
@@ -638,6 +640,14 @@ class WebUI:
 
     async def _api_resume(self, _request: web.Request) -> web.Response:
         ok = await self._service.resume_queue()
+        return web.json_response({"ok": bool(ok)})
+
+    async def _api_playback_pause(self, _request: web.Request) -> web.Response:
+        ok = await self._service.pause_playback()
+        return web.json_response({"ok": bool(ok)})
+
+    async def _api_playback_resume(self, _request: web.Request) -> web.Response:
+        ok = await self._service.resume_playback()
         return web.json_response({"ok": bool(ok)})
 
     async def _api_queue_seek(self, request: web.Request) -> web.Response:
@@ -2243,7 +2253,59 @@ class SongRequestService:
                         and started_ts is not None
                         and (time.time() - float(started_ts)) > 5.0
                     ):
-                        is_active = await loop.run_in_executor(None, self.actions.auto_dj.playback_active)
+                        def _is_playback_active_for_item() -> bool:
+                            try:
+                                if not isinstance(now_item, dict):
+                                    return False
+                                uri = now_item.get('uri')
+                                if not isinstance(uri, str):
+                                    return False
+                                track_uri = self._normalize_spotify_track_uri(uri)
+                                if not track_uri:
+                                    return False
+
+                                pb = self.actions.auto_dj.spotify.current_playback()
+                                if not isinstance(pb, dict):
+                                    return False
+
+                                item = pb.get('item')
+                                if not isinstance(item, dict):
+                                    return False
+
+                                item_uri = item.get('uri')
+                                if not isinstance(item_uri, str) or item_uri != track_uri:
+                                    return False
+
+                                is_playing = bool(pb.get('is_playing'))
+                                progress_ms = pb.get('progress_ms')
+                                duration_ms = item.get('duration_ms')
+
+                                try:
+                                    progress_ms = int(progress_ms) if progress_ms is not None else None
+                                except Exception:
+                                    progress_ms = None
+
+                                try:
+                                    duration_ms = int(duration_ms) if duration_ms is not None else None
+                                except Exception:
+                                    duration_ms = None
+
+                                if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
+                                    remaining_ms = duration_ms - progress_ms
+                                    if remaining_ms <= 2500:
+                                        return False
+
+                                if is_playing:
+                                    return True
+
+                                if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
+                                    return True
+
+                                return True
+                            except Exception:
+                                return False
+
+                        is_active = await loop.run_in_executor(None, _is_playback_active_for_item)
                         if not bool(is_active):
                             await self.advance_queue()
                 except Exception:
@@ -3243,6 +3305,116 @@ class SongRequestService:
             await self.actions.trigger_queue_state_overlay("Song request queue resumed")
         except Exception:
             pass
+        return True
+
+    async def pause_playback(self) -> bool:
+        async with self._queue_lock:
+            now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+
+        src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src != 'spotify':
+            return False
+
+        loop = asyncio.get_running_loop()
+
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            def _do_pause() -> bool:
+                try:
+                    device_id = getattr(self.actions.auto_dj, 'playback_device', None)
+                    self.actions.auto_dj.spotify.pause_playback(device_id=device_id)
+                    return True
+                except Exception:
+                    return False
+
+            try:
+                return bool(await asyncio.wait_for(loop.run_in_executor(None, _do_pause), timeout=6))
+            except asyncio.TimeoutError:
+                return False
+            except Exception:
+                return False
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return False
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return False
+
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.pause_playback),
+                timeout=6,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
+        return True
+
+    async def resume_playback(self) -> bool:
+        async with self._queue_lock:
+            now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+
+        src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src != 'spotify':
+            return False
+
+        loop = asyncio.get_running_loop()
+
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            def _do_resume() -> bool:
+                try:
+                    device_id = getattr(self.actions.auto_dj, 'playback_device', None)
+                    self.actions.auto_dj.spotify.start_playback(device_id=device_id)
+                    return True
+                except Exception:
+                    return False
+
+            try:
+                return bool(await asyncio.wait_for(loop.run_in_executor(None, _do_resume), timeout=6))
+            except asyncio.TimeoutError:
+                return False
+            except Exception:
+                return False
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return False
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return False
+
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.start_playback),
+                timeout=6,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
         return True
 
     async def seek_playback(self, position_ms: int) -> bool:
