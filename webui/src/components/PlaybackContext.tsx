@@ -327,12 +327,6 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     if (isYouTube) {
       if (a) {
         try {
-          if (youtubeStreamUrl && a.currentSrc !== youtubeStreamUrl) {
-            try {
-              a.load();
-            } catch {
-            }
-          }
           setYoutubePaused(false);
           const p = a.play();
           if (p && typeof (p as any).catch === 'function') {
@@ -386,10 +380,13 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     }
 
     if (!youtubeStreamUrl) return;
+    const shouldLoad = !a.currentSrc || a.currentSrc !== youtubeStreamUrl;
     updateYoutubeDebug('effect');
     try {
-      a.load();
-      updateYoutubeDebug('load');
+      if (shouldLoad) {
+        a.load();
+        updateYoutubeDebug('load');
+      }
     } catch {
     }
 

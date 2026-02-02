@@ -13,7 +13,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 from aiohttp import web, ClientSession
@@ -1753,8 +1753,35 @@ class SongRequestService:
 
         range_header = request.headers.get('Range')
         headers: Dict[str, str] = dict(request_headers or {})
+        range_value: Optional[str] = None
         if isinstance(range_header, str) and range_header.strip() != '':
-            headers['Range'] = range_header.strip()
+            try:
+                m = re.match(r'^bytes=(\d+)-(\d*)$', range_header.strip())
+                if m:
+                    start = int(m.group(1))
+                    end_raw = m.group(2)
+                    end = int(end_raw) if end_raw else None
+                    range_value = f"{start}-{end}" if end is not None else f"{start}-"
+            except Exception:
+                range_value = None
+
+        if range_value is None:
+            range_value = '0-'
+
+        try:
+            parts = urlsplit(stream_url)
+            query_items = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != 'range']
+            query_items.append(('range', range_value))
+            stream_url = urlunsplit((
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urlencode(query_items, doseq=True),
+                parts.fragment,
+            ))
+        except Exception:
+            if range_value and range_value != '0-':
+                headers['Range'] = f"bytes={range_value}"
 
         async with ClientSession() as session:
             async with session.get(stream_url, headers=headers) as upstream:
@@ -2301,7 +2328,7 @@ class SongRequestService:
                                 if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
                                     return True
 
-                                return True
+                                return False
                             except Exception:
                                 return False
 
