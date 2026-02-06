@@ -86,6 +86,21 @@ type ObsEnsureSpotifyAudioResp = {
   };
 };
 
+type ObsEnsureTiptuneAudioResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    target_exe?: string;
+    input_name?: string | null;
+    created?: boolean;
+    configured?: boolean;
+    added_to_scene?: boolean;
+    in_main_scene?: boolean;
+    targets_exe?: boolean;
+    errors?: string[];
+  };
+};
+
 function formatObsErrors(errs: Record<string, string> | undefined): string {
   if (!errs) return '';
   const entries = Object.entries(errs);
@@ -178,6 +193,7 @@ export function SettingsPage() {
   const [obsMsg, setObsMsg] = useState<string>('');
   const [obsEnsureMsg, setObsEnsureMsg] = useState<string>('');
   const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState<string>('');
+  const [obsTiptuneEnsureMsg, setObsTiptuneEnsureMsg] = useState<string>('');
   const [obsBusy, setObsBusy] = useState<boolean>(false);
 
   const [obsScenes, setObsScenes] = useState<string[]>([]);
@@ -377,6 +393,7 @@ export function SettingsPage() {
   const spotifyAudio = obsStatus?.spotify_audio_capture || null;
   const tiptuneAudio = obsStatus?.tiptune_audio_capture || null;
   const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
+  const showCreateTiptuneAudio = obsEnabled && !!obsStatus?.enabled && (tiptuneAudio ? !tiptuneAudio.present : true);
 
   const appVersion = runtimeAppVersion || (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '');
 
@@ -880,6 +897,41 @@ export function SettingsPage() {
                 Create an Application Audio Capture input in OBS targeting TipTune.exe to sync YouTube playback audio.
               </div>
             )}
+
+            {showCreateTiptuneAudio ? (
+              <div className="actions" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  disabled={obsBusy}
+                  onClick={async () => {
+                    setObsBusy(true);
+                    setObsTiptuneEnsureMsg('Creating TipTune audio capture...');
+                    try {
+                      const resp = await apiJson<ObsEnsureTiptuneAudioResp>('/api/obs/ensure_tiptune_audio_capture', { method: 'POST' });
+                      const r = resp.result || ({} as any);
+                      const errs = Array.isArray(r.errors) ? r.errors : [];
+                      const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
+
+                      setObsTiptuneEnsureMsg(
+                        `TipTune audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
+                          (r.input_name ? `\nInput: ${r.input_name}` : '') +
+                          (typeof r.targets_exe === 'boolean' ? `\nTargets TipTune.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
+                          errBlock
+                      );
+                    } catch (e: any) {
+                      setObsTiptuneEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                    } finally {
+                      setObsBusy(false);
+                      await loadObsStatus().catch(() => {});
+                    }
+                  }}
+                >
+                  Create TipTune audio capture
+                </button>
+              </div>
+            ) : null}
+
+            {obsTiptuneEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsTiptuneEnsureMsg}</div> : null}
 
             <label style={{ marginTop: 14 }}>Spotify audio capture</label>
             <div className="tableWrap" style={{ marginTop: 8 }}>
