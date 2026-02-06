@@ -1252,16 +1252,14 @@ class AutoDJ:
             is_playing, item_uri, progress_ms, duration_ms = self._get_playback_snapshot()
 
             now_uri = getattr(self, 'now_playing_track_uri', None)
-            if (
-                is_playing
-                and isinstance(now_uri, str)
+            has_match = (
+                isinstance(now_uri, str)
                 and now_uri.strip() != ''
                 and isinstance(item_uri, str)
                 and item_uri == now_uri
-                and isinstance(progress_ms, int)
-                and isinstance(duration_ms, int)
-                and duration_ms > 0
-            ):
+            )
+
+            if has_match and isinstance(progress_ms, int) and isinstance(duration_ms, int) and duration_ms > 0:
                 remaining_ms = duration_ms - progress_ms
                 if remaining_ms <= 2500:
                     logger.debug(
@@ -1272,15 +1270,31 @@ class AutoDJ:
                             "progress_ms": progress_ms,
                             "duration_ms": duration_ms,
                             "remaining_ms": remaining_ms,
+                            "is_playing": is_playing,
                         },
                     )
                     return False
 
             if is_playing:
-                logger.debug("spotify.playback.status",
-                           message="Playback is active",
-                           data={"is_playing": True, "track_uri": item_uri})
+                logger.debug(
+                    "spotify.playback.status",
+                    message="Playback is active",
+                    data={"is_playing": True, "track_uri": item_uri},
+                )
                 return True
+
+            if has_match and isinstance(progress_ms, int) and isinstance(duration_ms, int) and duration_ms > 0:
+                logger.debug(
+                    "spotify.playback.status",
+                    message="Playback paused; treating as active",
+                    data={
+                        "track_uri": item_uri,
+                        "progress_ms": progress_ms,
+                        "duration_ms": duration_ms,
+                    },
+                )
+                return True
+
             return False
         except SpotifyException as exc:
             logger.exception("spotify.playback.error",

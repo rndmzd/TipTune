@@ -397,6 +397,51 @@
  .page-events .message { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
  .page-events pre { white-space: pre-wrap; word-break: break-word; background: var(--surface-2); border: 1px solid var(--border); padding: 12px; border-radius: 14px; overflow: auto; }
 
+ .tipToastStack {
+   position: fixed;
+   left: 24px;
+   right: 24px;
+   bottom: 24px;
+   display: flex;
+   flex-direction: column;
+   gap: 10px;
+   z-index: 80;
+   pointer-events: none;
+ }
+
+ .tipToast {
+   pointer-events: auto;
+   align-self: center;
+   width: min(520px, 100%);
+   background: rgba(17, 19, 24, 0.95);
+   border: 1px solid rgba(91, 140, 255, 0.45);
+   border-radius: 16px;
+   padding: 12px 14px;
+   box-shadow: var(--shadow-sm);
+   animation: tipToastFade 5s ease forwards;
+ }
+
+ .tipToastTitle {
+   font-weight: 700;
+   font-size: 13px;
+   margin-bottom: 4px;
+   color: rgba(255, 255, 255, 0.94);
+ }
+
+ .tipToastMessage {
+   font-size: 12px;
+   color: var(--muted);
+   white-space: pre-wrap;
+   word-break: break-word;
+ }
+
+ @keyframes tipToastFade {
+   0% { opacity: 0; transform: translateY(10px); }
+   8% { opacity: 1; transform: translateY(0); }
+   80% { opacity: 1; transform: translateY(0); }
+   100% { opacity: 0; transform: translateY(8px); }
+ }
+
  .markdown { line-height: 1.6; font-size: 14px; }
  .markdown h1 { font-size: 20px; margin: 0 0 14px 0; }
  .markdown h2 { font-size: 14px; margin: 18px 0 10px 0; }

@@ -13,7 +13,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 from aiohttp import web, ClientSession
@@ -174,25 +174,29 @@ def _setup_logging() -> None:
     console_level = env_console_level if (debug_enabled or level_force) else logging.INFO
     file_level = env_console_level if level_force else (logging.DEBUG if debug_enabled else logging.INFO)
 
-    file_enabled = True
-    file_path: Optional[str] = None
-
     env_log_path = os.getenv('TIPTUNE_LOG_PATH')
     log_path_force = _truthy(os.getenv('TIPTUNE_LOG_PATH_FORCE'))
-    if (isinstance(env_log_path, str) and env_log_path.strip()) and (file_enabled or log_path_force):
-        file_enabled = True
-        raw_env_path = _expand_path(env_log_path.strip())
-        if os.path.isabs(raw_env_path):
-            file_path = raw_env_path
-        else:
-            file_path = str(get_app_dir() / raw_env_path)
-    else:
-        cfg_path = ''
+    has_env_log_path = isinstance(env_log_path, str) and env_log_path.strip()
+
+    file_enabled = debug_enabled or (log_path_force and has_env_log_path)
+    file_path: Optional[str] = None
+
+    cfg_path = ''
+    if debug_enabled:
         try:
             cfg_path = config.get('General', 'debug_log_path', fallback='').strip()
         except Exception:
             cfg_path = ''
 
+    has_cfg_path = bool(cfg_path)
+
+    if has_env_log_path and (log_path_force or (debug_enabled and not has_cfg_path)):
+        raw_env_path = _expand_path(env_log_path.strip())
+        if os.path.isabs(raw_env_path):
+            file_path = raw_env_path
+        else:
+            file_path = str(get_app_dir() / raw_env_path)
+    elif debug_enabled:
         if cfg_path:
             try:
                 expanded_cfg_path = _expand_path(cfg_path)
@@ -204,8 +208,13 @@ def _setup_logging() -> None:
                 file_path = cfg_path
         else:
             file_path = str(_default_log_path())
+    else:
+        file_enabled = False
 
-    root.setLevel(min(console_level, file_level))
+    if file_enabled:
+        root.setLevel(min(console_level, file_level))
+    else:
+        root.setLevel(console_level)
 
     formatter = StructuredLogFormatter()
 
@@ -544,6 +553,8 @@ class WebUI:
             web.post('/api/queue/add', self._api_queue_add),
             web.post('/api/queue/pause', self._api_pause),
             web.post('/api/queue/resume', self._api_resume),
+            web.post('/api/playback/pause', self._api_playback_pause),
+            web.post('/api/playback/resume', self._api_playback_resume),
             web.post('/api/queue/seek', self._api_queue_seek),
             web.post('/api/queue/move', self._api_queue_move),
             web.post('/api/queue/delete', self._api_queue_delete),
@@ -629,6 +640,14 @@ class WebUI:
 
     async def _api_resume(self, _request: web.Request) -> web.Response:
         ok = await self._service.resume_queue()
+        return web.json_response({"ok": bool(ok)})
+
+    async def _api_playback_pause(self, _request: web.Request) -> web.Response:
+        ok = await self._service.pause_playback()
+        return web.json_response({"ok": bool(ok)})
+
+    async def _api_playback_resume(self, _request: web.Request) -> web.Response:
+        ok = await self._service.resume_playback()
         return web.json_response({"ok": bool(ok)})
 
     async def _api_queue_seek(self, request: web.Request) -> web.Response:
@@ -1734,8 +1753,35 @@ class SongRequestService:
 
         range_header = request.headers.get('Range')
         headers: Dict[str, str] = dict(request_headers or {})
+        range_value: Optional[str] = None
         if isinstance(range_header, str) and range_header.strip() != '':
-            headers['Range'] = range_header.strip()
+            try:
+                m = re.match(r'^bytes=(\d+)-(\d*)$', range_header.strip())
+                if m:
+                    start = int(m.group(1))
+                    end_raw = m.group(2)
+                    end = int(end_raw) if end_raw else None
+                    range_value = f"{start}-{end}" if end is not None else f"{start}-"
+            except Exception:
+                range_value = None
+
+        if range_value is None:
+            range_value = '0-'
+
+        try:
+            parts = urlsplit(stream_url)
+            query_items = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != 'range']
+            query_items.append(('range', range_value))
+            stream_url = urlunsplit((
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urlencode(query_items, doseq=True),
+                parts.fragment,
+            ))
+        except Exception:
+            if range_value and range_value != '0-':
+                headers['Range'] = f"bytes={range_value}"
 
         async with ClientSession() as session:
             async with session.get(stream_url, headers=headers) as upstream:
@@ -2234,7 +2280,59 @@ class SongRequestService:
                         and started_ts is not None
                         and (time.time() - float(started_ts)) > 5.0
                     ):
-                        is_active = await loop.run_in_executor(None, self.actions.auto_dj.playback_active)
+                        def _is_playback_active_for_item() -> bool:
+                            try:
+                                if not isinstance(now_item, dict):
+                                    return False
+                                uri = now_item.get('uri')
+                                if not isinstance(uri, str):
+                                    return False
+                                track_uri = self._normalize_spotify_track_uri(uri)
+                                if not track_uri:
+                                    return False
+
+                                pb = self.actions.auto_dj.spotify.current_playback()
+                                if not isinstance(pb, dict):
+                                    return False
+
+                                item = pb.get('item')
+                                if not isinstance(item, dict):
+                                    return False
+
+                                item_uri = item.get('uri')
+                                if not isinstance(item_uri, str) or item_uri != track_uri:
+                                    return False
+
+                                is_playing = bool(pb.get('is_playing'))
+                                progress_ms = pb.get('progress_ms')
+                                duration_ms = item.get('duration_ms')
+
+                                try:
+                                    progress_ms = int(progress_ms) if progress_ms is not None else None
+                                except Exception:
+                                    progress_ms = None
+
+                                try:
+                                    duration_ms = int(duration_ms) if duration_ms is not None else None
+                                except Exception:
+                                    duration_ms = None
+
+                                if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
+                                    remaining_ms = duration_ms - progress_ms
+                                    if remaining_ms <= 2500:
+                                        return False
+
+                                if is_playing:
+                                    return True
+
+                                if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
+                                    return True
+
+                                return False
+                            except Exception:
+                                return False
+
+                        is_active = await loop.run_in_executor(None, _is_playback_active_for_item)
                         if not bool(is_active):
                             await self.advance_queue()
                 except Exception:
@@ -3234,6 +3332,116 @@ class SongRequestService:
             await self.actions.trigger_queue_state_overlay("Song request queue resumed")
         except Exception:
             pass
+        return True
+
+    async def pause_playback(self) -> bool:
+        async with self._queue_lock:
+            now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+
+        src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src != 'spotify':
+            return False
+
+        loop = asyncio.get_running_loop()
+
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            def _do_pause() -> bool:
+                try:
+                    device_id = getattr(self.actions.auto_dj, 'playback_device', None)
+                    self.actions.auto_dj.spotify.pause_playback(device_id=device_id)
+                    return True
+                except Exception:
+                    return False
+
+            try:
+                return bool(await asyncio.wait_for(loop.run_in_executor(None, _do_pause), timeout=6))
+            except asyncio.TimeoutError:
+                return False
+            except Exception:
+                return False
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return False
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return False
+
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.pause_playback),
+                timeout=6,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
+        return True
+
+    async def resume_playback(self) -> bool:
+        async with self._queue_lock:
+            now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+
+        src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src != 'spotify':
+            return False
+
+        loop = asyncio.get_running_loop()
+
+        if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+            def _do_resume() -> bool:
+                try:
+                    device_id = getattr(self.actions.auto_dj, 'playback_device', None)
+                    self.actions.auto_dj.spotify.start_playback(device_id=device_id)
+                    return True
+                except Exception:
+                    return False
+
+            try:
+                return bool(await asyncio.wait_for(loop.run_in_executor(None, _do_resume), timeout=6))
+            except asyncio.TimeoutError:
+                return False
+            except Exception:
+                return False
+
+        from helpers import refresh_spotify_client
+        from helpers import spotify_client as helpers_spotify_client
+
+        if helpers_spotify_client is None:
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, refresh_spotify_client),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                return False
+
+            from helpers import spotify_client as helpers_spotify_client2
+            helpers_spotify_client = helpers_spotify_client2
+
+        if helpers_spotify_client is None:
+            return False
+
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, helpers_spotify_client.start_playback),
+                timeout=6,
+            )
+        except asyncio.TimeoutError:
+            return False
+        except Exception:
+            return False
         return True
 
     async def seek_playback(self, position_ms: int) -> bool:

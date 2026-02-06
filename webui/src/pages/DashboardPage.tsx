@@ -29,7 +29,15 @@ function mediaErrorLabel(code?: number | null): string {
 export function DashboardPage() {
   const location = useLocation();
   const playback = usePlayback();
-  const { youtubeDebugInfo, youtubeStreamUrl, refresh: refreshPlayback, seekTo } = playback;
+  const {
+    youtubeDebugInfo,
+    youtubeStreamUrl,
+    refresh: refreshPlayback,
+    seekTo,
+    paused: playbackPaused,
+    pausePlayback,
+    resumePlayback,
+  } = playback;
 
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [paused, setPaused] = useState<boolean>(false);
@@ -582,11 +590,11 @@ export function DashboardPage() {
                     title="Play"
                     aria-label="Play"
                     onClick={async () => {
-                      await post('/api/queue/resume');
+                      await resumePlayback();
                       await refresh(true);
                       refreshPlayback().catch(() => {});
                     }}
-                    disabled={opBusy || !paused}
+                    disabled={opBusy || !playbackPaused}
                   >
                     ▶
                   </button>
@@ -596,11 +604,11 @@ export function DashboardPage() {
                     title="Pause"
                     aria-label="Pause"
                     onClick={async () => {
-                      await post('/api/queue/pause');
+                      await pausePlayback();
                       await refresh(true);
                       refreshPlayback().catch(() => {});
                     }}
-                    disabled={opBusy || paused}
+                    disabled={opBusy || playbackPaused}
                   >
                     ⏸
                   </button>

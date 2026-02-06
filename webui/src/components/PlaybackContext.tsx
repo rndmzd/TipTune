@@ -75,7 +75,6 @@ function isYouTubeLink(value: string): boolean {
 export function PlaybackProvider(props: { children: React.ReactNode }) {
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [nowPlaying, setNowPlaying] = useState<QueueItem | null>(null);
-  const [paused, setPaused] = useState<boolean>(false);
 
   const [dockEl, setDockEl] = useState<HTMLElement | null>(null);
   const playerHostRef = useRef<HTMLDivElement | null>(null);
@@ -93,6 +92,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
   const youtubeAudioRef = useRef<HTMLAudioElement | null>(null);
   const youtubePlaybackStartedRef = useRef<boolean>(false);
   const [youtubeDebugInfo, setYoutubeDebugInfo] = useState<YoutubeDebugInfo | null>(null);
+  const [youtubePaused, setYoutubePaused] = useState<boolean>(false);
   const [youtubeTimeMs, setYoutubeTimeMs] = useState<number | null>(null);
   const [youtubeDurationMs, setYoutubeDurationMs] = useState<number | null>(null);
 
@@ -101,7 +101,6 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       const data = await apiJson<QueueResp>('/api/queue');
       const st = data.queue ?? {};
       setQueueState(st);
-      setPaused(!!st.paused);
 
       const np =
         st.now_playing_item && typeof st.now_playing_item === 'object'
@@ -198,6 +197,11 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== ''
       ? sseUrl(`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`)
       : '';
+  const playbackPaused = isYouTube
+    ? youtubePaused
+    : typeof queueState?.playback_is_playing === 'boolean'
+      ? !queueState.playback_is_playing
+      : false;
 
   const displayDurationMs =
     typeof nowPlaying?.duration_ms === 'number'
@@ -224,15 +228,11 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
 
   useEffect(() => {
     youtubePlaybackStartedRef.current = false;
+    setYoutubePaused(false);
+    setYoutubeDebugInfo(null);
+    setYoutubeTimeMs(null);
+    setYoutubeDurationMs(null);
   }, [isYouTube, nowPlaying?.uri]);
-
-  useEffect(() => {
-    if (!isYouTube) {
-      setYoutubeDebugInfo(null);
-      setYoutubeTimeMs(null);
-      setYoutubeDurationMs(null);
-    }
-  }, [isYouTube]);
 
   function updateYoutubeDebug(event: string) {
     const a = youtubeAudioRef.current;
@@ -298,45 +298,57 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
   }
 
   const pausePlayback = useCallback(async () => {
+    const a = youtubeAudioRef.current;
+    if (isYouTube) {
+      if (a) {
+        try {
+          a.pause();
+        } catch {
+        }
+      }
+      setYoutubePaused(true);
+      updateYoutubeDebug('pause');
+      return;
+    }
+    if (!isSpotify) return;
     try {
-      await apiJson('/api/queue/pause', {
+      await apiJson('/api/playback/pause', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
       });
     } catch {
     }
-    const a = youtubeAudioRef.current;
-    if (a) {
-      try {
-        a.pause();
-      } catch {
-      }
-    }
     refresh().catch(() => {});
-  }, [refresh]);
+  }, [isSpotify, isYouTube, refresh]);
 
   const resumePlayback = useCallback(async () => {
+    const a = youtubeAudioRef.current;
+    if (isYouTube) {
+      if (a) {
+        try {
+          setYoutubePaused(false);
+          const p = a.play();
+          if (p && typeof (p as any).catch === 'function') {
+            (p as any).catch(() => {});
+          }
+        } catch {
+        }
+      }
+      updateYoutubeDebug('play');
+      return;
+    }
+    if (!isSpotify) return;
     try {
-      await apiJson('/api/queue/resume', {
+      await apiJson('/api/playback/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
       });
     } catch {
     }
-    const a = youtubeAudioRef.current;
-    if (a) {
-      try {
-        const p = a.play();
-        if (p && typeof (p as any).catch === 'function') {
-          (p as any).catch(() => {});
-        }
-      } catch {
-      }
-    }
     refresh().catch(() => {});
-  }, [refresh]);
+  }, [isSpotify, isYouTube, refresh]);
 
   const setPlayerDock = useCallback((el: HTMLElement | null) => {
     setDockEl(el);
@@ -358,7 +370,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     const a = youtubeAudioRef.current;
     if (!a) return;
 
-    if (paused) {
+    if (playbackPaused) {
       try {
         a.pause();
       } catch {
@@ -368,10 +380,13 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     }
 
     if (!youtubeStreamUrl) return;
+    const shouldLoad = !a.currentSrc || a.currentSrc !== youtubeStreamUrl;
     updateYoutubeDebug('effect');
     try {
-      a.load();
-      updateYoutubeDebug('load');
+      if (shouldLoad) {
+        a.load();
+        updateYoutubeDebug('load');
+      }
     } catch {
     }
 
@@ -389,13 +404,13 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     return () => {
       window.clearTimeout(t);
     };
-  }, [isYouTube, paused, youtubeStreamUrl, nowPlaying?.uri]);
+  }, [isYouTube, playbackPaused, youtubeStreamUrl, nowPlaying?.uri]);
 
   const ctxValue = useMemo<PlaybackContextValue>(
     () => ({
       nowPlaying,
       queueState,
-      paused,
+      paused: playbackPaused,
       playbackPosMs: displayPosMs,
       durationMs: displayDurationMs,
       posClampedMs,
@@ -413,7 +428,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     [
       nowPlaying,
       queueState,
-      paused,
+      playbackPaused,
       displayPosMs,
       displayDurationMs,
       posClampedMs,
@@ -447,10 +462,15 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
               onLoadedMetadata={() => updateYoutubeDebug('loadedmetadata')}
               onPlaying={() => {
                 updateYoutubeDebug('playing');
+                setYoutubePaused(false);
                 youtubePlaybackStartedRef.current = true;
               }}
+              onPause={() => {
+                setYoutubePaused(true);
+                updateYoutubeDebug('pause');
+              }}
               onCanPlay={() => {
-                if (paused) return;
+                if (playbackPaused) return;
                 updateYoutubeDebug('canplay');
                 try {
                   const a = youtubeAudioRef.current;
