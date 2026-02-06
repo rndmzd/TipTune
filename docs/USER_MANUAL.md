@@ -49,7 +49,7 @@ TipTune now supports a unified queue that can contain items from multiple source
 
 - Configure the default source with `Music.source=spotify|youtube`.
 - The Dashboard/Settings UI is source-aware.
-- Tip messages can override the default source by including the word `spotify` or `youtube`.
+- Tip messages can override the default source by including the word `spotify` or `youtube` (when `General.allow_source_override_in_request_message` is `true`, the default).
 
 ### YouTube search + playback
 
@@ -65,6 +65,22 @@ YouTube is supported as a first-class source:
 ### Setup Wizard now includes Music source
 
 The Setup Wizard includes a **Music source** choice under **General Settings**, which writes `Music.source`.
+
+### Source override toggle
+
+Tip messages can override the default music source by including the word `spotify` or `youtube`. This behavior is now controlled by `General.allow_source_override_in_request_message` (default `true`). Set to `false` to ignore source keywords in tip messages.
+
+### TipTune audio capture for OBS
+
+TipTune can now create an Application Audio Capture input in OBS targeting `TipTune.exe`. This is used to route YouTube playback audio into OBS. See [OBS integration](#obs-integration).
+
+### Dashboard playback controls
+
+The Dashboard now includes playback-level controls (pause/resume playback, seek) in addition to queue-level controls (pause/resume queue).
+
+### History management
+
+The History page now supports clearing all request history.
 
 ### Device status improvements
 
@@ -275,12 +291,23 @@ The dashboard shows:
 
 ### Queue controls
 
-- **Pause**
+- **Pause Queue**
   - Pauses the queue logic. The current song can finish first.
-- **Resume**
+- **Resume Queue**
   - Unpauses queue logic.
+- **Next / Skip**
+  - Advances the queue to the next track.
 - **Refresh**
   - Refreshes the dashboard state.
+
+### Playback controls
+
+- **Pause Playback**
+  - Pauses the currently playing track without affecting the queue.
+- **Resume Playback**
+  - Resumes the paused track.
+- **Seek**
+  - Seeks to a position within the currently playing track.
 
 ### Add Track (manual)
 
@@ -379,7 +406,8 @@ When enabled, Settings provides:
   - Current scene and main scene
   - Required text source presence
 - **Create missing text sources**
-- **Create Spotify audio capture** (Windows, Application Audio Capture)
+- **Create Spotify audio capture** (Windows, Application Audio Capture for `Spotify.exe`)
+- **Create TipTune audio capture** (Windows, Application Audio Capture for `TipTune.exe` — routes YouTube playback audio into OBS)
 - **Test overlays**
 
 ### Search (Google Custom Search)
@@ -394,8 +422,10 @@ Used to improve song metadata when the artist is missing.
 - `General.song_cost`
 - `General.skip_song_cost`
 - `General.multi_request_tips`
+- `General.allow_source_override_in_request_message`
 - `General.request_overlay_duration` (seconds)
 - `General.auto_check_updates` (UI toggle)
+- `General.show_debug_data` (UI toggle)
 - `General.debug_log_to_file`
 - `General.debug_log_path`
 
@@ -413,6 +443,13 @@ Logging notes:
 - When `false`:
   - Example: if `song_cost=27`, then only `27` tokens requests **1 song**.
   - `54` tokens does **not** request 2 songs.
+
+`General.allow_source_override_in_request_message` controls whether tip messages can override the default music source.
+
+- When `true` (default): including the word `spotify` or `youtube` in a tip message overrides the default `Music.source` for that request.
+- When `false`: source keywords in tip messages are ignored; all requests use `Music.source`.
+
+`General.show_debug_data` toggles the display of debug information in the UI.
 
 ---
 
@@ -434,6 +471,8 @@ Use it to confirm that TipTune is receiving and processing the Events API payloa
 Open: `/history`
 
 This page shows recent processing results for song requests.
+
+You can **clear all history** using the clear button.
 
 Typical statuses:
 
@@ -474,6 +513,18 @@ You can create them manually, but the easiest path is:
 After creation:
 
 - Go to OBS and set size/position of each text source.
+
+### Audio capture inputs (Windows)
+
+TipTune can also create Application Audio Capture inputs in OBS:
+
+- **Spotify Audio** — captures `Spotify.exe` audio for Spotify playback.
+- **TipTune Audio** — captures `TipTune.exe` audio for YouTube playback (routes the in-app YouTube audio player into OBS).
+
+Use the corresponding buttons in Settings:
+
+- **Create Spotify audio capture**
+- **Create TipTune audio capture**
 
 ### Testing
 
@@ -521,8 +572,10 @@ See `config.ini.example` for the template.
   - `enabled`, `host`, `port`, `password`, `scene_name`
 - `[Web]`
   - `host`, `port`
+- `[Music]`
+  - `source`
 - `[General]`
-  - `song_cost`, `skip_song_cost`, `multi_request_tips`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `debug_log_to_file`, `debug_log_path`
+  - `song_cost`, `skip_song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
 
 ---
 
