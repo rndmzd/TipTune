@@ -562,6 +562,7 @@ class WebUI:
             web.post('/api/obs/scenes', self._api_obs_scenes),
             web.post('/api/obs/ensure_sources', self._api_obs_ensure_sources),
             web.post('/api/obs/ensure_spotify_audio_capture', self._api_obs_ensure_spotify_audio_capture),
+            web.post('/api/obs/ensure_tiptune_audio_capture', self._api_obs_ensure_tiptune_audio_capture),
             web.post('/api/obs/now_playing', self._api_obs_now_playing),
             web.post('/api/obs/test_overlay', self._api_obs_test_overlay),
             web.get('/api/spotify/devices', self._api_devices),
@@ -991,6 +992,16 @@ class WebUI:
             return web.json_response({"ok": True, "result": result})
         except Exception as exc:
             logger.exception("webui.api.obs_ensure_spotify_audio_capture.error", exc=exc, message="Failed to ensure Spotify audio capture")
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def _api_obs_ensure_tiptune_audio_capture(self, _request: web.Request) -> web.Response:
+        try:
+            result = await self._service.ensure_obs_tiptune_audio_capture()
+            if result is None:
+                return web.json_response({"ok": False, "error": "OBS not available"}, status=400)
+            return web.json_response({"ok": True, "result": result})
+        except Exception as exc:
+            logger.exception("webui.api.obs_ensure_tiptune_audio_capture.error", exc=exc, message="Failed to ensure TipTune audio capture")
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
     async def _api_obs_test_overlay(self, request: web.Request) -> web.Response:
@@ -1942,6 +1953,23 @@ class SongRequestService:
 
         scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
         return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name='Spotify.exe', preferred_input_name='Spotify Audio', scene_name=scene_name or None)
+
+    async def ensure_obs_tiptune_audio_capture(self) -> Optional[Dict[str, Any]]:
+        desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
+        if not desired_enabled:
+            return None
+
+        try:
+            await self._refresh_obs_integration_from_config()
+        except Exception:
+            pass
+
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+            return None
+
+        scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
+        return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name='TipTune.exe', preferred_input_name='TipTune Audio', scene_name=scene_name or None)
 
     async def list_obs_scenes(self, host: Optional[str] = None, port: Optional[int] = None, password: Any = None) -> Optional[list[str]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False

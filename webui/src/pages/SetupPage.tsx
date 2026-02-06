@@ -25,6 +25,15 @@ type ObsSourceStatus = {
   present: boolean;
 };
 
+type ObsAudioCaptureStatus = {
+  target_exe?: string;
+  input_name?: string | null;
+  input_kind?: string | null;
+  input_exists?: boolean;
+  in_main_scene?: boolean;
+  present?: boolean;
+} | null;
+
 type ObsStatusResp = {
   ok: true;
   enabled: boolean;
@@ -34,6 +43,8 @@ type ObsStatusResp = {
     main_scene?: string | null;
     sources?: ObsSourceStatus[];
   };
+  spotify_audio_capture?: ObsAudioCaptureStatus;
+  tiptune_audio_capture?: ObsAudioCaptureStatus;
 };
 
 type ObsEnsureResp = {
@@ -44,6 +55,36 @@ type ObsEnsureResp = {
     added_to_scene?: string[];
     already_present?: string[];
     errors?: Record<string, string>;
+  };
+};
+
+type ObsEnsureSpotifyAudioResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    target_exe?: string;
+    input_name?: string | null;
+    created?: boolean;
+    configured?: boolean;
+    added_to_scene?: boolean;
+    in_main_scene?: boolean;
+    targets_exe?: boolean;
+    errors?: string[];
+  };
+};
+
+type ObsEnsureTiptuneAudioResp = {
+  ok: true;
+  result: {
+    scene?: string;
+    target_exe?: string;
+    input_name?: string | null;
+    created?: boolean;
+    configured?: boolean;
+    added_to_scene?: boolean;
+    in_main_scene?: boolean;
+    targets_exe?: boolean;
+    errors?: string[];
   };
 };
 
@@ -201,6 +242,8 @@ export function SetupPage() {
   const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
   const [obsMsg, setObsMsg] = useState('');
   const [obsEnsureMsg, setObsEnsureMsg] = useState('');
+  const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState('');
+  const [obsTiptuneEnsureMsg, setObsTiptuneEnsureMsg] = useState('');
   const [obsBusy, setObsBusy] = useState(false);
 
   const [obsScenes, setObsScenes] = useState<string[]>([]);
@@ -507,6 +550,10 @@ export function SetupPage() {
   const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
   const missingSources = requiredSources.filter((s) => !s.present);
   const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
+  const spotifyAudio = obsStatus?.spotify_audio_capture || null;
+  const tiptuneAudio = obsStatus?.tiptune_audio_capture || null;
+  const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
+  const showCreateTiptuneAudio = obsEnabled && !!obsStatus?.enabled && (tiptuneAudio ? !tiptuneAudio.present : true);
 
   const generalOk =
     norm(v('General', 'song_cost')) !== '' && norm(v('General', 'skip_song_cost')) !== '' && norm(v('General', 'request_overlay_duration')) !== '';
@@ -738,6 +785,199 @@ export function SetupPage() {
               </tbody>
             </table>
           </div>
+
+          <label style={{ marginTop: 14 }}>TipTune audio capture</label>
+          <div className="tableWrap" style={{ marginTop: 8 }}>
+            <table className="dataTable">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <code>Application Audio Capture</code>
+                  </td>
+                  <td>
+                    <span className={tiptuneAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{tiptuneAudio?.present ? 'present' : 'missing'}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="muted">Target exe</td>
+                  <td>{tiptuneAudio?.target_exe || 'TipTune.exe'}</td>
+                </tr>
+                <tr>
+                  <td className="muted">Input exists</td>
+                  <td>
+                    <span className={tiptuneAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
+                      {tiptuneAudio?.input_exists ? 'yes' : 'no'}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="muted">In main scene</td>
+                  <td>
+                    <span className={tiptuneAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
+                      {tiptuneAudio?.in_main_scene ? 'yes' : 'no'}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="muted">Matched input</td>
+                  <td>
+                    {tiptuneAudio?.input_name ? <code>{tiptuneAudio.input_name}</code> : <span className="muted">(none)</span>}
+                    {tiptuneAudio?.input_kind ? (
+                      <>
+                        {' '}<span className="muted">(</span>
+                        <code>{tiptuneAudio.input_kind}</code>
+                        <span className="muted">)</span>
+                      </>
+                    ) : null}
+                  </td>
+                </tr>
+                {!tiptuneAudio ? (
+                  <tr>
+                    <td colSpan={2} className="muted">
+                      (no data)
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+          {tiptuneAudio?.present ? null : (
+            <div className="muted" style={{ marginTop: 8 }}>
+              Create an Application Audio Capture input in OBS targeting TipTune.exe to sync YouTube playback audio.
+            </div>
+          )}
+          {showCreateTiptuneAudio ? (
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                disabled={obsBusy}
+                onClick={async () => {
+                  setObsBusy(true);
+                  setObsTiptuneEnsureMsg('Creating TipTune audio capture...');
+                  try {
+                    const resp = await apiJson<ObsEnsureTiptuneAudioResp>('/api/obs/ensure_tiptune_audio_capture', { method: 'POST' });
+                    const r = resp.result || ({} as any);
+                    const errs = Array.isArray(r.errors) ? r.errors : [];
+                    const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
+                    setObsTiptuneEnsureMsg(
+                      `TipTune audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
+                        (r.input_name ? `\nInput: ${r.input_name}` : '') +
+                        (typeof r.targets_exe === 'boolean' ? `\nTargets TipTune.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
+                        errBlock
+                    );
+                  } catch (e: any) {
+                    setObsTiptuneEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                  } finally {
+                    setObsBusy(false);
+                    await loadObsStatus().catch(() => {});
+                  }
+                }}
+              >
+                Create TipTune audio capture
+              </button>
+            </div>
+          ) : null}
+          {obsTiptuneEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsTiptuneEnsureMsg}</div> : null}
+
+          <label style={{ marginTop: 14 }}>Spotify audio capture</label>
+          <div className="tableWrap" style={{ marginTop: 8 }}>
+            <table className="dataTable">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <code>Application Audio Capture</code>
+                  </td>
+                  <td>
+                    <span className={spotifyAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{spotifyAudio?.present ? 'present' : 'missing'}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="muted">Target exe</td>
+                  <td>{spotifyAudio?.target_exe || 'Spotify.exe'}</td>
+                </tr>
+                <tr>
+                  <td className="muted">Input exists</td>
+                  <td>
+                    <span className={spotifyAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
+                      {spotifyAudio?.input_exists ? 'yes' : 'no'}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="muted">In main scene</td>
+                  <td>
+                    <span className={spotifyAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
+                      {spotifyAudio?.in_main_scene ? 'yes' : 'no'}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="muted">Matched input</td>
+                  <td>
+                    {spotifyAudio?.input_name ? <code>{spotifyAudio.input_name}</code> : <span className="muted">(none)</span>}
+                    {spotifyAudio?.input_kind ? (
+                      <>
+                        {' '}<span className="muted">(</span>
+                        <code>{spotifyAudio.input_kind}</code>
+                        <span className="muted">)</span>
+                      </>
+                    ) : null}
+                  </td>
+                </tr>
+                {!spotifyAudio ? (
+                  <tr>
+                    <td colSpan={2} className="muted">
+                      (no data)
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+          {showCreateSpotifyAudio ? (
+            <div className="actions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                disabled={obsBusy}
+                onClick={async () => {
+                  setObsBusy(true);
+                  setObsSpotifyEnsureMsg('Creating Spotify audio capture...');
+                  try {
+                    const resp = await apiJson<ObsEnsureSpotifyAudioResp>('/api/obs/ensure_spotify_audio_capture', { method: 'POST' });
+                    const r = resp.result || ({} as any);
+                    const errs = Array.isArray(r.errors) ? r.errors : [];
+                    const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
+                    setObsSpotifyEnsureMsg(
+                      `Spotify audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
+                        (r.input_name ? `\nInput: ${r.input_name}` : '') +
+                        (typeof r.targets_exe === 'boolean' ? `\nTargets Spotify.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
+                        errBlock
+                    );
+                  } catch (e: any) {
+                    setObsSpotifyEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
+                  } finally {
+                    setObsBusy(false);
+                    await loadObsStatus().catch(() => {});
+                  }
+                }}
+              >
+                Create Spotify audio capture
+              </button>
+            </div>
+          ) : null}
+          {obsSpotifyEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsSpotifyEnsureMsg}</div> : null}
 
           <div className="actions" style={{ marginTop: 12 }}>
             <button type="button" onClick={() => loadObsStatus().catch(() => {})} disabled={obsBusy}>
