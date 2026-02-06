@@ -169,6 +169,7 @@ In Settings:
 - Set `OBS.host`, `OBS.port`, `OBS.password`
 - Click **Create missing text sources**
 - (Windows) optionally click **Create Spotify audio capture**
+- (Windows) optionally click **Create TipTune audio capture** (for YouTube playback audio sync in OBS)
 - Use **Test overlays** to confirm they display correctly
 
 ---
@@ -178,3 +179,4 @@ In Settings:
 - **Spotify redirect URL must match exactly** (scheme/host/port/path) and must be `http://127.0.0.1:<port>/...` or `http://localhost:<port>/...`.
 - **No devices found**: open Spotify on a device and start playback so Spotify registers an active device.
 - **Blank tip message**: TipTune treats this as a failed request and can show a warning overlay.
+- **Source override in tip messages**: by default, including `spotify` or `youtube` in a tip message overrides the default source. Disable with `General.allow_source_override_in_request_message=false`.

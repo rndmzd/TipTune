@@ -106,8 +106,6 @@ TipTune uses these sections/keys (see `config.ini.example`):
 
 - `[Spotify]` (required for playback)
   - `client_id`, `redirect_url`, `playback_device_id`
-- `[Music]` (required)
-  - `source` (`spotify` or `youtube`)
 - `[OpenAI]` (optional)
   - `api_key`, `model`
 - `[Events API]` (optional)
@@ -118,8 +116,10 @@ TipTune uses these sections/keys (see `config.ini.example`):
   - `enabled`, `host`, `port`, `password`, `scene_name`
 - `[Web]` (optional)
   - `host`, `port`
+- `[Music]` (required)
+  - `source`
 - `[General]` (required)
-  - `song_cost`, `multi_request_tips`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `debug_log_to_file`, `debug_log_path`
+  - `song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
 
 ### Multi-song tips
 
@@ -156,7 +156,7 @@ Choose the default source in:
 
 - `Music.source=spotify|youtube`
 
-You can also override per-tip by including the word `spotify` or `youtube` in the tip message.
+You can also override per-tip by including the word `spotify` or `youtube` in the tip message (controlled by `General.allow_source_override_in_request_message`, default `true`).
 
 ---
 
@@ -215,6 +215,7 @@ Steps:
 
 1. In Setup Wizard or Settings, use **Create missing text sources** and then position/size them in OBS.
 1. Optional: use **Create Spotify audio capture** (Windows) to set up an Application Audio Capture input for `Spotify.exe`.
+1. Optional: use **Create TipTune audio capture** (Windows) to set up an Application Audio Capture input for `TipTune.exe` (for YouTube playback audio sync in OBS).
 
 `scenes.yaml` defines scene metadata used by the project.
 
