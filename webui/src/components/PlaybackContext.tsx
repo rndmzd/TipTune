@@ -308,6 +308,15 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       }
       setYoutubePaused(true);
       updateYoutubeDebug('pause');
+      try {
+        await apiJson('/api/playback/pause', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+      } catch {
+      }
+      refresh().catch(() => {});
       return;
     }
     if (!isSpotify) return;
@@ -336,6 +345,15 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
         }
       }
       updateYoutubeDebug('play');
+      try {
+        await apiJson('/api/playback/resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+      } catch {
+      }
+      refresh().catch(() => {});
       return;
     }
     if (!isSpotify) return;
