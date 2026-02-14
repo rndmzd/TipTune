@@ -1181,6 +1181,7 @@ class SongRequestService:
         self._queue_lock = asyncio.Lock()
         self._queue_items: list[dict] = []
         self._queue_paused: bool = False
+        self._queue_playback_paused: bool = False
         self._queue_now_playing: Optional[dict] = None
         self._queue_started_ts: Optional[float] = None
 
@@ -1353,6 +1354,7 @@ class SongRequestService:
                 return False
             nxt = self._queue_items.pop(0)
             self._queue_now_playing = nxt
+            self._queue_playback_paused = False
             self._queue_started_ts = time.time()
 
         try:
@@ -1485,6 +1487,7 @@ class SongRequestService:
             queued = payload.get('queued_items')
             now_item = payload.get('now_playing_item')
             paused = payload.get('paused')
+            playback_paused = payload.get('playback_paused')
             started_ts = payload.get('started_ts')
 
             if isinstance(queued, list):
@@ -1493,6 +1496,8 @@ class SongRequestService:
                 self._queue_now_playing = dict(now_item)
             if paused is not None:
                 self._queue_paused = bool(paused)
+            if playback_paused is not None:
+                self._queue_playback_paused = bool(playback_paused)
             if started_ts is not None:
                 try:
                     self._queue_started_ts = float(started_ts)
@@ -1507,6 +1512,7 @@ class SongRequestService:
             payload = {
                 'ts': time.time(),
                 'paused': bool(self._queue_paused),
+                'playback_paused': bool(self._queue_playback_paused),
                 'started_ts': self._queue_started_ts,
                 'now_playing_item': self._queue_now_playing,
                 'queued_items': self._queue_items,
@@ -1868,6 +1874,7 @@ class SongRequestService:
 
         async with self._queue_lock:
             self._queue_now_playing = None
+            self._queue_playback_paused = False
             self._queue_started_ts = None
 
         try:
@@ -2296,11 +2303,13 @@ class SongRequestService:
                 try:
                     async with self._queue_lock:
                         paused = bool(self._queue_paused)
+                        playback_paused = bool(self._queue_playback_paused)
                         now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
                         started_ts = self._queue_started_ts
 
                     if (
                         (not paused)
+                        and (not playback_paused)
                         and now_item
                         and _normalize_music_source(now_item.get('source'), default=self._active_source()) == 'spotify'
                         and getattr(self.actions, 'chatdj_enabled', False)
@@ -2345,6 +2354,12 @@ class SongRequestService:
                                 except Exception:
                                     duration_ms = None
 
+                                elapsed_since_start = 9999.0
+                                try:
+                                    elapsed_since_start = time.time() - float(started_ts)
+                                except Exception:
+                                    elapsed_since_start = 9999.0
+
                                 if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
                                     remaining_ms = duration_ms - progress_ms
                                     if remaining_ms <= 2500:
@@ -2354,7 +2369,14 @@ class SongRequestService:
                                     return True
 
                                 if isinstance(duration_ms, int) and duration_ms > 0 and isinstance(progress_ms, int):
-                                    return True
+                                    # Spotify Desktop can leave the same item selected with
+                                    # is_playing=false after a track ends, often with progress
+                                    # reset near 0. Treat low progress as active only briefly
+                                    # after we start playback to avoid stalling the queue.
+                                    if progress_ms < 15000 and elapsed_since_start < 20.0:
+                                        return True
+                                    if progress_ms >= 15000:
+                                        return True
 
                                 return False
                             except Exception:
@@ -3382,11 +3404,16 @@ class SongRequestService:
                     return False
 
             try:
-                return bool(await asyncio.wait_for(loop.run_in_executor(None, _do_pause), timeout=6))
+                ok = bool(await asyncio.wait_for(loop.run_in_executor(None, _do_pause), timeout=6))
             except asyncio.TimeoutError:
-                return False
+                ok = False
             except Exception:
-                return False
+                ok = False
+
+            if ok:
+                async with self._queue_lock:
+                    self._queue_playback_paused = True
+            return ok
 
         from helpers import refresh_spotify_client
         from helpers import spotify_client as helpers_spotify_client
@@ -3415,6 +3442,9 @@ class SongRequestService:
             return False
         except Exception:
             return False
+
+        async with self._queue_lock:
+            self._queue_playback_paused = True
         return True
 
     async def resume_playback(self) -> bool:
@@ -3437,11 +3467,16 @@ class SongRequestService:
                     return False
 
             try:
-                return bool(await asyncio.wait_for(loop.run_in_executor(None, _do_resume), timeout=6))
+                ok = bool(await asyncio.wait_for(loop.run_in_executor(None, _do_resume), timeout=6))
             except asyncio.TimeoutError:
-                return False
+                ok = False
             except Exception:
-                return False
+                ok = False
+
+            if ok:
+                async with self._queue_lock:
+                    self._queue_playback_paused = False
+            return ok
 
         from helpers import refresh_spotify_client
         from helpers import spotify_client as helpers_spotify_client
@@ -3470,6 +3505,9 @@ class SongRequestService:
             return False
         except Exception:
             return False
+
+        async with self._queue_lock:
+            self._queue_playback_paused = False
         return True
 
     async def seek_playback(self, position_ms: int) -> bool:
