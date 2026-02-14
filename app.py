@@ -2385,6 +2385,32 @@ class SongRequestService:
                         is_active = await loop.run_in_executor(None, _is_playback_active_for_item)
                         if not bool(is_active):
                             await self.advance_queue()
+
+                    if (
+                        (not paused)
+                        and (not playback_paused)
+                        and now_item
+                        and _normalize_music_source(now_item.get('source'), default=self._active_source()) == 'youtube'
+                        and started_ts is not None
+                    ):
+                        duration_ms = None
+                        try:
+                            raw_duration = now_item.get('duration_ms') if isinstance(now_item, dict) else None
+                            if raw_duration is not None:
+                                duration_ms = int(raw_duration)
+                        except Exception:
+                            duration_ms = None
+
+                        if isinstance(duration_ms, int) and duration_ms > 0:
+                            try:
+                                elapsed_ms = int((time.time() - float(started_ts)) * 1000)
+                            except Exception:
+                                elapsed_ms = 0
+
+                            # Frontend normally advances YouTube tracks from audio events.
+                            # This server-side fallback only triggers once a track is clearly stale.
+                            if elapsed_ms >= (duration_ms + 10000):
+                                await self.advance_queue()
                 except Exception:
                     pass
             except Exception as exc:
@@ -3389,6 +3415,17 @@ class SongRequestService:
             now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
 
         src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src == 'youtube':
+            async with self._queue_lock:
+                if self._queue_now_playing is None:
+                    return False
+                self._queue_playback_paused = True
+            try:
+                self._persist_queue_state_to_disk()
+            except Exception:
+                pass
+            return True
+
         if src != 'spotify':
             return False
 
@@ -3452,6 +3489,17 @@ class SongRequestService:
             now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
 
         src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+        if src == 'youtube':
+            async with self._queue_lock:
+                if self._queue_now_playing is None:
+                    return False
+                self._queue_playback_paused = False
+            try:
+                self._persist_queue_state_to_disk()
+            except Exception:
+                pass
+            return True
+
         if src != 'spotify':
             return False
 
