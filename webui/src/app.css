@@ -89,6 +89,13 @@
  button:disabled:hover { background: rgba(255, 255, 255, 0.02); border-color: var(--border); }
 
  .muted { color: var(--muted); font-size: 12px; }
+ .spotifyPage { position: fixed; inset: 20px; display: flex; flex-direction: column; gap: 12px; }
+ .spotifyPage .headerBar { flex: 0 0 auto; margin-bottom: 0; }
+ .spotifyToolbar { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
+ .spotifyToolbar p { margin: 0; flex: 1; }
+ .spotifyToolbar button { flex-shrink: 0; }
+ .spotifyPlayerHost { flex: 1; min-height: 0; background: #121212; border-radius: 12px; overflow: hidden; }
+ .spotifyPlayerHost > p { padding: 16px; }
  .actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
  .actions + .muted { margin-top: 10px; }
 

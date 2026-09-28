@@ -17,6 +17,7 @@
     "windows": [
       {
         "label": "main",
+        "url": "spotify",
         "title": "TipTune",
         "width": 1100,
         "height": 750,

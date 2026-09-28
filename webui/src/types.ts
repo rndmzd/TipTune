@@ -16,6 +16,8 @@ export type QueueState = {
   enabled?: boolean;
   source?: string;
   paused?: boolean;
+  starting?: boolean;
+  playback_error?: string | null;
   playback_device_name?: string;
   playback_device_id?: string;
   playback_progress_ms?: number | null;

@@ -713,7 +713,12 @@ export function DashboardPage() {
             </div>
           ) : null}
 
-          {showPausedBanner ? (
+          {queueState?.playback_error ? (
+            <div className="callout calloutDanger" role="alert">
+              <div className="calloutTitle">Spotify playback did not start — queue paused</div>
+              <div className="muted">{queueState.playback_error}</div>
+            </div>
+          ) : showPausedBanner ? (
             <div className="callout calloutDanger">
               <div className="calloutTitle">Queue is paused</div>
               <div className="muted">Song queue is paused, but the currently playing song will finish first.</div>
@@ -733,7 +738,7 @@ export function DashboardPage() {
                       : 'pill pillSuccess'
               }
             >
-              {status === 'loading' ? 'Loading…' : status === 'error' ? 'Error' : paused ? 'Paused' : 'Running'}
+              {status === 'loading' ? 'Loading…' : status === 'error' ? 'Error' : paused ? 'Paused' : queueState?.starting ? 'Starting playback…' : 'Running'}
             </span>
             <button
               type="button"

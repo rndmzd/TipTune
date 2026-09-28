@@ -8,6 +8,7 @@ import { HelpPage } from './pages/HelpPage';
 import { EventsPage } from './pages/EventsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { StatsPage } from './pages/StatsPage';
+import { SpotifyPage } from './pages/SpotifyPage';
 import { apiJson, sseUrl } from './api';
 import { PlaybackProvider } from './components/PlaybackContext';
 
@@ -357,6 +358,7 @@ export function App() {
   return (
     <PlaybackProvider>
       <Routes>
+        <Route path="/spotify" element={<SpotifyPage />} />
         <Route path="/" element={<GatedRoute element={<DashboardPage />} />} />
         <Route path="/settings" element={<GatedRoute element={<SettingsPage />} />} />
         <Route path="/events" element={<GatedRoute element={<EventsPage />} />} />

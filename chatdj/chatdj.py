@@ -550,6 +550,32 @@ class AutoDJ:
             return False
 
 
+    def start_track(self, track_uri: str) -> bool:
+        """Start a request and confirm the device actually began playing it."""
+        self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+        for attempt in range(11):
+            if attempt:
+                time.sleep(0.5)
+            playback = self.spotify.current_playback() or {}
+            item = playback.get('item') or {}
+            device = playback.get('device') or {}
+            # Spotify may relink a track to an equivalent available recording.
+            original_uri = (item.get('linked_from') or {}).get('uri')
+            if (
+                playback.get('is_playing')
+                and track_uri in (item.get('uri'), original_uri)
+                and (not self.playback_device or device.get('id') == self.playback_device)
+            ):
+                self.now_playing_track_uri = item.get('uri') or track_uri
+                self._last_start_playback_ts = time.time()
+                return True
+        logger.warning(
+            "spotify.playback.unconfirmed",
+            message="Spotify accepted the request but did not start the track on the selected device; keeping the request queued.",
+            data={"track_uri": track_uri, "device_id": self.playback_device},
+        )
+        return False
+
     def clear_playback_context(self, persist: bool = True) -> bool:
         try:
             logger.info("Clearing playback context.")
@@ -565,9 +591,11 @@ class AutoDJ:
                 pass
 
             try:
-                self.spotify.pause_playback(device_id=self.playback_device)
-                logger.info("queue.clear.pause",
-                            message="Playback paused.")
+                playback = self.spotify.current_playback() or {}
+                if playback.get('is_playing'):
+                    self.spotify.pause_playback(device_id=self.playback_device)
+                    logger.info("queue.clear.pause",
+                                message="Playback paused.")
             except SpotifyException as exc:
                 logger.error("queue.clear.error",
                             message=f"Error pausing playback: {exc}")

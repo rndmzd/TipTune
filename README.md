@@ -29,7 +29,7 @@ This repo contains:
 
 ## First-run setup (recommended path)
 
-When TipTune starts, it serves a local UI and will redirect you to a **Setup Wizard** until setup is marked complete.
+The desktop app opens **Spotify** at startup. Sign in to the web player, then use **Setup Wizard** in the top navigation to configure TipTune. The player keeps its login between launches, subject to Spotify session expiry. Dashboard pages redirect to the wizard until setup is complete.
 
 The Setup Wizard walks you through:
 
@@ -52,6 +52,8 @@ TipTune runs a local HTTP server (default `http://127.0.0.1:8765`). The desktop 
 
 Pages:
 
+- `/spotify`
+  - Embedded Spotify web player (desktop), loaded at startup with a persistent login profile
 - `/` and `/settings`
   - Full configuration editor (including secrets fields)
   - Playback device selection
