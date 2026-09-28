@@ -474,6 +474,8 @@ This page shows recent processing results for song requests.
 
 You can **clear all history** using the clear button.
 
+TipTune saves the latest **1,000 request entries** by default. Set **Settings → General → Request history size** to change the capacity (`General.request_history_size` in `config.ini`). Use a positive whole number. Saving applies the new capacity immediately; lowering it removes the oldest excess entries. History and Stats can load up to this capacity, and Export includes all retained entries.
+
 Typical statuses:
 
 - `added`

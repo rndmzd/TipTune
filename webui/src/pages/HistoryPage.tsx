@@ -133,7 +133,7 @@ function HistoryCard(props: { item: any }) {
   );
 }
 
-type HistoryRecentResp = { ok: true; history: any[] };
+type HistoryRecentResp = { ok: true; history: any[]; history_size: number };
 
 function makeExportFilename(): string {
   const d = new Date();
@@ -158,14 +158,18 @@ export function HistoryPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [err, setErr] = useState<string>('');
   const [items, setItems] = useState<any[]>([]);
-  const [limit, setLimit] = useState<number>(100);
+  const [limit, setLimit] = useState<number | null>(null);
+  const [historySize, setHistorySize] = useState<number>(1000);
   const [exporting, setExporting] = useState<boolean>(false);
 
   async function refresh() {
     setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
     setErr('');
     try {
-      const j = await apiJson<HistoryRecentResp>(`/api/history/recent?limit=${encodeURIComponent(String(limit))}`);
+      const query = limit == null ? '' : `?limit=${encodeURIComponent(String(limit))}`;
+      const j = await apiJson<HistoryRecentResp>(`/api/history/recent${query}`);
+      setHistorySize(j.history_size);
+      setLimit(limit == null ? j.history_size : Math.max(1, Math.min(limit, j.history_size)));
       const hist = Array.isArray(j?.history) ? j.history : [];
       setItems(hist.slice().reverse());
       setStatus('ok');
@@ -196,7 +200,7 @@ export function HistoryPage() {
     setErr('');
     setExporting(true);
     try {
-      const j = await apiJson<HistoryRecentResp>(`/api/history/recent?limit=500`);
+      const j = await apiJson<HistoryRecentResp>('/api/history/recent');
       const hist = Array.isArray(j?.history) ? j.history : [];
       downloadJson(makeExportFilename(), { exported_at: new Date().toISOString(), history: hist });
     } catch (e: any) {
@@ -235,9 +239,9 @@ export function HistoryPage() {
         <input
           type="number"
           min={1}
-          max={500}
-          value={String(limit)}
-          onChange={(e) => setLimit(Number.parseInt(e.target.value || '0', 10) || 100)}
+          max={historySize}
+          value={String(limit ?? historySize)}
+          onChange={(e) => setLimit(Math.max(1, Math.min(historySize, Number.parseInt(e.target.value || '0', 10) || historySize)))}
           style={{ width: 110, marginLeft: 8 }}
         />
         {status === 'loading' ? <span className="muted" style={{ marginLeft: 10 }}>Loading…</span> : null}

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiJson } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
 
-type HistoryRecentResp = { ok: true; history: any[] };
+type HistoryRecentResp = { ok: true; history: any[]; history_size: number };
 
 type SortDir = 'asc' | 'desc';
 
@@ -116,7 +116,8 @@ export function StatsPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [err, setErr] = useState<string>('');
   const [items, setItems] = useState<any[]>([]);
-  const [limit, setLimit] = useState<number>(500);
+  const [limit, setLimit] = useState<number | null>(null);
+  const [historySize, setHistorySize] = useState<number>(1000);
 
   const [timeWindow, setTimeWindow] = useState<'24h' | '7d' | '30d' | 'all'>('30d');
   const [statusFilter, setStatusFilter] = useState<'all' | 'added' | 'failed'>('all');
@@ -132,7 +133,10 @@ export function StatsPage() {
     setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
     setErr('');
     try {
-      const j = await apiJson<HistoryRecentResp>(`/api/history/recent?limit=${encodeURIComponent(String(limit))}`);
+      const query = limit == null ? '' : `?limit=${encodeURIComponent(String(limit))}`;
+      const j = await apiJson<HistoryRecentResp>(`/api/history/recent${query}`);
+      setHistorySize(j.history_size);
+      setLimit(limit == null ? j.history_size : Math.max(1, Math.min(limit, j.history_size)));
       const hist = Array.isArray(j?.history) ? j.history : [];
       setItems(hist);
       setStatus('ok');
@@ -448,7 +452,7 @@ export function StatsPage() {
         <button type="button" onClick={() => refresh()}>
           Refresh
         </button>
-        <span className="muted">Aggregated from saved request history (up to 500 items).</span>
+        <span className="muted">Aggregated from saved request history (up to {historySize.toLocaleString()} items).</span>
       </div>
 
       <div className="row" style={{ marginTop: 12, alignItems: 'flex-end' }}>
@@ -481,9 +485,9 @@ export function StatsPage() {
           <input
             type="number"
             min={1}
-            max={500}
-            value={String(limit)}
-            onChange={(e) => setLimit(Number.parseInt(e.target.value || '0', 10) || 500)}
+            max={historySize}
+            value={String(limit ?? historySize)}
+            onChange={(e) => setLimit(Math.max(1, Math.min(historySize, Number.parseInt(e.target.value || '0', 10) || historySize)))}
           />
         </div>
 

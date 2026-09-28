@@ -28,6 +28,7 @@ multi_request_tips = true
 allow_source_override_in_request_message = true
 skip_song_cost = 51
 request_overlay_duration = 10
+request_history_size = 1000
 debug_log_to_file = false
 debug_log_path =
 

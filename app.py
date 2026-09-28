@@ -39,6 +39,14 @@ logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
 
 
+def _request_history_size() -> int:
+    try:
+        size = config.getint('General', 'request_history_size', fallback=1000)
+        return size if size > 0 else 1000
+    except (ValueError, configparser.Error):
+        return 1000
+
+
 def _prepend_bundled_bin_to_path() -> None:
     try:
         d = get_bundled_bin_dir()
@@ -919,13 +927,14 @@ class WebUI:
         return web.json_response({"ok": True})
 
     async def _api_history_recent(self, request: web.Request) -> web.Response:
-        limit_raw = request.query.get('limit', '50')
+        history_size = self._service._request_history_recent_max
+        limit_raw = request.query.get('limit', str(history_size))
         try:
-            limit = max(1, min(500, int(limit_raw)))
+            limit = max(1, min(history_size, int(limit_raw)))
         except Exception:
-            limit = 50
+            limit = history_size
         history = await self._service.get_recent_request_history(limit=limit)
-        return web.json_response({"ok": True, "history": history})
+        return web.json_response({"ok": True, "history": history, "history_size": history_size})
 
     async def _api_history_clear(self, _request: web.Request) -> web.Response:
         try:
@@ -1147,7 +1156,7 @@ class SongRequestService:
         self._events_subscribers: set[asyncio.Queue] = set()
 
         self._request_history_recent: list[dict] = []
-        self._request_history_recent_max = 500
+        self._request_history_recent_max = _request_history_size()
 
         cache_dir = get_cache_dir()
         ensure_dir(cache_dir)
@@ -4039,6 +4048,7 @@ class SongRequestService:
                 else:
                     cfg[section][key] = val
         general_cfg = cfg.setdefault("General", {})
+        general_cfg['request_history_size'] = str(self._request_history_recent_max)
         if not str(general_cfg.get("debug_log_path", "")).strip():
             general_cfg["debug_log_path"] = str(_default_log_path())
         return cfg
@@ -4059,6 +4069,7 @@ class SongRequestService:
                 "multi_request_tips",
                 "allow_source_override_in_request_message",
                 "request_overlay_duration",
+                "request_history_size",
                 "setup_complete",
                 "auto_check_updates",
                 "show_debug_data",
@@ -4082,6 +4093,14 @@ class SongRequestService:
                     continue
 
                 value_str = str(value)
+                if section == 'General' and key == 'request_history_size':
+                    try:
+                        history_size = int(value_str)
+                        if history_size < 1:
+                            raise ValueError
+                    except ValueError:
+                        return (False, "Request history size must be a positive whole number.")
+                    value_str = str(history_size)
                 if _is_secret_field(section, key) and value_str.strip() == "":
                     continue
 
@@ -4099,6 +4118,14 @@ class SongRequestService:
             config.read(config_path)
         except Exception:
             pass
+
+        if 'request_history_size' in updates.get('General', {}):
+            self._request_history_recent_max = _request_history_size()
+            self._request_history_recent = self._request_history_recent[-self._request_history_recent_max:]
+            try:
+                self._persist_request_history_to_disk()
+            except Exception as exc:
+                return (False, f"History size saved, but failed to persist trimmed history: {exc}")
 
         try:
             _setup_logging()

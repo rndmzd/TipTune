@@ -148,6 +148,7 @@ function tooltip(section: string, key: string) {
     'General.allow_source_override_in_request_message': 'When enabled, users can include the word “spotify” or “youtube” in their request message to override the selected Music source for that request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
+    'General.request_history_size': 'Maximum number of song request results to save. Default: 1,000 entries.',
     'General.show_debug_data': 'Show extra debug information in the dashboard (like YouTube playback details).',
     'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
     'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
@@ -404,6 +405,12 @@ export function SettingsPage() {
   }, [baselineCfgSig, cfg, secrets]);
 
   async function saveSettings() {
+    const historySizeRaw = cfg.General?.request_history_size ?? '1000';
+    const historySize = Number(historySizeRaw);
+    if (!/^\d+$/.test(historySizeRaw.trim()) || !Number.isSafeInteger(historySize) || historySize < 1) {
+      setStatus('Error: Request history size must be a positive whole number.');
+      return;
+    }
     setStatus('Saving...');
 
     const payload: Record<string, Record<string, string>> = {
@@ -432,6 +439,7 @@ export function SettingsPage() {
         allow_source_override_in_request_message: allowSourceOverrideInRequestMessageEnabled ? 'true' : 'false',
         skip_song_cost: v('General', 'skip_song_cost'),
         request_overlay_duration: v('General', 'request_overlay_duration'),
+        request_history_size: String(historySize),
         auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
         show_debug_data: showDebugDataEnabled ? 'true' : 'false',
         debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
@@ -521,6 +529,20 @@ export function SettingsPage() {
 
         <div className="card">
           <h2>General</h2>
+
+          <label htmlFor="request-history-size" title={tooltip('General', 'request_history_size')}>Request history size</label>
+          <input
+            id="request-history-size"
+            type="number"
+            min={1}
+            step={1}
+            value={cfg.General?.request_history_size ?? '1000'}
+            aria-describedby="request-history-size-help"
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_history_size: e.target.value } }))}
+          />
+          <p id="request-history-size-help" className="muted">
+            Maximum saved request entries (default: 1,000). Lowering this removes the oldest entries when you save.
+          </p>
 
           <label title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>
           <input
