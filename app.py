@@ -1191,6 +1191,8 @@ class SongRequestService:
         self._queue_items: list[dict] = []
         self._queue_paused: bool = False
         self._queue_playback_paused: bool = False
+        self._queue_spotify_inactive_confirm_uri: Optional[str] = None
+        self._queue_spotify_inactive_confirm_count: int = 0
         self._queue_now_playing: Optional[dict] = None
         self._queue_started_ts: Optional[float] = None
 
@@ -1364,6 +1366,8 @@ class SongRequestService:
             nxt = self._queue_items.pop(0)
             self._queue_now_playing = nxt
             self._queue_playback_paused = False
+            self._queue_spotify_inactive_confirm_uri = None
+            self._queue_spotify_inactive_confirm_count = 0
             self._queue_started_ts = time.time()
 
         try:
@@ -1884,6 +1888,8 @@ class SongRequestService:
         async with self._queue_lock:
             self._queue_now_playing = None
             self._queue_playback_paused = False
+            self._queue_spotify_inactive_confirm_uri = None
+            self._queue_spotify_inactive_confirm_count = 0
             self._queue_started_ts = None
 
         try:
@@ -2316,11 +2322,16 @@ class SongRequestService:
                         now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
                         started_ts = self._queue_started_ts
 
+                    now_src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source()) if now_item else self._active_source()
+                    if paused or playback_paused or (not now_item) or now_src != 'spotify':
+                        self._queue_spotify_inactive_confirm_uri = None
+                        self._queue_spotify_inactive_confirm_count = 0
+
                     if (
                         (not paused)
                         and (not playback_paused)
                         and now_item
-                        and _normalize_music_source(now_item.get('source'), default=self._active_source()) == 'spotify'
+                        and now_src == 'spotify'
                         and getattr(self.actions, 'chatdj_enabled', False)
                         and hasattr(self.actions, 'auto_dj')
                         and started_ts is not None
@@ -2384,16 +2395,33 @@ class SongRequestService:
                                     # after we start playback to avoid stalling the queue.
                                     if progress_ms < 15000 and elapsed_since_start < 20.0:
                                         return True
-                                    if progress_ms >= 15000:
-                                        return True
 
                                 return False
                             except Exception:
                                 return False
 
                         is_active = await loop.run_in_executor(None, _is_playback_active_for_item)
-                        if not bool(is_active):
-                            await self.advance_queue()
+                        if bool(is_active):
+                            self._queue_spotify_inactive_confirm_uri = None
+                            self._queue_spotify_inactive_confirm_count = 0
+                        else:
+                            now_uri = self._normalize_spotify_track_uri((now_item or {}).get('uri')) if isinstance(now_item, dict) else None
+                            if isinstance(now_uri, str) and now_uri:
+                                if self._queue_spotify_inactive_confirm_uri == now_uri:
+                                    self._queue_spotify_inactive_confirm_count += 1
+                                else:
+                                    self._queue_spotify_inactive_confirm_uri = now_uri
+                                    self._queue_spotify_inactive_confirm_count = 1
+                            else:
+                                self._queue_spotify_inactive_confirm_uri = None
+                                self._queue_spotify_inactive_confirm_count += 1
+
+                            # Require 2 consecutive inactive checks (~10s) to avoid
+                            # transient API glitches causing premature queue advance.
+                            if self._queue_spotify_inactive_confirm_count >= 2:
+                                self._queue_spotify_inactive_confirm_uri = None
+                                self._queue_spotify_inactive_confirm_count = 0
+                                await self.advance_queue()
 
                     if (
                         (not paused)
