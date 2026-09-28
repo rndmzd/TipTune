@@ -1196,6 +1196,8 @@ class SongRequestService:
         self._queue_spotify_inactive_confirm_count: int = 0
         self._queue_now_playing: Optional[dict] = None
         self._queue_started_ts: Optional[float] = None
+        self._queue_starting: bool = False
+        self._queue_error: Optional[str] = None
 
         self._queue_path: Path = cache_dir / 'queue_state.json'
         self._load_queue_state_from_disk()
@@ -1358,121 +1360,82 @@ class SongRequestService:
 
     async def _queue_start_next_if_needed(self) -> bool:
         async with self._queue_lock:
-            if self._queue_paused:
+            if self._queue_paused or self._queue_starting:
                 return False
-            if self._queue_now_playing is not None:
+            if self._queue_now_playing is not None or not self._queue_items:
                 return False
-            if not self._queue_items:
-                return False
-            nxt = self._queue_items.pop(0)
-            self._queue_now_playing = nxt
-            self._queue_playback_paused = False
             self._queue_spotify_inactive_confirm_uri = None
             self._queue_spotify_inactive_confirm_count = 0
-            self._queue_started_ts = time.time()
+            nxt = self._queue_items[0]
+            src = _normalize_music_source(nxt.get('source'), default=self._active_source())
+            if src == 'youtube':
+                self._queue_items.pop(0)
+                self._queue_now_playing = nxt
+                self._queue_playback_paused = False
+                self._queue_started_ts = time.time()
+            else:
+                # Reserve the attempt, but keep the request visibly queued until
+                # Spotify confirms playback. Other callers must not start it again.
+                self._queue_starting = True
 
-        try:
-            self._persist_queue_state_to_disk()
-        except Exception:
-            pass
-
-        src = _normalize_music_source((nxt or {}).get('source'), default=self._active_source())
         if src == 'youtube':
             try:
                 enriched = await self._yt_enrich_item(nxt)
                 enriched['source'] = 'youtube'
                 async with self._queue_lock:
-                    if self._queue_now_playing is not None:
+                    if self._queue_now_playing is nxt:
                         self._queue_now_playing = enriched
-                try:
-                    self._persist_queue_state_to_disk()
-                except Exception:
-                    pass
             except Exception:
                 pass
+            self._persist_queue_state_to_disk()
             return True
 
-        if not getattr(self.actions, 'chatdj_enabled', False):
-            async with self._queue_lock:
-                self._queue_now_playing = None
-                self._queue_started_ts = None
-                self._queue_items.insert(0, nxt)
-            try:
-                self._persist_queue_state_to_disk()
-            except Exception:
-                pass
-            return False
-        if not hasattr(self.actions, 'auto_dj'):
-            async with self._queue_lock:
-                self._queue_now_playing = None
-                self._queue_started_ts = None
-                self._queue_items.insert(0, nxt)
-            try:
-                self._persist_queue_state_to_disk()
-            except Exception:
-                pass
-            return False
-
-        uri = nxt.get('uri') if isinstance(nxt, dict) else None
-        track_uri = self._normalize_spotify_track_uri(uri) if isinstance(uri, str) else None
-        if not track_uri:
-            async with self._queue_lock:
-                self._queue_now_playing = None
-                self._queue_started_ts = None
-            try:
-                self._persist_queue_state_to_disk()
-            except Exception:
-                pass
-            return False
-
-        loop = asyncio.get_running_loop()
-
-        def _do_start() -> bool:
-            try:
-                try:
-                    self.actions.auto_dj.clear_playback_context(persist=False)
-                except Exception:
-                    pass
-                try:
-                    self.actions.auto_dj.now_playing_track_uri = track_uri
-                except Exception:
-                    pass
-                self.actions.auto_dj.spotify.start_playback(device_id=getattr(self.actions.auto_dj, 'playback_device', None), uris=[track_uri])
-                try:
-                    self.actions.auto_dj._last_start_playback_ts = time.time()
-                except Exception:
-                    pass
-                return True
-            except Exception:
-                return False
-
+        error = None
+        ok = False
         try:
-            ok = await asyncio.wait_for(loop.run_in_executor(None, _do_start), timeout=8)
-        except asyncio.TimeoutError:
-            ok = False
-        except Exception:
-            ok = False
-
-        if not ok:
+            track_uri = self._normalize_spotify_track_uri(nxt.get('uri'))
+            if not track_uri:
+                error = "The queued Spotify track is invalid. Remove it, then resume the queue."
+            elif not getattr(self.actions, 'chatdj_enabled', False) or not hasattr(self.actions, 'auto_dj'):
+                error = "Spotify is not connected. Connect Spotify in Settings, then select Resume Queue."
+            else:
+                # Await the actual operation: timing out just the executor future
+                # would leave a live Spotify command behind and allow overlapping retries.
+                loop = asyncio.get_running_loop()
+                ok = await loop.run_in_executor(None, self.actions.auto_dj.start_track, track_uri)
+                if not ok:
+                    error = (
+                        "Spotify accepted the request but did not start playback on the selected device. "
+                        "The song is still queued. Try opening Spotify Web Player and selecting it "
+                        "as the playback device in Settings, then select Resume Queue."
+                    )
+        except Exception as exc:
+            logger.exception("spotify.playback.start.error", exc=exc,
+                             message="Failed to start requested Spotify track; pausing the queue",
+                             data={"track_uri": nxt.get('uri')})
+            error = (
+                "Spotify could not start the requested song. The song is still queued. "
+                "Check the Spotify connection and playback device in Settings, then select Resume Queue."
+            )
+        finally:
             async with self._queue_lock:
-                self._queue_now_playing = None
-                self._queue_started_ts = None
-                self._queue_items.insert(0, nxt)
-            try:
-                self._persist_queue_state_to_disk()
-            except Exception:
-                pass
-            return False
-
-        async with self._queue_lock:
-            if self._queue_now_playing is not None:
-                self._queue_now_playing['source'] = 'spotify'
-                self._queue_now_playing['uri'] = track_uri
-        try:
+                self._queue_starting = False
+                if ok:
+                    # Remove this exact request, preserving concurrent additions/reordering
+                    # and duplicate requests for the same URI.
+                    for index, item in enumerate(self._queue_items):
+                        if item is nxt:
+                            self._queue_items.pop(index)
+                            break
+                    self._queue_now_playing = dict(nxt, source='spotify', uri=track_uri)
+                    self._queue_playback_paused = False
+                    self._queue_started_ts = time.time()
+                    self._queue_error = None
+                else:
+                    self._queue_paused = True
+                    self._queue_error = error or "Playback was interrupted. Select Resume Queue to retry."
             self._persist_queue_state_to_disk()
-        except Exception:
-            pass
-        return True
+        return bool(ok)
 
     def _persist_yt_queue_state_to_disk(self) -> None:
         try:
@@ -1502,6 +1465,8 @@ class SongRequestService:
             now_item = payload.get('now_playing_item')
             paused = payload.get('paused')
             playback_paused = payload.get('playback_paused')
+            error = payload.get('playback_error')
+            self._queue_error = error if isinstance(error, str) else None
             started_ts = payload.get('started_ts')
 
             if isinstance(queued, list):
@@ -1527,6 +1492,7 @@ class SongRequestService:
                 'ts': time.time(),
                 'paused': bool(self._queue_paused),
                 'playback_paused': bool(self._queue_playback_paused),
+                'playback_error': self._queue_error,
                 'started_ts': self._queue_started_ts,
                 'now_playing_item': self._queue_now_playing,
                 'queued_items': self._queue_items,
@@ -2358,7 +2324,8 @@ class SongRequestService:
                                     return False
 
                                 item_uri = item.get('uri')
-                                if not isinstance(item_uri, str) or item_uri != track_uri:
+                                original_uri = (item.get('linked_from') or {}).get('uri')
+                                if track_uri not in (item_uri, original_uri):
                                     return False
 
                                 is_playing = bool(pb.get('is_playing'))
@@ -3207,6 +3174,8 @@ class SongRequestService:
             queued_raw = list(self._queue_items)
             now_raw = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
             paused = bool(self._queue_paused)
+            playback_error = self._queue_error
+            starting = self._queue_starting
 
         now_item: Optional[dict] = None
         if isinstance(now_raw, dict):
@@ -3264,6 +3233,8 @@ class SongRequestService:
             "enabled": True,
             "source": source,
             "paused": paused,
+            "playback_error": playback_error,
+            "starting": starting,
             "playback_progress_ms": playback_progress_ms,
             "playback_is_playing": playback_is_playing,
             "playback_track_uri": playback_track_uri,
@@ -3469,12 +3440,17 @@ class SongRequestService:
 
     async def resume_queue(self) -> bool:
         async with self._queue_lock:
+            if self._queue_starting:
+                return False
             self._queue_paused = False
+            self._queue_error = None
         try:
             self._persist_queue_state_to_disk()
         except Exception:
             pass
         await self._queue_start_next_if_needed()
+        if self._queue_error:
+            return False
         try:
             await self.actions.trigger_queue_state_overlay("Song request queue resumed")
         except Exception:
@@ -3558,6 +3534,10 @@ class SongRequestService:
     async def resume_playback(self) -> bool:
         async with self._queue_lock:
             now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
+            has_queued_items = bool(self._queue_items)
+
+        if now_item is None and has_queued_items:
+            return await self._queue_start_next_if_needed()
 
         src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
         if src == 'youtube':
@@ -3580,9 +3560,17 @@ class SongRequestService:
             def _do_resume() -> bool:
                 try:
                     device_id = getattr(self.actions.auto_dj, 'playback_device', None)
+                    playback = self.actions.auto_dj.spotify.current_playback() or {}
+                    if not playback.get('item') and now_item:
+                        track_uri = self._normalize_spotify_track_uri(now_item.get('uri'))
+                        return bool(track_uri and self.actions.auto_dj.start_track(track_uri))
+                    if not playback.get('item'):
+                        return False
                     self.actions.auto_dj.spotify.start_playback(device_id=device_id)
                     return True
-                except Exception:
+                except Exception as exc:
+                    logger.exception("spotify.playback.resume.error", exc=exc,
+                                     message="Failed to resume Spotify playback")
                     return False
 
             try:

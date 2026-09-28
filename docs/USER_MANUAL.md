@@ -11,6 +11,7 @@ TipTune turns tip events into a **music request queue** (Spotify and/or YouTube)
 - [Quick mental model](#quick-mental-model)
 - [Install & launch](#install--launch)
 - [Web UI pages](#web-ui-pages)
+- [Spotify web player](#spotify-web-player-in-the-desktop-app)
 - [Setup Wizard](#setup-wizard)
 - [How tips become actions](#how-tips-become-actions)
 - [Dashboard (Queue)](#dashboard-queue)
@@ -116,7 +117,7 @@ Queue state is persisted under the TipTune cache directory. Older persisted form
 - Download the latest build from GitHub Releases.
 - Launch TipTune.
 
-TipTune starts the service automatically and opens the UI.
+TipTune starts the service automatically and opens the Spotify page. Sign in to the player and use **Setup Wizard** in the top navigation to configure TipTune on first launch.
 
 ### From source (developers/power users)
 
@@ -154,6 +155,8 @@ The UI is served from a local HTTP server (default `http://127.0.0.1:8765`).
 
 - `/`
   - Dashboard (queue + now playing)
+- `/spotify`
+  - Spotify web player, automatically opened in the desktop app
 - `/settings`
   - Full settings editor (including secrets)
   - Playback device selection
@@ -686,3 +689,12 @@ If the message is blank, TipTune will fail the request and may warn that the not
 - Use Settings → Refresh OBS status.
 
 ---
+## Spotify web player in the desktop app
+
+The desktop app opens its Spotify page at startup. Use **Spotify** in the top navigation to return to it. The player stays loaded while you use the dashboard or other pages.
+
+Sign in directly on Spotify's page with the same account you connected during TipTune setup. Spotify API credentials authorize API access; they cannot sign you into Spotify's website. The desktop app keeps the player's cookies and local storage between launches. Spotify can still expire or revoke a session, and signing out requires another login.
+
+After signing in, select the embedded **Web Player** in TipTune's **Settings → playback device** list. Start a song in the player if needed to make the device available, then resume your request queue. The app opens the player automatically but does not start music just by launching.
+
+**Reload player** returns to Spotify's home page without clearing your login. Login popups belong to Spotify; closing one does not close TipTune. Some login providers may restrict embedded browsers; Spotify's direct email login is available on its sign-in page. If your machine cannot play protected content in its embedded browser, use Spotify in a supported external browser and select that device in Settings.

@@ -51,6 +51,9 @@ export function HeaderBar(props: {
         {showMiniPlayer ? <MiniPlayer /> : null}
       </div>
       <div className="headerNav">
+        <Link className={`navBtn${isActivePath('/spotify') ? ' navBtnActive' : ''}`} to="/spotify">
+          Spotify
+        </Link>
         {showGatedNav ? (
           <>
             <Link className={`navBtn${isActivePath('/') ? ' navBtnActive' : ''}`} to="/?dashboard=1">

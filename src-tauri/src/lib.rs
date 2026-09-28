@@ -17,6 +17,9 @@ use std::process::{Command, Stdio};
 struct SidecarState(Mutex<Option<CommandChild>>);
 
 #[cfg(not(mobile))]
+mod spotify_player;
+
+#[cfg(not(mobile))]
 fn kill_sidecar(app: &tauri::AppHandle) {
     if let Ok(mut guard) = app.state::<SidecarState>().0.lock() {
         if let Some(child) = guard.take() {
@@ -40,7 +43,14 @@ fn kill_sidecar(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(not(mobile))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        spotify_player::spotify_player_show,
+        spotify_player::spotify_player_hide,
+        spotify_player::spotify_player_reload,
+    ]);
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -122,7 +132,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             #[cfg(not(mobile))]
             {
-                if matches!(event, WindowEvent::CloseRequested { .. }) {
+                if window.label() == "main" && matches!(event, WindowEvent::CloseRequested { .. }) {
                     kill_sidecar(&window.app_handle());
                     window.app_handle().exit(0);
                 }

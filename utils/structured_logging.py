@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import socket
 import threading
 from typing import Any, Dict, Union
@@ -51,6 +52,9 @@ class StructuredLogFormatter(logging.Formatter):
 
         # Handle structured logging
         if isinstance(record.msg, dict):
+            for key in ("event_type", "message"):
+                if key in record.msg:
+                    log_entry[key] = record.msg[key]
             if "event" in record.msg:
                 log_entry["event"] = record.msg["event"]
             if "data" in record.msg:
@@ -75,7 +79,9 @@ class StructuredLogFormatter(logging.Formatter):
         if hasattr(record, "extra_fields"):
             log_entry.update(record.extra_fields)
 
-        return json.dumps(log_entry, default=_json_default)
+        output = json.dumps(log_entry, default=_json_default)
+        # Spotipy DEBUG messages include the Authorization header.
+        return re.sub(r'(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*', 'Bearer [REDACTED]', output)
 
 class StructuredLogger:
     """Wrapper for standardized structured logging across the application."""
