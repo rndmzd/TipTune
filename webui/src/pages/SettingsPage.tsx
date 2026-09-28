@@ -133,7 +133,7 @@ function tooltip(section: string, key: string) {
     'Events API.url': 'Endpoint TipTune will call to send event notifications (e.g. request accepted/played). Leave blank to disable events publishing.',
     'Events API.max_requests_per_minute': 'Rate limit for outbound Events API calls to avoid spamming the endpoint.',
     'OpenAI.api_key': 'OpenAI API key used to enable AI features (such as ChatDJ). Leave blank to keep the currently saved key.',
-    'OpenAI.model': 'OpenAI model name to use for AI features (for example gpt-5-mini).',
+    'OpenAI.model': 'OpenAI model for song requests. Blank uses gpt-6-luna; gpt-6-sol and gpt-6-astra are also supported. Requires Responses Structured Outputs and API account access.',
     'Spotify.client_id': 'Spotify application Client ID from your Spotify Developer Dashboard.',
     'Spotify.redirect_url': 'Redirect/callback URL registered in your Spotify app. Must match exactly for authentication to work.',
     'OBS.enabled': 'Enable or disable OBS integration for scene/overlay control.',

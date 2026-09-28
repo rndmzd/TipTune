@@ -261,20 +261,24 @@ Example:
 For song requests, TipTune reads the tip note/message text.
 
 - If the message is **blank**, the request is marked failed and a warning overlay can be shown.
-- If the message length is **very short** (under 3 characters), TipTune wraps it in a hint string to improve extraction.
+- Short titles (including one or two characters) and meaningful punctuation are preserved.
 
 Extraction behavior:
 
 - If the message contains a **Spotify track URI** (`spotify:track:...`) or a **Spotify track link** (`https://open.spotify.com/track/...`) and Spotify is available, TipTune can use that directly.
 - If YouTube is the active source and the message contains a YouTube URL, TipTune can use that directly.
-- Otherwise TipTune uses the **OpenAI Responses API** (if configured) to extract `request_count` song requests.
-- If an extracted song has no artist and Google keys are configured, TipTune can attempt an artist lookup using **Google Custom Search** + OpenAI.
+- Otherwise TipTune uses the **OpenAI Responses API with strict Structured Outputs** to extract **up to** `request_count` songs in message order. It never fills unused slots with invented songs.
+- Mixed Spotify links and text are processed together. Equivalent links are deduplicated. Successful requests can continue when another lookup fails.
+- Spotify is searched first. Exact title-and-artist matches are accepted directly; otherwise the model chooses the best relevant match from actual Spotify candidates. Requested versions require supporting catalog metadata; studio recordings are preferred when no version is specified. Explicit artist requests are not replaced by unrelated cover or tribute artists. Very short titles must match the catalog title exactly. If no eligible track is found, the request fails instead of silently substituting a different title or recording.
+- If Spotify finds no plausible match and Google keys are configured, TipTune uses up to three **Google Custom Search** results as evidence for one further Spotify search. Google results cannot be queued directly.
+- Missing artists are filled from the selected Spotify track. Best-effort matching can still choose the wrong interpretation of an ambiguous title; including the artist or a track link is more precise.
+- Unrelated chatter, model/API errors, and unmatched songs are recorded as failures rather than searched as entire messages. Only successful queue insertions are recorded as added.
 
 ### Market availability check
 
 After resolving a Spotify URI, TipTune checks market availability.
 
-- If the track is not available in the expected market, TipTune records a failure (the current messaging is “not available in US market”).
+- Searches and the final track check use the Spotify account market, falling back to US when the account country is unavailable. Unplayable/restricted tracks and failed availability lookups are rejected.
 
 ---
 
@@ -380,7 +384,7 @@ Steps:
 - `OpenAI.api_key`
   - Enables AI-assisted parsing.
 - `OpenAI.model`
-  - Model name (example: `gpt-5-mini`).
+  - Model name (default for new or blank settings: `gpt-6-luna`). Saved choices are preserved. `gpt-6-sol` and `gpt-6-astra` are also supported when available to your API account. The model must support Responses Structured Outputs.
 
 ### Spotify
 
@@ -411,6 +415,8 @@ When enabled, Settings provides:
 - **Test overlays**
 
 ### Search (Google Custom Search)
+
+Optional fallback when Spotify cannot identify a plausible match. Normal requests search Spotify first.
 
 Used to improve song metadata when the artist is missing.
 

@@ -1,7 +1,8 @@
 httpx
-openai
+httpx2>=2.12.0,<3
+openai>=3.19.2,<4
 requests
-pydantic
+pydantic>=2.12.5,<3
 rapidfuzz
 spotipy
 simpleobsws
