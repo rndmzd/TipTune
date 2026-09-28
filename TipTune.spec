@@ -9,6 +9,7 @@ block_cipher = None
 hiddenimports = []
 hiddenimports += collect_submodules('aiohttp')
 hiddenimports += collect_submodules('httpx')
+hiddenimports += collect_submodules('httpx2')
 hiddenimports += collect_submodules('spotipy')
 hiddenimports += collect_submodules('simpleobsws')
 

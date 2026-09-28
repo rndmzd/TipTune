@@ -119,7 +119,9 @@ TipTune uses these sections/keys (see `config.ini.example`):
 - `[Music]` (required)
   - `source`
 - `[General]` (required)
-  - `song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
+  - `song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `request_history_size`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
+
+Request history retains the latest 1,000 entries by default. Change **Settings → General → Request history size** (or `General.request_history_size`) to any positive whole number. Changes apply when saved; lowering the size removes the oldest excess entries. History, exports, and Stats use the configured capacity.
 
 ### Multi-song tips
 

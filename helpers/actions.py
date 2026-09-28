@@ -1,7 +1,8 @@
 import asyncio
 from typing import List, Optional
 
-from chatdj.chatdj import SongRequest
+from chatdj.chatdj import SongRequest, SongExtractionError
+from chatdj.song_requests import DEFAULT_MODEL, account_market, playable
 from utils.structured_logging import get_structured_logger
 
 logger = get_structured_logger('tiptune.helpers.actions')
@@ -45,7 +46,7 @@ class Actions:
                     google_api_key = google_api_key_raw if google_api_key_raw else None
                     google_cx = google_cx_raw if google_cx_raw else None
 
-                    model = config.get("OpenAI", "model", fallback="gpt-5").strip() or "gpt-5"
+                    model = config.get("OpenAI", "model", fallback=DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
                     try:
                         self.song_extractor = SongExtractor(
@@ -104,39 +105,26 @@ class Actions:
         """Extract song titles from a message using SongExtractor (running in executor)."""
         if not self.chatdj_enabled:
             logger.warning("chatdj.disabled", message="ChatDJ not enabled")
-            return []
+            raise SongExtractionError("Song extraction is not configured")
 
         loop = asyncio.get_running_loop()
         # Run blocking extraction in executor to avoid blocking the event loop
         return await loop.run_in_executor(None, self.song_extractor.extract_songs, message, song_count)
 
     async def find_song_spotify(self, song_info: SongRequest) -> Optional[str]:
-        """Return the spotify_uri provided in the song_info."""
+        """Resolve a request and update its display fields from Spotify metadata."""
+        if song_info.spotify_uri:
+            return song_info.spotify_uri
         if not self.chatdj_enabled:
             return None
-        if not hasattr(self, 'auto_dj'):
-            return None
-
-        logger.debug("spotify.search.start",
-                    message="Starting Spotify song search",
-                    data={
-                        "song": song_info.song,
-                        "artist": song_info.artist
-                    })
-
-        # Wrapping potential blocking call
         loop = asyncio.get_running_loop()
-        search_result = await loop.run_in_executor(None, self.auto_dj.search_track_uri, song_info.song, song_info.artist)
-
-        if search_result:
-            logger.debug("spotify.search.success",
-                        message="Found Spotify track",
-                        data={"uri": search_result})
-            return search_result
-        else:
-            logger.warning("spotify.search.notfound",
-                         message="No Spotify URI found for song")
+        resolved = await loop.run_in_executor(None, self.song_extractor.resolve_spotify, song_info)
+        if resolved is None:
             return None
+        song_info.song = resolved.song
+        song_info.artist = resolved.artist
+        song_info.spotify_uri = resolved.spotify_uri
+        return resolved.spotify_uri
 
     async def available_in_market(self, song_uri: str) -> bool:
         """Check if a song is available in the user's market."""
@@ -149,10 +137,13 @@ class Actions:
             logger.debug("spotify.market.check.start", message="Checking market availability", data={"uri": song_uri})
 
             loop = asyncio.get_running_loop()
-            user_market = await loop.run_in_executor(None, self.auto_dj.get_user_market)
-            song_markets = await loop.run_in_executor(None, self.auto_dj.get_song_markets, song_uri)
+            def check():
+                spotify = self.auto_dj.spotify
+                market = account_market(spotify)
+                track = spotify.track(song_uri, market=market)
+                return bool(track and track.get('uri') and playable(track, market))
 
-            is_available = (user_market in song_markets) or song_markets == []
+            is_available = await loop.run_in_executor(None, check)
             logger.debug("spotify.market.check.complete",
                         data={"is_available": is_available})
             return is_available

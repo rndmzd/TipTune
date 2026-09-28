@@ -19,6 +19,7 @@ import httpx
 from aiohttp import web, ClientSession
 
 from chatdj.chatdj import SongRequest
+from chatdj.song_requests import DEFAULT_MODEL
 from helpers.actions import Actions
 from helpers.checks import Checks
 from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists, get_app_dir
@@ -37,6 +38,14 @@ config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+
+
+def _request_history_size() -> int:
+    try:
+        size = config.getint('General', 'request_history_size', fallback=1000)
+        return size if size > 0 else 1000
+    except (ValueError, configparser.Error):
+        return 1000
 
 
 def _prepend_bundled_bin_to_path() -> None:
@@ -919,13 +928,14 @@ class WebUI:
         return web.json_response({"ok": True})
 
     async def _api_history_recent(self, request: web.Request) -> web.Response:
-        limit_raw = request.query.get('limit', '50')
+        history_size = self._service._request_history_recent_max
+        limit_raw = request.query.get('limit', str(history_size))
         try:
-            limit = max(1, min(500, int(limit_raw)))
+            limit = max(1, min(history_size, int(limit_raw)))
         except Exception:
-            limit = 50
+            limit = history_size
         history = await self._service.get_recent_request_history(limit=limit)
-        return web.json_response({"ok": True, "history": history})
+        return web.json_response({"ok": True, "history": history, "history_size": history_size})
 
     async def _api_history_clear(self, _request: web.Request) -> web.Response:
         try:
@@ -1147,7 +1157,7 @@ class SongRequestService:
         self._events_subscribers: set[asyncio.Queue] = set()
 
         self._request_history_recent: list[dict] = []
-        self._request_history_recent_max = 500
+        self._request_history_recent_max = _request_history_size()
 
         cache_dir = get_cache_dir()
         ensure_dir(cache_dir)
@@ -1182,6 +1192,8 @@ class SongRequestService:
         self._queue_items: list[dict] = []
         self._queue_paused: bool = False
         self._queue_playback_paused: bool = False
+        self._queue_spotify_inactive_confirm_uri: Optional[str] = None
+        self._queue_spotify_inactive_confirm_count: int = 0
         self._queue_now_playing: Optional[dict] = None
         self._queue_started_ts: Optional[float] = None
 
@@ -1355,6 +1367,8 @@ class SongRequestService:
             nxt = self._queue_items.pop(0)
             self._queue_now_playing = nxt
             self._queue_playback_paused = False
+            self._queue_spotify_inactive_confirm_uri = None
+            self._queue_spotify_inactive_confirm_count = 0
             self._queue_started_ts = time.time()
 
         try:
@@ -1875,6 +1889,8 @@ class SongRequestService:
         async with self._queue_lock:
             self._queue_now_playing = None
             self._queue_playback_paused = False
+            self._queue_spotify_inactive_confirm_uri = None
+            self._queue_spotify_inactive_confirm_count = 0
             self._queue_started_ts = None
 
         try:
@@ -2307,11 +2323,16 @@ class SongRequestService:
                         now_item = dict(self._queue_now_playing) if isinstance(self._queue_now_playing, dict) else None
                         started_ts = self._queue_started_ts
 
+                    now_src = _normalize_music_source((now_item or {}).get('source'), default=self._active_source()) if now_item else self._active_source()
+                    if paused or playback_paused or (not now_item) or now_src != 'spotify':
+                        self._queue_spotify_inactive_confirm_uri = None
+                        self._queue_spotify_inactive_confirm_count = 0
+
                     if (
                         (not paused)
                         and (not playback_paused)
                         and now_item
-                        and _normalize_music_source(now_item.get('source'), default=self._active_source()) == 'spotify'
+                        and now_src == 'spotify'
                         and getattr(self.actions, 'chatdj_enabled', False)
                         and hasattr(self.actions, 'auto_dj')
                         and started_ts is not None
@@ -2375,16 +2396,33 @@ class SongRequestService:
                                     # after we start playback to avoid stalling the queue.
                                     if progress_ms < 15000 and elapsed_since_start < 20.0:
                                         return True
-                                    if progress_ms >= 15000:
-                                        return True
 
                                 return False
                             except Exception:
                                 return False
 
                         is_active = await loop.run_in_executor(None, _is_playback_active_for_item)
-                        if not bool(is_active):
-                            await self.advance_queue()
+                        if bool(is_active):
+                            self._queue_spotify_inactive_confirm_uri = None
+                            self._queue_spotify_inactive_confirm_count = 0
+                        else:
+                            now_uri = self._normalize_spotify_track_uri((now_item or {}).get('uri')) if isinstance(now_item, dict) else None
+                            if isinstance(now_uri, str) and now_uri:
+                                if self._queue_spotify_inactive_confirm_uri == now_uri:
+                                    self._queue_spotify_inactive_confirm_count += 1
+                                else:
+                                    self._queue_spotify_inactive_confirm_uri = now_uri
+                                    self._queue_spotify_inactive_confirm_count = 1
+                            else:
+                                self._queue_spotify_inactive_confirm_uri = None
+                                self._queue_spotify_inactive_confirm_count += 1
+
+                            # Require 2 consecutive inactive checks (~10s) to avoid
+                            # transient API glitches causing premature queue advance.
+                            if self._queue_spotify_inactive_confirm_count >= 2:
+                                self._queue_spotify_inactive_confirm_uri = None
+                                self._queue_spotify_inactive_confirm_count = 0
+                                await self.advance_queue()
 
                     if (
                         (not paused)
@@ -2569,7 +2607,7 @@ class SongRequestService:
             playback_device_id_raw = config.get("Spotify", "playback_device_id", fallback="").strip() if config.has_section("Spotify") else ""
             playback_device_id = playback_device_id_raw if playback_device_id_raw else None
 
-            model = config.get("OpenAI", "model", fallback="gpt-5").strip() or "gpt-5"
+            model = config.get("OpenAI", "model", fallback=DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
             self.actions.song_extractor = SongExtractor(
                 openai_api_key,
@@ -2875,16 +2913,36 @@ class SongRequestService:
                 )
                 return
 
-            if len(tip_message) < 3:
-                tip_message = f"The song name might be \"{tip_message}\"."
-
-            song_extracts = await self.actions.extract_song_titles(tip_message, request_count)
+            direct_youtube = self._youtube_url_from_text(tip_message) if source == 'youtube' else None
+            extraction_error = None
+            try:
+                if direct_youtube:
+                    song_extracts = [SongRequest(song=direct_youtube, artist="")]
+                else:
+                    song_extracts = await self.actions.extract_song_titles(tip_message, request_count)
+            except Exception as exc:
+                logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
+                extraction_error = "song extraction failed"
+                song_extracts = []
 
             if not song_extracts:
-                song_extracts = [SongRequest(song=tip_message, artist="", spotify_uri=None)]
+                self.publish_request_history_item({
+                    "ts": time.time(), "tip_ts": tip_ts, "username": username,
+                    "tip_amount": tip_amount, "tip_message": tip_message,
+                    "request_count": request_count, "status": "failed",
+                    "error": extraction_error or "no song identified",
+                })
+                await self.actions.trigger_warning_overlay(
+                    username,
+                    "Couldn't process your song request. Please try again." if extraction_error
+                    else "Couldn't identify a song in your request. Please include a song title.",
+                    10,
+                )
+                return
 
             for song_info in song_extracts:
                 song_uri: Optional[str] = None
+                lookup_error = None
 
                 if source == 'youtube':
                     direct = self._youtube_url_from_text(tip_message)
@@ -2896,16 +2954,22 @@ class SongRequestService:
                             results = await self.search_youtube_tracks(q, limit=1)
                             if results and isinstance(results[0], dict):
                                 song_uri = results[0].get('uri') if isinstance(results[0].get('uri'), str) else None
-                        except Exception:
+                        except Exception as exc:
+                            logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
+                            lookup_error = "youtube lookup failed"
                             song_uri = None
                 else:
                     if getattr(song_info, 'spotify_uri', None):
                         song_uri = song_info.spotify_uri
                     else:
-                        song_uri = await self.actions.find_song_spotify(song_info)
+                        try:
+                            song_uri = await self.actions.find_song_spotify(song_info)
+                        except Exception as exc:
+                            logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
+                            lookup_error = "spotify lookup failed"
 
                 if not song_uri:
-                    not_found_error = 'youtube track not found' if source == 'youtube' else 'spotify track not found'
+                    not_found_error = lookup_error or ('youtube track not found' if source == 'youtube' else 'spotify track not found')
                     not_found_msg = "Couldn't find song on YouTube." if source == 'youtube' else "Couldn't find song on Spotify. Did you include artist and song name?"
                     self.publish_request_history_item({
                         "ts": time.time(),
@@ -2945,13 +3009,19 @@ class SongRequestService:
                     })
                     await self.actions.trigger_warning_overlay(
                         username,
-                        "Requested song not available in US market.",
+                        "Requested song not available in your Spotify market.",
                         10
                     )
                     continue
 
                 song_details = f"{song_info.artist} - {song_info.song}".strip()
-                ok = await self.add_track_to_queue({"source": source, "uri": song_uri})
+                try:
+                    ok = await self.add_track_to_queue({"source": source, "uri": song_uri})
+                except Exception as exc:
+                    logger.warning("song.queue.failed", data={"error_type": type(exc).__name__})
+                    ok = False
+                if not ok:
+                    await self.actions.trigger_warning_overlay(username, "Couldn't add song to the queue.", 10)
                 if ok:
                     try:
                         await self.actions.trigger_song_requester_overlay(
@@ -2974,7 +3044,8 @@ class SongRequestService:
                     "spotify_uri": getattr(song_info, 'spotify_uri', None),
                     "resolved_uri": song_uri,
                     "song_details": song_details,
-                    "status": "added",
+                    "status": "added" if ok else "failed",
+                    **({"error": "queue insertion failed"} if not ok else {}),
                 })
 
         except Exception as exc:
@@ -4039,6 +4110,7 @@ class SongRequestService:
                 else:
                     cfg[section][key] = val
         general_cfg = cfg.setdefault("General", {})
+        general_cfg['request_history_size'] = str(self._request_history_recent_max)
         if not str(general_cfg.get("debug_log_path", "")).strip():
             general_cfg["debug_log_path"] = str(_default_log_path())
         return cfg
@@ -4059,6 +4131,7 @@ class SongRequestService:
                 "multi_request_tips",
                 "allow_source_override_in_request_message",
                 "request_overlay_duration",
+                "request_history_size",
                 "setup_complete",
                 "auto_check_updates",
                 "show_debug_data",
@@ -4082,6 +4155,14 @@ class SongRequestService:
                     continue
 
                 value_str = str(value)
+                if section == 'General' and key == 'request_history_size':
+                    try:
+                        history_size = int(value_str)
+                        if history_size < 1:
+                            raise ValueError
+                    except ValueError:
+                        return (False, "Request history size must be a positive whole number.")
+                    value_str = str(history_size)
                 if _is_secret_field(section, key) and value_str.strip() == "":
                     continue
 
@@ -4099,6 +4180,14 @@ class SongRequestService:
             config.read(config_path)
         except Exception:
             pass
+
+        if 'request_history_size' in updates.get('General', {}):
+            self._request_history_recent_max = _request_history_size()
+            self._request_history_recent = self._request_history_recent[-self._request_history_recent_max:]
+            try:
+                self._persist_request_history_to_disk()
+            except Exception as exc:
+                return (False, f"History size saved, but failed to persist trimmed history: {exc}")
 
         try:
             _setup_logging()
@@ -4133,7 +4222,7 @@ class SongRequestService:
                         spotify_client=spotify_client,
                         google_api_key=google_api_key,
                         google_cx=google_cx,
-                        model=config.get("OpenAI", "model", fallback="gpt-5")
+                        model=config.get("OpenAI", "model", fallback=DEFAULT_MODEL).strip() or DEFAULT_MODEL
                     )
                 self.actions.request_overlay_duration = config.getint("General", "request_overlay_duration", fallback=10)
         except Exception:

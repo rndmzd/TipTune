@@ -159,7 +159,7 @@ const DEFAULT_CFG: Record<string, Record<string, string>> = {
     max_requests_per_minute: '1000',
   },
   OpenAI: {
-    model: 'gpt-5-mini',
+    model: 'gpt-6-luna',
   },
   OBS: {
     enabled: 'false',
@@ -1074,10 +1074,10 @@ export function SetupPage() {
           <label>Model</label>
           <input
             type="text"
-            value={v('OpenAI', 'model') || 'gpt-5-mini'}
+            value={v('OpenAI', 'model') || 'gpt-6-luna'}
             onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
           />
-          <div className="muted">Use a supported model name for your account. If you’re unsure, keep the default.</div>
+          <div className="muted">Default: gpt-6-luna. You can also use gpt-6-sol or gpt-6-astra if available to your account. Requires Responses Structured Outputs.</div>
         </div>
       ) : null}
 

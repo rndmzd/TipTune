@@ -99,7 +99,7 @@ TipTune uses OpenAI to parse song requests from tip messages.
 In the Setup Wizard or Settings:
 
 - Set `OpenAI.api_key`
-- Optionally set `OpenAI.model` (example: `gpt-5-mini`)
+- Optionally set `OpenAI.model` (default: `gpt-6-luna`). Saved model choices are preserved; the model must support Responses Structured Outputs and be available to your API account.
 
 ---
 

@@ -263,10 +263,10 @@ async function ensureFfmpeg(destDir, ffmpegVersion) {
       const resolvedIsLatest = isLatestSpecifier(ffmpegVersion);
       const ffmpegUrl = resolvedIsLatest
         ? 'https://evermeet.cx/ffmpeg/getrelease/zip'
-        : `https://evermeet.cx/pub/ffmpeg/ffmpeg-${String(ffmpegVersion).trim()}.zip`;
+        : `https://evermeet.cx/ffmpeg/ffmpeg-${String(ffmpegVersion).trim()}.zip`;
       const ffprobeUrl = resolvedIsLatest
         ? 'https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip'
-        : `https://evermeet.cx/pub/ffprobe/ffprobe-${String(ffmpegVersion).trim()}.zip`;
+        : `https://evermeet.cx/ffmpeg/ffprobe-${String(ffmpegVersion).trim()}.zip`;
 
       await downloadToFile(ffmpegUrl, ffmpegZip);
       await downloadToFile(ffprobeUrl, ffprobeZip);
@@ -298,7 +298,7 @@ async function ensureFfmpeg(destDir, ffmpegVersion) {
       const resolvedIsLatest = isLatestSpecifier(ffmpegVersion);
       const url = resolvedIsLatest
         ? 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
-        : `https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-${String(ffmpegVersion).trim()}-essentials_build.zip`;
+        : `https://github.com/GyanD/codexffmpeg/releases/download/${String(ffmpegVersion).trim()}/ffmpeg-${String(ffmpegVersion).trim()}-essentials_build.zip`;
       await downloadToFile(url, zip);
 
       const outDir = path.join(tmpRoot, 'out');
