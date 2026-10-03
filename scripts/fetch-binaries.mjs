@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 const DEFAULT_FFMPEG_VERSION = '7.1.1';
+const DEFAULT_DENO_VERSION = '2.9.7';
 const YT_DLP_URLS = {
   windows: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
   macos: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos',
@@ -203,7 +204,7 @@ async function ensureYtDlp(destDir) {
     });
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
-    console.warn(`yt-dlp update failed: ${msg}`);
+    throw new Error(`yt-dlp update failed; refusing to bundle a potentially stale extractor: ${msg}`);
   }
 
   if (key !== 'windows') {
@@ -212,6 +213,39 @@ async function ensureYtDlp(destDir) {
     } catch {
     }
   }
+}
+
+async function ensureDeno(destDir) {
+  const key = platformKey();
+  const arch = process.arch === 'arm64' ? 'aarch64' : process.arch === 'x64' ? 'x86_64' : null;
+  const target = { windows: 'pc-windows-msvc', macos: 'apple-darwin', linux: 'unknown-linux-gnu' }[key];
+  if (!arch || !target) throw new Error(`Unsupported Deno platform: ${key}/${process.arch}`);
+
+  const filename = key === 'windows' ? 'deno.exe' : 'deno';
+  const destPath = path.join(destDir, filename);
+  let installedVersion = '';
+  if (fileExistsNonEmpty(destPath)) {
+    try {
+      installedVersion = execFileSync(destPath, ['--version'], { encoding: 'utf8' }).match(/^deno (\S+)/)?.[1] || '';
+    } catch {
+    }
+  }
+  if (installedVersion !== DEFAULT_DENO_VERSION) {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tiptune-deno-'));
+    try {
+      const archive = path.join(tmpRoot, 'deno.zip');
+      await downloadToFile(
+        `https://github.com/denoland/deno/releases/download/v${DEFAULT_DENO_VERSION}/deno-${arch}-${target}.zip`,
+        archive,
+      );
+      extractZip(archive, tmpRoot);
+      copyFile(path.join(tmpRoot, filename), destPath);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  }
+  if (key !== 'windows') fs.chmodSync(destPath, 0o755);
+  execFileSync(destPath, ['--version'], { stdio: 'inherit' });
 }
 
 async function ensureFfmpeg(destDir, ffmpegVersion) {
@@ -354,6 +388,7 @@ async function main() {
   ensureDir(destDir);
 
   await ensureFfmpeg(destDir, ffmpegVersion);
+  await ensureDeno(destDir);
   await ensureYtDlp(destDir);
 
   const files = fs.readdirSync(destDir);
