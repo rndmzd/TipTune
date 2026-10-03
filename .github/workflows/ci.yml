@@ -76,6 +76,9 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Fetch playback binaries (ffmpeg, yt-dlp, Deno)
+        run: node scripts/fetch-binaries.mjs
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:

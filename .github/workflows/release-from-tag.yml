@@ -56,7 +56,7 @@ jobs:
         run: |
           python -m compileall -q .
 
-      - name: Fetch platform binaries (ffmpeg)
+      - name: Fetch playback binaries (ffmpeg, yt-dlp, Deno)
         run: node scripts/fetch-binaries.mjs
         shell: bash
 

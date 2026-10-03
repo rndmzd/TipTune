@@ -337,6 +337,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       if (a) {
         try {
           setYoutubePaused(false);
+          if (a.error) a.load();
           const p = a.play();
           if (p && typeof (p as any).catch === 'function') {
             (p as any).catch(() => {});

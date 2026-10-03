@@ -197,8 +197,8 @@ If you want to use YouTube as the music source:
 
 - Set `Music.source=youtube` (Setup Wizard → General Settings).
 - Install Python deps (`pip install -r requirements.txt`).
-- Download bundled binaries (`node scripts/fetch-binaries.mjs`) to get `yt-dlp` (and ffmpeg), or ensure `yt-dlp` is on your PATH.
-- Packaged builds include `yt-dlp` automatically.
+- Download bundled binaries (`node scripts/fetch-binaries.mjs`) to get current `yt-dlp`, Deno (for YouTube's JavaScript challenges), and ffmpeg. For an unbundled setup, install current `yt-dlp` and Deno on your PATH; Node 22+ is also supported as a fallback.
+- Packaged builds include `yt-dlp` and Deno automatically; users do not need to install either separately.
 
 TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
 

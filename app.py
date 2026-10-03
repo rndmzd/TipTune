@@ -90,8 +90,16 @@ def _yt_dlp_dump_json(args: list[str], timeout: int = 10) -> list[dict]:
         '--skip-download',
         '--no-warnings',
         '--quiet',
-        *args,
     ]
+    # Desktop installs must not depend on a developer's Node installation.
+    # Explicit paths also work when the sidecar's PATH differs from the shell's.
+    for runtime in ('deno', 'node'):
+        bundled = find_bundled_bin_path(runtime)
+        runtime_path = str(bundled) if bundled else shutil.which(runtime)
+        if runtime_path:
+            cmd.extend(['--js-runtimes', f'{runtime}:{runtime_path}'])
+            break
+    cmd.extend(args)
     try:
         run_kwargs = {
             'capture_output': True,
@@ -1590,7 +1598,7 @@ class SongRequestService:
         if not self._is_allowed_youtube_url(video_url):
             raise RuntimeError('Only YouTube URLs are supported')
         format_sel = 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=mp3]/bestaudio'
-        items = _yt_dlp_dump_json(['--no-playlist', '-f', format_sel, video_url], timeout=10)
+        items = _yt_dlp_dump_json(['--no-playlist', '-f', format_sel, video_url], timeout=30)
         info = items[0] if items else None
         if not isinstance(info, dict):
             raise RuntimeError('Failed to extract YouTube info')
@@ -1722,7 +1730,7 @@ class SongRequestService:
         try:
             stream_url, guessed_ct, request_headers = await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: self._yt_fetch_best_audio_url(url)),
-                timeout=10,
+                timeout=35,
             )
         except asyncio.TimeoutError:
             raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
