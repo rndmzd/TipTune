@@ -182,6 +182,6 @@ In Settings:
 ## Common gotchas
 
 - **Spotify redirect URL must match exactly** (scheme/host/port/path) and must be `http://127.0.0.1:<port>/...` or `http://localhost:<port>/...`.
-- **No devices found**: open Spotify on a device and start playback so Spotify registers an active device.
+- **No devices found**: check the error beside **Available devices** in Settings. For `invalid_client`, reconnect Spotify first; if it still fails, verify the app and Client ID in the Spotify Developer Dashboard, save any changes, then reconnect. The Spotify tab's login is separate from API authorization. If Spotify returns no devices without an error, use the same account in the player, start playback, then refresh.
 - **Blank tip message**: TipTune treats this as a failed request and can show a warning overlay.
 - **Source override in tip messages**: by default, including `spotify` or `youtube` in a tip message overrides the default source. Disable with `General.allow_source_override_in_request_message=false`.

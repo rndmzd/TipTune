@@ -35,4 +35,5 @@ export type Device = {
   id?: string;
   name?: string;
   is_active?: boolean;
+  is_restricted?: boolean;
 };
