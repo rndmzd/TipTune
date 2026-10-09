@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -22,6 +23,7 @@ from chatdj.chatdj import SongRequest
 from chatdj.song_requests import DEFAULT_MODEL
 from helpers.actions import Actions
 from helpers.checks import Checks
+from utils.overlay import OverlayService, DEFAULTS as OVERLAY_DEFAULTS, read_settings as read_overlay_settings, validate_settings as validate_overlay_settings
 from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists, get_app_dir
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 
@@ -553,12 +555,17 @@ class WebUI:
         self._webui_root = get_resource_path('webui')
         self._dist_root = self._webui_root / 'dist'
         self._spa_index = self._dist_root / 'index.html'
+        self._overlay_index = self._dist_root / 'overlay.html'
 
         assets_dir = self._dist_root / 'assets'
         if self._spa_index.exists() and assets_dir.exists():
             self._app.router.add_static('/assets', str(assets_dir), show_index=False)
 
         self._app.add_routes([
+            web.get('/overlay', self._page_overlay),
+            web.get('/api/overlay/state', self._api_overlay_state),
+            web.get('/api/overlay/events', self._api_overlay_events),
+            web.post('/api/obs/ensure_browser_source', self._api_obs_ensure_browser_source),
             web.get('/', self._page_app),
             web.get('/settings', self._page_app),
             web.get('/setup', self._page_app),
@@ -597,6 +604,7 @@ class WebUI:
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
             web.get('/api/history/recent', self._api_history_recent),
+            web.get('/api/history/track', self._api_history_track),
             web.post('/api/history/clear', self._api_history_clear),
         ])
 
@@ -606,10 +614,71 @@ class WebUI:
         ])
 
     async def start(self) -> None:
-        self._runner = web.AppRunner(self._app)
+        self._runner = web.AppRunner(self._app, shutdown_timeout=6)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
         await self._site.start()
+        self._port = self._site._server.sockets[0].getsockname()[1]
+
+    @property
+    def overlay_url(self) -> str:
+        host = self._host if self._host not in ('0.0.0.0', '::', 'localhost') else '127.0.0.1'
+        if ':' in host:
+            host = f'[{host}]'
+        return f'http://{host}:{self._port}/overlay'
+
+    async def _page_overlay(self, _request: web.Request) -> web.Response:
+        if not self._overlay_index.exists():
+            return web.Response(text='Build the Web UI, then restart TipTune.', status=503)
+        return web.Response(text=self._overlay_index.read_text(encoding='utf-8'),
+                            content_type='text/html', headers={'Cache-Control': 'no-store'})
+
+    async def _api_overlay_state(self, _request: web.Request) -> web.Response:
+        return web.json_response({'ok': True, 'state': self._service.overlay.snapshot()},
+                                 headers={'Cache-Control': 'no-store'})
+
+    async def _api_overlay_events(self, request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(headers={
+            'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store',
+            'X-Accel-Buffering': 'no',
+        })
+        # Streaming responses prepare before the outer CORS middleware returns.
+        # The Tauri settings preview connects from a different origin.
+        origin = request.headers.get('Origin')
+        if origin:
+            resp.headers['Access-Control-Allow-Origin'] = origin
+            resp.headers['Vary'] = 'Origin'
+        if request.headers.get('Access-Control-Request-Private-Network') == 'true':
+            resp.headers['Access-Control-Allow-Private-Network'] = 'true'
+        subscriber = self._service.overlay.subscribe()
+        try:
+            await resp.prepare(request)
+            while request.transport is not None and not request.transport.is_closing():
+                try:
+                    state = await asyncio.wait_for(subscriber.get(), timeout=5)
+                    event = 'snapshot'
+                except asyncio.TimeoutError:
+                    state = {'server_timestamp': time.time()}
+                    event = 'heartbeat'
+                await asyncio.wait_for(resp.write(
+                    f'event: {event}\ndata: {json.dumps(state)}\n\n'.encode('utf-8')), timeout=5)
+        except (ConnectionError, asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        finally:
+            self._service.overlay.unsubscribe(subscriber)
+        return resp
+
+    async def _api_obs_ensure_browser_source(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            return web.json_response({'ok': False, 'error': 'Invalid JSON'}, status=400)
+        result = await self._service.ensure_obs_browser_source(payload)
+        return web.json_response({'ok': bool(result.get('configured')), 'result': result,
+                                  'error': '; '.join(result.get('errors', [])) or None},
+                                 status=200 if result.get('configured') else 400)
 
     async def stop(self) -> None:
         if self._runner:
@@ -945,6 +1014,18 @@ class WebUI:
         history = await self._service.get_recent_request_history(limit=limit)
         return web.json_response({"ok": True, "history": history, "history_size": history_size})
 
+    async def _api_history_track(self, request: web.Request) -> web.Response:
+        track_id = self._service._parse_spotify_track_id(request.query.get('uri'))
+        if not track_id:
+            return web.json_response({"ok": False, "error": "Invalid Spotify track URI"}, status=400)
+        items = [item for item in self._service._request_history_recent
+                 if self._service._parse_spotify_track_id(item.get('resolved_uri')) == track_id]
+        if not items:
+            return web.json_response({"ok": False, "error": "Track not found in history"}, status=404)
+        enriched = await self._service._enrich_history_items(items)
+        track = next((item.get('spotify_track') for item in enriched if item.get('spotify_track')), None)
+        return web.json_response({"ok": True, "track": track})
+
     async def _api_history_clear(self, _request: web.Request) -> web.Response:
         try:
             self._service.clear_request_history()
@@ -1210,6 +1291,18 @@ class SongRequestService:
         self._queue_path: Path = cache_dir / 'queue_state.json'
         self._load_queue_state_from_disk()
         self._maybe_migrate_legacy_queue_state()
+        backfilled = False
+        for item in self._queue_items + ([self._queue_now_playing] if self._queue_now_playing else []):
+            if not isinstance(item.get('queue_entry_id'), str) or not item['queue_entry_id']:
+                item['queue_entry_id'] = uuid.uuid4().hex
+                backfilled = True
+        if backfilled:
+            self._persist_queue_state_to_disk()
+        self.overlay = OverlayService(config)
+        self.actions.overlay_service = self.overlay
+        self._overlay_metadata_attempts: Dict[str, float] = {}
+        self._overlay_metadata_task: Optional[asyncio.Task] = None
+        self._overlay_sync()
 
     def _active_source(self) -> str:
         return _active_music_source()
@@ -1306,6 +1399,7 @@ class SongRequestService:
                 item['uri'] = track_uri
 
             item['source'] = src
+            item['queue_entry_id'] = uuid.uuid4().hex
             return item
         except Exception:
             return None
@@ -1494,6 +1588,7 @@ class SongRequestService:
             return
 
     def _persist_queue_state_to_disk(self) -> None:
+        self._overlay_sync()
         try:
             ensure_parent_dir(self._queue_path)
             payload = {
@@ -1880,10 +1975,115 @@ class SongRequestService:
         except Exception:
             return 10
 
+    def _overlay_sync(self) -> None:
+        overlay = getattr(self, 'overlay', None)
+        if overlay is None:
+            return
+        def enrich(item):
+            if not isinstance(item, dict):
+                return None
+            result = dict(item)
+            uri = result.get('uri', '')
+            key = self._parse_spotify_track_id(uri) or uri
+            cached = self._cache_get_track(key) or {}
+            for field in ('name', 'artists', 'album', 'album_image_url'):
+                if cached.get(field):
+                    result[field] = cached[field]
+            return result
+        now = enrich(getattr(self, '_queue_now_playing', None))
+        items = [enrich(item) for item in getattr(self, '_queue_items', [])]
+        overlay.update_tracks(now, items, {
+            'queue_paused': getattr(self, '_queue_paused', False),
+            'playback_paused': getattr(self, '_queue_playback_paused', False),
+            'starting': getattr(self, '_queue_starting', False),
+        })
+
+    async def _overlay_loop(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                self._overlay_sync()
+                self.overlay.tick()
+                if self._overlay_metadata_task is None or self._overlay_metadata_task.done():
+                    raw = [self._queue_now_playing] + self._queue_items[:int(self.overlay.config['queue_length'])]
+                    needed = []
+                    for item in raw:
+                        if not isinstance(item, dict) or item.get('source') != 'spotify':
+                            continue
+                        uri = item.get('uri', '')
+                        key = self._parse_spotify_track_id(uri) or uri
+                        if (not self._cache_get_track(key)
+                                and time.time() - self._overlay_metadata_attempts.get(uri, 0) > 60):
+                            self._overlay_metadata_attempts[uri] = time.time()
+                            needed.append(item)
+                    if needed:
+                        async def hydrate(items):
+                            try:
+                                await self._enrich_mixed_queue_items(items)
+                                self._overlay_sync()
+                            except Exception as exc:
+                                logger.debug('overlay.metadata.error', data={'error_type': type(exc).__name__})
+                        self._overlay_metadata_task = asyncio.create_task(hydrate(needed))
+                    self._overlay_metadata_attempts = {
+                        uri: ts for uri, ts in self._overlay_metadata_attempts.items() if time.time() - ts < 120
+                    }
+                await asyncio.sleep(0.25)
+        finally:
+            if self._overlay_metadata_task is not None:
+                self._overlay_metadata_task.cancel()
+                await asyncio.gather(self._overlay_metadata_task, return_exceptions=True)
+
+    def _overlay_info(self) -> Dict[str, Any]:
+        webui = getattr(self, '_web', None)
+        return {
+            'overlay_url': webui.overlay_url if webui else None,
+            'display_mode': self.overlay.config['mode'],
+            'display_clients': len(self.overlay.subscribers),
+            'browser_source': None,
+            'viewport': {'width': 1920, 'height': 1080},
+        }
+
+    async def ensure_obs_browser_source(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        await self._refresh_obs_integration_from_config()
+        obs = getattr(self.actions, 'obs', None)
+        if obs is None or not self.actions.obs_integration_enabled or not self._web:
+            return {'configured': False, 'errors': ['Enable the OBS connection and start OBS to add the source automatically.']}
+        scene = str(payload.get('scene_name') or config.get('OBS', 'scene_name', fallback='')).strip()
+        name = str(payload.get('source_name') or self.overlay.config['source_name']).strip()
+        try:
+            validate_overlay_settings({'source_name': name})
+        except ValueError as exc:
+            return {'configured': False, 'errors': [str(exc)]}
+        result = await obs.ensure_browser_source(scene, name, self._web.overlay_url)
+        if result.get('configured'):
+            update = {'OBS': {'scene_name': scene}, 'Overlay': {'source_name': name}}
+            if payload.get('activate') is True:
+                update['Overlay']['mode'] = 'browser'
+            ok, error = await self.update_config_from_ui(update)
+            if not ok:
+                return dict(result, configured=False, errors=[error or 'Could not save overlay settings.'])
+            if payload.get('activate') is True:
+                result['legacy_errors'] = await obs.hide_legacy_text_sources(scene)
+        return result
+
+    async def _refresh_browser_on_startup(self) -> None:
+        # OBS may have loaded its source before the HTTP server was ready.
+        for attempt in range(6):
+            if self.overlay.config['mode'] != 'browser' or not config.getboolean('OBS', 'enabled', fallback=False):
+                return
+            try:
+                await self._refresh_obs_integration_from_config()
+                obs = getattr(self.actions, 'obs', None)
+                if obs and await obs.refresh_browser_source(self.overlay.config['source_name'], self._web.overlay_url):
+                    return
+            except Exception as exc:
+                logger.debug('overlay.startup.refresh', data={'error_type': type(exc).__name__})
+            await asyncio.sleep(min(2 * (attempt + 1), 10))
+
     async def get_obs_status(self) -> Dict[str, Any]:
+        overlay_info = self._overlay_info()
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
         if not desired_enabled:
-            return {"enabled": False}
+            return {"enabled": False, "connected": False, **overlay_info}
 
         try:
             await self._refresh_obs_integration_from_config()
@@ -1892,12 +2092,22 @@ class SongRequestService:
 
         obs = getattr(self.actions, 'obs', None)
         if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
-            return {"enabled": True, "connected": False}
+            return {"enabled": True, "connected": False, **overlay_info}
 
         scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
         status = await obs.get_text_source_status(scene_key='main', scene_name=scene_name or None)
         if status is None:
-            return {"enabled": True, "connected": False}
+            return {"enabled": True, "connected": False, **overlay_info}
+
+        overlay_info['browser_source'] = await obs.get_browser_source_status(
+            scene_name, self.overlay.config['source_name'], self._web.overlay_url if self._web else '')
+        browser = overlay_info['browser_source'] or {}
+        if browser.get('width') and browser.get('height'):
+            overlay_info['viewport'] = {'width': browser['width'], 'height': browser['height']}
+        if not browser.get('configured'):
+            video = await obs.send_request('GetVideoSettings')
+            if isinstance(video, dict) and video.get('baseWidth') and video.get('baseHeight'):
+                overlay_info['viewport'] = {'width': video['baseWidth'], 'height': video['baseHeight']}
 
         spotify_audio_capture = None
         tiptune_audio_capture = None
@@ -1916,6 +2126,7 @@ class SongRequestService:
             "status": status,
             "spotify_audio_capture": spotify_audio_capture,
             "tiptune_audio_capture": tiptune_audio_capture,
+            **overlay_info,
         }
 
     async def ensure_obs_text_sources(self) -> Optional[Dict[str, Any]]:
@@ -2022,6 +2233,20 @@ class SongRequestService:
                 pass
 
     async def trigger_obs_test_overlay(self, overlay: Any) -> tuple[bool, Optional[str]]:
+        display = getattr(self, 'overlay', None)
+        if display is not None and display.config['mode'] != 'text':
+            if display.config['mode'] == 'off':
+                return (False, 'Info display is off. Select Browser display and save settings.')
+            samples = {
+                'SongRequester': ('request', 'Test Artist — Test Song', 'TestUser'),
+                'WarningOverlay': ('warning', 'This is a test warning.', 'TestUser'),
+                'GeneralOverlay': ('general', 'Song request queue resumed', None),
+            }
+            if overlay not in samples:
+                return (False, 'Unknown overlay')
+            kind, message, requester = samples[overlay]
+            display.alert(kind, message, requester, self._get_obs_overlay_duration_seconds())
+            return (True, None)
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
         if not desired_enabled:
             return (False, "OBS is disabled")
@@ -2077,6 +2302,17 @@ class SongRequestService:
         return (True, None)
 
     async def trigger_obs_now_playing_overlay(self) -> tuple[bool, Optional[str]]:
+        display = getattr(self, 'overlay', None)
+        if display is not None and display.config['mode'] != 'text':
+            if display.config['mode'] == 'off':
+                return (False, 'Info display is off.')
+            self._overlay_sync()
+            track = display.now_playing
+            if not track:
+                return (False, 'No song is currently playing')
+            message = ' — '.join(filter(None, [', '.join(track.get('artists', [])), track.get('name') or 'Unknown title']))
+            display.alert('now_playing', message, track.get('requester'), self._get_obs_overlay_duration_seconds())
+            return (True, None)
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
         if not desired_enabled:
             return (False, "OBS is disabled")
@@ -2225,6 +2461,7 @@ class SongRequestService:
 
     async def start(self) -> None:
         self._tasks.append(asyncio.create_task(self._events_loop()))
+        self._tasks.append(asyncio.create_task(self._overlay_loop()))
         self._tasks.append(asyncio.create_task(self._tip_processor_loop()))
         self._tasks.append(asyncio.create_task(self._queue_watchdog()))
         self._tasks.append(asyncio.create_task(self._local_control_loop()))
@@ -2239,6 +2476,7 @@ class SongRequestService:
         try:
             self._web = WebUI(self, host=web_host, port=web_port)
             await self._web.start()
+            self._tasks.append(asyncio.create_task(self._refresh_browser_on_startup()))
             logger.info("webui.started", message="Web UI started", data={"host": web_host, "port": web_port})
         except Exception as exc:
             logger.exception("webui.error", exc=exc, message="Failed to start Web UI")
@@ -2991,7 +3229,7 @@ class SongRequestService:
 
                 song_details = f"{song_info.artist} - {song_info.song}".strip()
                 try:
-                    ok = await self.add_track_to_queue({"source": source, "uri": song_uri})
+                    ok = await self.add_track_to_queue({"source": source, "uri": song_uri, "requester": username})
                 except Exception as exc:
                     logger.warning("song.queue.failed", data={"error_type": type(exc).__name__})
                     ok = False
@@ -3125,54 +3363,58 @@ class SongRequestService:
             raise
 
     async def _enrich_history_items(self, items: list[dict]) -> list[dict]:
-        out: list[dict] = []
         if not items:
-            return out
+            return []
 
-        track_uris: list[str] = []
+        metadata: dict[str, dict] = {}
+        track_uris: dict[str, str] = {}
         for it in items:
             if not isinstance(it, dict):
                 continue
             uri = it.get('resolved_uri')
-            if isinstance(uri, str) and uri.strip() != "":
-                track_uris.append(uri.strip())
-
-        seen: set[str] = set()
-        to_fetch: list[str] = []
-        max_fetch = 10
-
-        for uri in track_uris:
-            if uri in seen:
+            track_id = self._parse_spotify_track_id(uri)
+            if not track_id:
                 continue
-            seen.add(uri)
-            cache_key = f"track:{uri}"
-            cached = self._cache_get_track(cache_key)
-            if cached is not None:
-                continue
-            to_fetch.append(uri)
-            if len(to_fetch) >= max_fetch:
-                break
+            track_uris.pop(track_id, None)
+            track_uris[track_id] = f'spotify:track:{track_id}'
+            saved = it.get('spotify_track')
+            cached = self._cache_get_track(track_id)
+            meta = saved if isinstance(saved, dict) and saved.get('album_image_url') else cached or saved
+            if isinstance(meta, dict) and meta and (meta.get('album_image_url') or track_id not in metadata):
+                metadata[track_id] = meta
 
-        for uri in to_fetch:
-            cache_key = f"track:{uri}"
-            try:
-                meta = await self._fetch_spotify_track_meta(uri)
-                if isinstance(meta, dict) and meta:
-                    self._cache_put_track(cache_key, meta)
-            except Exception:
-                pass
+        # Keep the initial history response bounded and prioritize the newest
+        # entries. The UI requests remaining tracks as their cards become visible.
+        to_fetch = [(track_id, uri) for track_id, uri in reversed(list(track_uris.items()))
+                    if not metadata.get(track_id, {}).get('album_image_url')][:10]
+        results = await asyncio.gather(
+            *(self._fetch_spotify_track_meta(uri) for _, uri in to_fetch), return_exceptions=True)
+        for (track_id, _), meta in zip(to_fetch, results):
+            if isinstance(meta, dict) and meta:
+                metadata[track_id] = meta
+                self._cache_put_track(track_id, meta)
 
+        out: list[dict] = []
         for it in items:
             if not isinstance(it, dict):
                 continue
             enriched = dict(it)
-            uri = enriched.get('resolved_uri')
-            if isinstance(uri, str) and uri.strip() != "":
-                cache_key = f"track:{uri.strip()}"
-                meta = self._cache_get_track(cache_key)
-                if isinstance(meta, dict) and meta:
-                    enriched['spotify_track'] = meta
+            meta = metadata.get(self._parse_spotify_track_id(it.get('resolved_uri')))
+            if meta:
+                enriched['spotify_track'] = meta
             out.append(enriched)
+
+        changed = False
+        for it in self._request_history_recent:
+            meta = metadata.get(self._parse_spotify_track_id(it.get('resolved_uri')))
+            if meta and it.get('spotify_track') != meta:
+                it['spotify_track'] = dict(meta)
+                changed = True
+        if changed:
+            try:
+                self._persist_request_history_to_disk()
+            except Exception:
+                pass
         return out
 
     async def get_queue_state(self) -> Dict[str, Any]:
@@ -4107,6 +4349,7 @@ class SongRequestService:
                     cfg[section][key] = val
         general_cfg = cfg.setdefault("General", {})
         general_cfg['request_history_size'] = str(self._request_history_recent_max)
+        cfg['Overlay'] = read_overlay_settings(config)
         if not str(general_cfg.get("debug_log_path", "")).strip():
             general_cfg["debug_log_path"] = str(_default_log_path())
         return cfg
@@ -4116,6 +4359,7 @@ class SongRequestService:
             return (False, "Invalid JSON")
 
         allowed: Dict[str, set[str]] = {
+            "Overlay": set(OVERLAY_DEFAULTS),
             "Events API": {"url", "max_requests_per_minute"},
             "OpenAI": {"api_key", "model"},
             "Spotify": {"client_id", "redirect_url", "playback_device_id"},
@@ -4139,6 +4383,11 @@ class SongRequestService:
         }
 
         updates: Dict[str, Dict[str, str]] = {}
+        if isinstance(payload.get('Overlay'), dict):
+            try:
+                payload = dict(payload, Overlay=validate_overlay_settings(payload['Overlay']))
+            except ValueError as exc:
+                return (False, str(exc))
         for section, options in payload.items():
             if section not in allowed:
                 continue
@@ -4176,6 +4425,10 @@ class SongRequestService:
             config.read(config_path)
         except Exception:
             pass
+
+        if hasattr(self, 'overlay'):
+            self.overlay.configure(config)
+            self._overlay_sync()
 
         if 'request_history_size' in updates.get('General', {}):
             self._request_history_recent_max = _request_history_size()

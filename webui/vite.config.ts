@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
+  build: {
+    rollupOptions: { input: { app: 'webui/index.html', overlay: 'webui/overlay.html' } },
+  },
   plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify((globalThis as any)?.process?.env?.npm_package_version || ''),

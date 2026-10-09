@@ -1,4 +1,5 @@
 import asyncio
+from urllib.parse import urlsplit
 from typing import Any, Dict, Optional
 
 import simpleobsws
@@ -513,6 +514,119 @@ class OBSHandler:
             'main_scene': main_scene,
             'sources': sources,
         }
+
+    @staticmethod
+    def _is_overlay_url(url: str) -> bool:
+        try:
+            parsed = urlsplit(url)
+            return (parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost', '::1')
+                    and parsed.path == '/overlay' and not parsed.username and not parsed.password)
+        except (ValueError, TypeError):
+            return False
+
+    async def get_browser_source_status(self, scene: str, name: str, url: str) -> Dict[str, Any]:
+        inputs = await self._get_inputs()
+        source = next((item for item in inputs or [] if item.get('inputName') == name), None)
+        result = {'name': name, 'input_exists': source is not None, 'in_scene': False,
+                  'configured': False, 'width': 1920, 'height': 1080, 'error': None}
+        if not source:
+            return result
+        if source.get('inputKind') != 'browser_source':
+            return dict(result, error='This source name belongs to another input kind. Choose a different name.')
+        ok, data, _, error = await self._send_request_with_status('GetInputSettings', {'inputName': name})
+        if not ok:
+            return dict(result, error=error)
+        settings = (data or {}).get('inputSettings', {})
+        result.update(width=settings.get('width', 1920), height=settings.get('height', 1080))
+        result['in_scene'] = bool(scene and await self._get_scene_item_id_by_scene_name(scene, name) is not None)
+        result['configured'] = bool(result['in_scene'] and settings.get('url') == url
+                                    and not settings.get('is_local_file'))
+        if not self._is_overlay_url(settings.get('url', '')) or settings.get('is_local_file'):
+            result['error'] = 'This browser source uses another page. Choose a different source name.'
+        return result
+
+    async def ensure_browser_source(self, scene: str, name: str, url: str) -> Dict[str, Any]:
+        result = {'scene': scene, 'input_name': name, 'configured': False,
+                  'created': False, 'added_to_scene': False, 'errors': []}
+        async def request(kind, data=None):
+            ok, response, _, error = await self._send_request_with_status(kind, data)
+            if not ok:
+                raise RuntimeError(f'{kind}: {error or "OBS request failed"}')
+            return response or {}
+        try:
+            if not scene or scene not in (await self.list_scene_names() or []):
+                raise ValueError('Select an existing OBS scene before adding the browser overlay.')
+            kinds = (await request('GetInputKindList')).get('inputKinds', [])
+            if 'browser_source' not in kinds:
+                raise ValueError('This OBS installation does not provide Browser Source. Use an official OBS build.')
+            video = await request('GetVideoSettings')
+            width, height = int(video['baseWidth']), int(video['baseHeight'])
+            settings = {'url': url, 'is_local_file': False, 'width': width, 'height': height,
+                        'fps_custom': True, 'fps': 30, 'shutdown': False,
+                        'restart_when_active': False, 'webpage_control_level': 0,
+                        'css': 'html,body{background:transparent;margin:0;overflow:hidden;}'}
+            source = next((item for item in await self._get_inputs() or [] if item.get('inputName') == name), None)
+            new_item = False
+            if source:
+                if source.get('inputKind') != 'browser_source':
+                    raise ValueError('Source name is already used by another input kind. Choose a different name.')
+                previous = (await request('GetInputSettings', {'inputName': name})).get('inputSettings', {})
+                if previous.get('is_local_file') or not self._is_overlay_url(previous.get('url', '')):
+                    raise ValueError('Source name is already used by another webpage. Choose a different name.')
+                await request('SetInputSettings', {'inputName': name, 'inputSettings': settings, 'overlay': True})
+                item_id = await self._get_scene_item_id_by_scene_name(scene, name)
+                if item_id is None:
+                    data = await request('CreateSceneItem', {'sceneName': scene, 'sourceName': name, 'sceneItemEnabled': True})
+                    item_id = data['sceneItemId']
+                    result['added_to_scene'] = new_item = True
+            else:
+                data = await request('CreateInput', {'sceneName': scene, 'inputName': name,
+                                                    'inputKind': 'browser_source', 'inputSettings': settings,
+                                                    'sceneItemEnabled': True})
+                item_id = data['sceneItemId']
+                result['created'] = new_item = True
+            if new_item:
+                await request('SetSceneItemTransform', {'sceneName': scene, 'sceneItemId': item_id,
+                              'sceneItemTransform': {'positionX': 0, 'positionY': 0, 'scaleX': 1, 'scaleY': 1,
+                                                     'rotation': 0, 'alignment': 5, 'boundsType': 'OBS_BOUNDS_NONE'}})
+            await request('SetSceneItemEnabled', {'sceneName': scene, 'sceneItemId': item_id, 'sceneItemEnabled': True})
+            verified = await self.get_browser_source_status(scene, name, url)
+            if not verified['configured'] or verified['width'] != width or verified['height'] != height:
+                raise RuntimeError('OBS did not confirm the browser source settings. Refresh status and try again.')
+            result.update(configured=True, width=width, height=height, url=url)
+        except Exception as exc:
+            result['errors'].append(str(exc))
+        return result
+
+    async def hide_legacy_text_sources(self, scene: str) -> list[str]:
+        errors = []
+        inputs = {item.get('inputName'): item.get('inputKind', '') for item in await self._get_inputs() or []}
+        for name in REQUIRED_TEXT_SOURCES:
+            if not inputs.get(name, '').startswith(('text_gdiplus', 'text_ft2')):
+                continue
+            item_id = await self._get_scene_item_id_by_scene_name(scene, name)
+            if item_id is not None:
+                ok, _, _, error = await self._send_request_with_status('SetSceneItemEnabled', {
+                    'sceneName': scene, 'sceneItemId': item_id, 'sceneItemEnabled': False})
+                if not ok:
+                    errors.append(f'{name}: {error or "Could not hide old text source"}')
+        return errors
+
+    async def refresh_browser_source(self, name: str, url: str) -> bool:
+        ok, data, _, _ = await self._send_request_with_status('GetInputSettings', {'inputName': name})
+        if not ok or (data or {}).get('inputKind') != 'browser_source':
+            return False
+        settings = data.get('inputSettings', {})
+        if settings.get('is_local_file') or not self._is_overlay_url(settings.get('url', '')):
+            return False
+        if settings.get('url') != url:
+            ok, _, _, _ = await self._send_request_with_status('SetInputSettings', {
+                'inputName': name, 'inputSettings': {'url': url}, 'overlay': True})
+            if not ok:
+                return False
+        ok, _, _, _ = await self._send_request_with_status('PressInputPropertiesButton', {
+            'inputName': name, 'propertyName': 'refreshnocache'})
+        return ok
 
     async def _get_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         main_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)

@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-09T14:38:57.837Z",
+  "title": "Design System: TipTune",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "TipTune blue",
+        "tonalRamp": [
+          "oklch(15% 0.16 265)",
+          "oklch(26% 0.16 265)",
+          "oklch(38% 0.16 265)",
+          "oklch(49% 0.16 265)",
+          "oklch(61% 0.16 265)",
+          "oklch(72% 0.16 265)",
+          "oklch(84% 0.16 265)",
+          "oklch(95% 0.16 265)"
+        ]
+      },
+      "primary-weak": {
+        "role": "primary",
+        "displayName": "Blue selection tint",
+        "tonalRamp": [
+          "oklch(15% 0.16 265)",
+          "oklch(26% 0.16 265)",
+          "oklch(38% 0.16 265)",
+          "oklch(49% 0.16 265)",
+          "oklch(61% 0.16 265)",
+          "oklch(72% 0.16 265)",
+          "oklch(84% 0.16 265)",
+          "oklch(95% 0.16 265)"
+        ]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Page ground",
+        "tonalRamp": [
+          "oklch(15% 0.01 270)",
+          "oklch(26% 0.01 270)",
+          "oklch(38% 0.01 270)",
+          "oklch(49% 0.01 270)",
+          "oklch(61% 0.01 270)",
+          "oklch(72% 0.01 270)",
+          "oklch(84% 0.01 270)",
+          "oklch(95% 0.01 270)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Card surface",
+        "tonalRamp": [
+          "oklch(15% 0.01 270)",
+          "oklch(26% 0.01 270)",
+          "oklch(38% 0.01 270)",
+          "oklch(49% 0.01 270)",
+          "oklch(61% 0.01 270)",
+          "oklch(72% 0.01 270)",
+          "oklch(84% 0.01 270)",
+          "oklch(95% 0.01 270)"
+        ]
+      },
+      "surface-2": {
+        "role": "neutral",
+        "displayName": "Nested surface",
+        "tonalRamp": [
+          "oklch(15% 0.01 270)",
+          "oklch(26% 0.01 270)",
+          "oklch(38% 0.01 270)",
+          "oklch(49% 0.01 270)",
+          "oklch(61% 0.01 270)",
+          "oklch(72% 0.01 270)",
+          "oklch(84% 0.01 270)",
+          "oklch(95% 0.01 270)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Fine border",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26% 0 0)",
+          "oklch(38% 0 0)",
+          "oklch(49% 0 0)",
+          "oklch(61% 0 0)",
+          "oklch(72% 0 0)",
+          "oklch(84% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Strong border",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26% 0 0)",
+          "oklch(38% 0 0)",
+          "oklch(49% 0 0)",
+          "oklch(61% 0 0)",
+          "oklch(72% 0 0)",
+          "oklch(84% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Dashboard text",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26% 0 0)",
+          "oklch(38% 0 0)",
+          "oklch(49% 0 0)",
+          "oklch(61% 0 0)",
+          "oklch(72% 0 0)",
+          "oklch(84% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Supporting text",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26% 0 0)",
+          "oklch(38% 0 0)",
+          "oklch(49% 0 0)",
+          "oklch(61% 0 0)",
+          "oklch(72% 0 0)",
+          "oklch(84% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "broadcast-text": {
+        "role": "neutral",
+        "displayName": "Broadcast text",
+        "tonalRamp": [
+          "oklch(15% 0.003 270)",
+          "oklch(26% 0.003 270)",
+          "oklch(38% 0.003 270)",
+          "oklch(49% 0.003 270)",
+          "oklch(61% 0.003 270)",
+          "oklch(72% 0.003 270)",
+          "oklch(84% 0.003 270)",
+          "oklch(95% 0.003 270)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "broadcast-title": {
+        "displayName": "Full current-song title",
+        "purpose": "Current-song title before broadcast canvas scaling."
+      },
+      "broadcast-body": {
+        "displayName": "Broadcast reading",
+        "purpose": "Panel information with a tighter line height than the dashboard."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-xs",
+        "value": "0 1px 1px rgba(0, 0, 0, 0.30), 0 6px 16px rgba(0, 0, 0, 0.20)",
+        "purpose": "Incumbent dashboard cards."
+      },
+      {
+        "name": "shadow-sm",
+        "value": "0 1px 1px rgba(0, 0, 0, 0.35), 0 10px 24px rgba(0, 0, 0, 0.25)",
+        "purpose": "Incumbent transient dashboard notices."
+      },
+      {
+        "name": "broadcast-panel",
+        "value": "0 6px 20px rgba(0,0,0,.24)",
+        "purpose": "Full and Compact broadcast panels."
+      }
+    ],
+    "motion": [
+      {
+        "name": "alert-enter",
+        "value": "180ms cubic-bezier(.16,1,.3,1)",
+        "purpose": "Opacity .3 to 1, translateY 8px to 0; only for Subtle overlay alerts. Off and reduced-motion suppress it."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "overlay-controls-stack",
+        "value": "600px",
+        "purpose": "Maximum width; two shrinkable control columns and stacked URL/copy controls."
+      },
+      {
+        "name": "settings-two-column",
+        "value": "980px",
+        "purpose": "Minimum width; incumbent Settings grid."
+      },
+      {
+        "name": "save-full-width",
+        "value": "480px",
+        "purpose": "Maximum width; incumbent Save button expands."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Quiet dashboard action.",
+      "html": "<button class=\"ds-button\">Preview request</button>",
+      "css": ".ds-button{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:10px 12px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.08));background:rgba(255,255,255,.02);color:var(--text,rgba(255,255,255,.92));cursor:pointer}.ds-button:hover{background:rgba(255,255,255,.05);border-color:var(--border-strong,rgba(255,255,255,.12))}.ds-button:active{background:rgba(255,255,255,.06)}.ds-button:focus-visible{outline:2px solid rgba(91,140,255,.75);outline-offset:2px;}.ds-button:disabled{opacity:.45;cursor:not-allowed}.ds-button:disabled:hover{background:rgba(255,255,255,.02);border-color:var(--border,rgba(255,255,255,.08))}"
+    },
+    {
+      "name": "Save action",
+      "kind": "button",
+      "description": "Incumbent prominent Settings Save action.",
+      "html": "<button class=\"ds-save\">Save changes</button>",
+      "css": ".ds-save{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:10px 12px;border-radius:12px;background:var(--accent,#5b8cff);border:1px solid var(--accent,#5b8cff);color:var(--bg,#0b0c10);font-weight:650;cursor:pointer}.ds-save:hover{background:#7ba2ff;border-color:#7ba2ff}.ds-save:active{background:rgba(255,255,255,.06)}.ds-save:focus-visible{outline:2px solid rgba(91,140,255,.75);outline-offset:2px;}.ds-save:disabled{opacity:.45;cursor:not-allowed}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Nested dark surface for settings.",
+      "html": "<label class=\"ds-label\" for=\"ds-name\">OBS source name</label><input class=\"ds-input\" id=\"ds-name\" value=\"TipTune Overlay\">",
+      "css": ".ds-label{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;display:block;font-size:12px;color:var(--muted,rgba(255,255,255,.62));margin:12px 0 6px}.ds-input{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.08));background:var(--surface-2,#0e1014);color:var(--text,rgba(255,255,255,.92))}.ds-input:focus-visible{outline:2px solid rgba(91,140,255,.75);outline-offset:2px;}"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "description": "Incumbent selected pill navigation.",
+      "html": "<nav><a class=\"ds-nav\" href=\"#settings\" aria-current=\"page\">Settings</a></nav>",
+      "css": ".ds-nav{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;display:inline-flex;padding:8px 10px;border-radius:999px;border:1px solid rgba(91,140,255,.35);background:var(--accent-weak,rgba(91,140,255,.16));color:var(--text,rgba(255,255,255,.92));line-height:1;text-decoration:none;white-space:nowrap}.ds-nav:hover{background:rgba(255,255,255,.04);color:rgba(255,255,255,.86)}.ds-nav:focus-visible{outline:2px solid rgba(91,140,255,.75);outline-offset:2px;}"
+    },
+    {
+      "name": "Information pill",
+      "kind": "chip",
+      "description": "Incumbent status emphasis.",
+      "html": "<span class=\"ds-pill\">Connected</span>",
+      "css": ".ds-pill{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid rgba(91,140,255,.45);background:var(--accent-weak,rgba(91,140,255,.16));font-size:12px;color:rgba(255,255,255,.88)}"
+    },
+    {
+      "name": "Dashboard card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Incumbent container inherited by overlay settings.",
+      "html": "<section class=\"ds-card\"><h2>Stream information display</h2><p>Configure the browser overlay.</p></section>",
+      "css": ".ds-card{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--surface,#111318);color:var(--text,rgba(255,255,255,.92));border:1px solid var(--border,rgba(255,255,255,.08));border-radius:var(--radius,14px);padding:18px;box-shadow:var(--shadow-xs,0 1px 1px rgba(0,0,0,.30),0 6px 16px rgba(0,0,0,.20))}.ds-card h2{font-size:18px;font-weight:650;letter-spacing:.2px;margin:0 0 10px}.ds-card p{font-size:12px;line-height:1.45;color:var(--muted,rgba(255,255,255,.62))}"
+    },
+    {
+      "name": "Full broadcast panel",
+      "kind": "custom",
+      "refersTo": "broadcast-panel",
+      "description": "Configured panel; sample snippet uses overlay defaults.",
+      "html": "<section class=\"ds-broadcast\"><div class=\"ds-heading\"><span class=\"ds-dot\"></span><strong>Now Playing</strong><span class=\"ds-source\">Spotify</span></div><div class=\"ds-title\">Midnight City</div><div class=\"ds-artist\">M83</div><div class=\"ds-requester\">Requested by <strong>StarGazer</strong></div></section>",
+      "css": ".ds-broadcast{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;line-height:1.3;background:rgba(17,19,24,.9);color:#f2f3f5;border-radius:14px;box-shadow:0 6px 20px rgba(0,0,0,.24);padding:22px 24px}.ds-heading{display:flex;align-items:center;gap:9px;font-size:17px;margin-bottom:15px}.ds-heading strong,.ds-requester strong{font-weight:650}.ds-dot{width:8px;height:8px;border-radius:50%;background:#5b8cff}.ds-source{margin-left:auto;opacity:.8;font-size:15px}.ds-title{font-size:30px;font-weight:700;letter-spacing:-.02em;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}.ds-artist{font-size:21px;margin-top:5px;opacity:.85;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.ds-requester{font-size:15px;margin-top:9px;opacity:.8;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}"
+    }
+  ],
+  "narrative": {
+    "northStar": "TipTune's stream information display",
+    "overview": "The approved incumbent language is dark surfaces, a blue accent, system typography, and restrained broadcast information. The overlay extends that language into transparent OBS composition. This record describes the dashboard primitives it inherits and the finished overlay extension; it does not claim a redesign or audit of the rest of TipTune.\n\nGround truth: `webui/src/app.css`, `webui/src/components/overlay-settings.css`, `webui/src/overlay/overlay.css`, `OverlaySettings.tsx`, `OverlayCanvas.tsx`, and overlay defaults in `webui/src/overlay/types.ts`. Component and layout guidance below is scoped explicitly where broadcast behavior differs from dashboard behavior.",
+    "keyCharacteristics": [
+      "Dark, gently rounded dashboard surfaces with restrained blue emphasis.",
+      "Grouped broadcast panels on a transparent canvas.",
+      "Bounded song and requester text, with separate placement and readability previews."
+    ],
+    "rules": [
+      {
+        "name": "The Bounded Text Rule",
+        "body": "Current titles occupy at most two lines, queue titles one, and alert messages three. Artists and requesters truncate with ellipses; text containers can shrink without forcing page overflow.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two Preview Frames Rule",
+        "body": "Full canvas is a 16:9 placement preview with broadcast scaling. Inspect panels uses scale 1, a top-left inset of 20px, and a 440px-high scrollable viewport; its content is 600px wide in Full and 480px in Compact. Horizontal and vertical scrolling stay inside this preview. Inspection height follows the measured group plus 40px. Inspect intentionally ignores the configured broadcast corner and scale without changing either setting.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Do preserve the incumbent dark palette, blue emphasis, and approved system typography.",
+      "Do keep placement preview and readable inspection as distinct frames of the same panel content.",
+      "Do bound text and keep preview scrolling within the settings card.",
+      "Do retain genuine artwork and the inline SVG fallback."
+    ],
+    "donts": [
+      "Don't apply inspection coordinates or scale to the broadcast canvas.",
+      "Don't put the preview checkerboard or settings chrome into OBS output.",
+      "Don't promote overlay-specific panel widths or broadcast type sizes into dashboard-wide rules."
+    ]
+  }
+}

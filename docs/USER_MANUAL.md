@@ -331,7 +331,9 @@ Use this for testing or manual queueing:
 
 ### Send “Now Playing” to OBS
 
-If OBS is enabled and connected, click **Send info to OBS** to update the now playing overlay.
+In Browser display mode, **Send info to OBS** announces the current Spotify or
+YouTube song through the browser overlay. It works without an OBS WebSocket
+connection. Legacy text mode requires OBS to be connected.
 
 ### Queue persistence
 
@@ -500,7 +502,57 @@ Failures include an `error` field such as:
 
 ## OBS integration
 
-TipTune can drive OBS overlays via obs-websocket.
+TipTune provides one transparent Browser Source for Now Playing, upcoming songs,
+request acknowledgments, warnings, and queue notices. The OBS WebSocket
+connection enables automatic setup; manual browser display works without it.
+
+### Browser display
+
+Open **Stream information display** in Settings or the Setup Wizard. Fresh
+installations use **Browser display**. Save connection details and appearance
+changes, select an OBS scene, then use **Add browser overlay**. Existing users
+can use **Switch to browser overlay**: creation is verified before changing
+modes, and the four old text items are hidden in the selected scene while their
+inputs are retained. Source-name conflicts are reported instead of overwriting
+unrelated sources. Adding again reuses the input and preserves existing scene
+item transforms. Add the same existing input to other scenes as needed.
+
+For manual setup, copy the displayed URL (normally
+`http://127.0.0.1:8765/overlay`) into an OBS Browser Source. Match the OBS base
+canvas width and height, use 30 FPS, and leave both **Shutdown source when not
+visible** and **Refresh browser when scene becomes active** off. TipTune and OBS
+must run on the same computer. Keep the source fitted to the canvas; position
+its panels through TipTune's controls.
+
+The Full and Compact presets support four corner positions, 50–150% scale,
+0–200 reference pixels of edge margin, 1–5 upcoming songs, panel/artwork toggles,
+three colors, panel opacity, and optional subtle motion. Layout scales to the
+browser viewport and fits portrait and landscape canvases. Requester names
+appear when recorded with a request; older or manually added songs omit unknown
+names. No playback progress or countdown is displayed.
+
+**Sample** preview uses illustrative songs; **Live** preview uses the current
+queue. Unsaved styling and **Preview …** buttons affect only the preview.
+**Full canvas** checks position and scale; **Inspect panels** provides readable, scrollable detail without changing broadcast settings.
+Saved styling applies immediately to connected displays. **Send … to OBS**
+buttons deliberately send a test to the actual overlay. OBS connection, source
+configuration, and display-client count are separate indicators; a connected
+display client does not by itself prove the source is visible on your stream.
+
+Start TipTune first. If OBS loaded the browser before the backend was ready,
+refresh the source; with the OBS connection enabled, TipTune attempts a startup
+refresh automatically. On a lost connection, alerts clear immediately and
+persistent content hides after 15 seconds without a heartbeat. Reconnection
+restores current state without replaying expired messages. Alert durations use
+`General.request_overlay_duration` by default; at most three alerts are visible
+at once, with a bounded queue for bursts.
+
+Appearance is stored in `[Overlay]` in `config.ini`. Configurations without
+`Overlay.mode` retain text mode when OBS was enabled or Off otherwise. To switch
+back, select **Legacy text sources** and save; the existing input names remain
+available. Other scenes are retained during migration, so hide old text items
+there when reusing the browser input. Audio continues through the existing
+Spotify and TipTune audio-capture sources.
 
 ### Prereqs
 
@@ -508,7 +560,7 @@ TipTune can drive OBS overlays via obs-websocket.
 - Enable obs-websocket in OBS.
   - Commonly: **Tools → WebSocket Server Settings**
 
-### Required sources
+### Legacy text sources
 
 TipTune expects text sources with these names:
 
@@ -581,6 +633,11 @@ See `config.ini.example` for the template.
   - `google_api_key`, `google_cx`
 - `[OBS]`
   - `enabled`, `host`, `port`, `password`, `scene_name`
+- `[Overlay]`
+  - `mode` (`browser`, `text`, or `off`), `source_name`, `layout`, `position`
+  - `scale`, `margin`, `queue_length`, `opacity`, `motion`
+  - `show_now_playing`, `show_queue`, `show_alerts`, `show_artwork`
+  - `accent_color`, `background_color`, `text_color`
 - `[Web]`
   - `host`, `port`
 - `[Music]`
