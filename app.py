@@ -11,6 +11,16 @@ import subprocess
 import sys
 import time
 import uuid
+
+from utils.process_lifecycle import ParentProcess, join_desktop_job
+
+try:
+    join_desktop_job()
+except OSError:
+    # The desktop can exit while PyInstaller is starting its worker. Do not
+    # keep an unmanaged worker alive or open a windowed traceback dialog.
+    raise SystemExit(1) from None
+
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -323,24 +333,20 @@ async def _watch_parent_process() -> None:
     except Exception:
         return
 
-    while not shutdown_event.is_set():
-        await asyncio.sleep(1.5)
-
-        try:
-            if sys.platform == 'win32':
-                import ctypes
-                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, parent_pid)
-                if handle:
-                    ctypes.windll.kernel32.CloseHandle(handle)
-                else:
-                    shutdown_event.set()
-                    break
-            else:
-                os.kill(parent_pid, 0)
-        except Exception:
-            shutdown_event.set()
-            break
+    parent = None
+    try:
+        parent = ParentProcess(parent_pid)
+        while not shutdown_event.is_set():
+            if not parent.alive():
+                shutdown_event.set()
+                break
+            await asyncio.sleep(1.5)
+    except Exception as exc:
+        logger.warning('parent.monitor.error', data={'error_type': type(exc).__name__})
+        shutdown_event.set()
+    finally:
+        if parent is not None:
+            parent.close()
 
 
 def _get_web_runtime_overrides() -> Tuple[Optional[str], Optional[int]]:
@@ -2460,12 +2466,6 @@ class SongRequestService:
             pass
 
     async def start(self) -> None:
-        self._tasks.append(asyncio.create_task(self._events_loop()))
-        self._tasks.append(asyncio.create_task(self._overlay_loop()))
-        self._tasks.append(asyncio.create_task(self._tip_processor_loop()))
-        self._tasks.append(asyncio.create_task(self._queue_watchdog()))
-        self._tasks.append(asyncio.create_task(self._local_control_loop()))
-
         web_host = config.get("Web", "host", fallback="127.0.0.1") if config.has_section("Web") else "127.0.0.1"
         web_port = config.getint("Web", "port", fallback=8765) if config.has_section("Web") else 8765
         override_host, override_port = _get_web_runtime_overrides()
@@ -2476,10 +2476,17 @@ class SongRequestService:
         try:
             self._web = WebUI(self, host=web_host, port=web_port)
             await self._web.start()
-            self._tasks.append(asyncio.create_task(self._refresh_browser_on_startup()))
             logger.info("webui.started", message="Web UI started", data={"host": web_host, "port": web_port})
         except Exception as exc:
             logger.exception("webui.error", exc=exc, message="Failed to start Web UI")
+            raise
+
+        self._tasks.append(asyncio.create_task(self._events_loop()))
+        self._tasks.append(asyncio.create_task(self._overlay_loop()))
+        self._tasks.append(asyncio.create_task(self._tip_processor_loop()))
+        self._tasks.append(asyncio.create_task(self._queue_watchdog()))
+        self._tasks.append(asyncio.create_task(self._local_control_loop()))
+        self._tasks.append(asyncio.create_task(self._refresh_browser_on_startup()))
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -4520,3 +4527,7 @@ if __name__ == '__main__':
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except Exception:
+        # main() logged the startup failure. Exit without PyInstaller's modal
+        # traceback dialog retaining a second backend when its port is busy.
+        raise SystemExit(1) from None
