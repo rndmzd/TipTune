@@ -228,6 +228,10 @@ class OverlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.service.get_queue_state = AsyncMock(side_effect=AssertionError('No per-client playback lookup'))
         self.service._fetch_spotify_track_meta = AsyncMock(side_effect=AssertionError('No per-client metadata lookup'))
         webui = self.app.WebUI(self.service)
+        # Python tests run before Vite in CI and must not depend on local build output.
+        overlay_html = '<!doctype html><html><body>overlay test document</body></html>'
+        webui._overlay_index = self.root / 'overlay.html'
+        webui._overlay_index.write_text(overlay_html, encoding='utf-8')
         client = TestClient(TestServer(webui._app)); await client.start_server()
         self.addAsyncCleanup(client.close)
         for _ in range(3):
@@ -235,7 +239,9 @@ class OverlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 200)
         response = await client.get('/overlay', allow_redirects=False)
         self.assertEqual(response.status, 200)
-        self.assertIn('overlay', await response.text())
+        self.assertEqual(await response.text(), overlay_html)
+        self.assertEqual(response.content_type, 'text/html')
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
         stream = await client.get('/api/overlay/events', headers={'Origin': 'http://tauri.localhost'})
         self.assertEqual(stream.headers['Access-Control-Allow-Origin'], 'http://tauri.localhost')
         self.assertEqual(await stream.content.readline(), b'event: snapshot\n')
@@ -245,6 +251,15 @@ class OverlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.service.get_queue_state.assert_not_awaited()
         self.service._fetch_spotify_track_meta.assert_not_awaited()
         stream.close()
+
+    async def test_missing_overlay_build_returns_recovery_message_without_setup_redirect(self):
+        webui = self.app.WebUI(self.service)
+        webui._overlay_index = self.root / 'missing-overlay.html'
+        async with TestClient(TestServer(webui._app)) as client:
+            response = await client.get('/overlay', allow_redirects=False)
+            self.assertEqual(response.status, 503)
+            self.assertNotIn('Location', response.headers)
+            self.assertEqual(await response.text(), 'Build the Web UI, then restart TipTune.')
 
     async def test_browser_tests_and_youtube_now_playing_work_without_obs(self):
         ok, error = await self.service.trigger_obs_test_overlay('WarningOverlay')
