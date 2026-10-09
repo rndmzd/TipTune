@@ -36,6 +36,7 @@ from helpers.checks import Checks
 from utils.overlay import OverlayService, DEFAULTS as OVERLAY_DEFAULTS, read_settings as read_overlay_settings, validate_settings as validate_overlay_settings
 from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists, get_app_dir
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
+from utils.spotify_errors import spotify_error_message
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -858,13 +859,13 @@ class WebUI:
     async def _api_devices(self, _request: web.Request) -> web.Response:
         try:
             devices, error = await self._service.get_spotify_devices()
-            payload: Dict[str, Any] = {"ok": True, "devices": devices}
+            payload: Dict[str, Any] = {"ok": not bool(error), "devices": devices}
             if error:
                 payload["error"] = error
             return web.json_response(payload)
         except Exception as exc:
             logger.exception("webui.api.devices.error", exc=exc, message="Failed to get devices")
-            return web.json_response({"ok": False, "error": str(exc), "devices": []})
+            return web.json_response({"ok": False, "error": spotify_error_message(exc), "devices": []})
 
     async def _api_spotify_search(self, request: web.Request) -> web.Response:
         q = request.query.get('q', '')
@@ -2755,6 +2756,7 @@ class SongRequestService:
             scope="user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private",
             open_browser=False,
             cache_path=str(cache_path),
+            requests_timeout=5,
         )
 
     def _is_spotify_authorized(self) -> bool:
@@ -2767,7 +2769,7 @@ class SongRequestService:
             # (/api/spotify/auth/status) and must stay fast and non-blocking.
             oauth = self._build_spotify_oauth()
             token_info = oauth.cache_handler.get_cached_token()
-            return bool(token_info)
+            return bool(token_info and set(oauth.scope.split()).issubset(set(token_info.get('scope', '').split())))
         except Exception:
             return False
 
@@ -2777,7 +2779,9 @@ class SongRequestService:
         authorized = self._is_spotify_authorized()
 
         from helpers import spotify_client as helpers_spotify_client
+        from helpers import spotify_client_error
         client_ready = helpers_spotify_client is not None
+        authorized = authorized and not bool(spotify_client_error)
 
         async with self._spotify_auth_lock:
             return {
@@ -2787,7 +2791,7 @@ class SongRequestService:
                 "redirect_url": redirect_url,
                 "in_progress": bool(self._spotify_auth_in_progress),
                 "auth_url": self._spotify_auth_url,
-                "error": self._spotify_auth_error,
+                "error": self._spotify_auth_error or spotify_client_error,
             }
 
     async def _stop_spotify_auth_server(self) -> None:
@@ -2892,7 +2896,7 @@ class SongRequestService:
         except Exception as exc:
             async with self._spotify_auth_lock:
                 self._spotify_auth_in_progress = False
-                self._spotify_auth_error = str(exc)
+                self._spotify_auth_error = spotify_error_message(exc)
             asyncio.create_task(self._stop_spotify_auth_server())
             return web.Response(text="Failed to complete Spotify authorization. You can close this window.", content_type='text/plain', status=500)
 
@@ -2900,7 +2904,7 @@ class SongRequestService:
             from helpers import config as helpers_config
             from helpers import refresh_spotify_client
             helpers_config.read(config_path)
-            refresh_spotify_client()
+            await loop.run_in_executor(None, refresh_spotify_client)
         except Exception:
             pass
 
@@ -4257,7 +4261,8 @@ class SongRequestService:
             helpers_spotify_client = helpers_spotify_client2
 
         if helpers_spotify_client is None:
-            return ([], "Spotify client not ready")
+            from helpers import spotify_client_error
+            return ([], spotify_client_error or 'Configure a Spotify Client ID and redirect URL, save, then connect Spotify in Settings.')
 
         try:
             payload = await asyncio.wait_for(
@@ -4268,10 +4273,18 @@ class SongRequestService:
             return ([], "Timed out listing devices")
         except Exception as exc:
             logger.exception("spotify.devices.error", exc=exc, message="Failed to list Spotify devices")
-            return ([], str(exc))
+            error = spotify_error_message(exc)
+            if getattr(exc, 'error', None) in ('invalid_client', 'invalid_grant') or getattr(exc, 'http_status', None) == 401:
+                import helpers
+                if helpers.spotify_client is helpers_spotify_client:
+                    helpers.spotify_client_error = error
+            return ([], error)
 
         devices = payload.get('devices', []) if isinstance(payload, dict) else []
         if isinstance(devices, list):
+            import helpers
+            if helpers.spotify_client is helpers_spotify_client:
+                helpers.spotify_client_error = None
             return (devices, None)
         return ([], None)
 
@@ -4454,7 +4467,7 @@ class SongRequestService:
             from helpers import config as helpers_config
             from helpers import refresh_spotify_client
             helpers_config.read(config_path)
-            refresh_spotify_client()
+            await asyncio.get_running_loop().run_in_executor(None, refresh_spotify_client)
         except Exception:
             pass
 

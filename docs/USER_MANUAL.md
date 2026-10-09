@@ -713,11 +713,17 @@ If you do not set a custom path, TipTune writes to:
 
 ### Spotify authorization problems
 
+- Settings → Spotify shows the API connection status and offers **Connect Spotify** / **Reconnect Spotify**. Save changes to Client ID or redirect URL before connecting. Device discovery refreshes automatically after authorization completes.
+- The Spotify tab's website login and TipTune's API authorization are separate; both must use the same account.
+- `invalid_client` means Spotify rejected API client authorization, including refreshes of older saved logins. Reconnect first to obtain a fresh login. If it still fails, verify that the app exists and is enabled in your [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and its Client ID matches Settings; save any changes, then reconnect. Reloading the embedded player does not repair API authorization.
+- An expired or revoked API authorization requires reconnecting. If Spotify denies API access, check the app's allowed users and account requirements in the Developer Dashboard.
 - Verify `Spotify.redirect_url` matches exactly and is registered in the Spotify Developer Dashboard.
 - Redirect URL must be `http` and use `127.0.0.1` or `localhost` with an explicit port.
 
 ### “No active device” / device not listed
 
+- Read any error beside **Available devices** first. API/network failures are shown separately from a successful response containing no devices.
+- Confirm the player is signed in to the same account authorized for TipTune.
 - Open Spotify on the device you want to control.
 - Start playback briefly.
 - Return to Settings → Playback Device → **Refresh**.

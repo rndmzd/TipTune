@@ -9,8 +9,11 @@ function usage(exitCode = 1) {
     'Usage: node ./scripts/bump-minor.mjs [--dry-run] [--allow-dirty] [--no-commit] [--no-tag]',
     '',
     'Bumps x.y.z -> x.(y+1).0 in:',
+    '  - package.json',
+    '  - package-lock.json',
     '  - src-tauri/tauri.conf.json',
     '  - src-tauri/Cargo.toml',
+    '  - src-tauri/Cargo.lock',
   ].join('\n');
   console.log(msg);
   process.exit(exitCode);
@@ -116,12 +119,26 @@ function replaceCargoVersion(text, next) {
   return out;
 }
 
+function cargoLockVersion(text) {
+  const match = text.match(/(\[\[package\]\]\r?\nname = "tiptune-tauri"\r?\nversion = ")([^"\r\n]+)(")/);
+  if (!match) throw new Error('Could not find tiptune-tauri package version in Cargo.lock');
+  return match;
+}
+
+function packageLock(text) {
+  const lock = JSON.parse(text);
+  if (!lock.packages?.['']?.version) throw new Error('Could not find root package version in package-lock.json');
+  return lock;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   const tauriConfPath = new URL('./src-tauri/tauri.conf.json', ROOT);
   const cargoTomlPath = new URL('./src-tauri/Cargo.toml', ROOT);
   const packageJsonPath = new URL('./package.json', ROOT);
+  const packageLockPath = new URL('./package-lock.json', ROOT);
+  const cargoLockPath = new URL('./src-tauri/Cargo.lock', ROOT);
 
   if (!args.allowDirty) {
     const st = sh('git', ['status', '--porcelain'], { cwd: ROOT });
@@ -133,12 +150,16 @@ async function main() {
   const tauriConfText = await fs.readFile(tauriConfPath, 'utf8');
   const cargoTomlText = await fs.readFile(cargoTomlPath, 'utf8');
   const packageJsonText = await fs.readFile(packageJsonPath, 'utf8');
+  const packageLockText = await fs.readFile(packageLockPath, 'utf8');
+  const cargoLockText = await fs.readFile(cargoLockPath, 'utf8');
 
   const v1 = extractJsonVersion(tauriConfText);
   const v2 = extractCargoVersion(cargoTomlText);
   const v3 = extractPackageJsonVersion(packageJsonText);
-  if (v1 !== v2 || v1 !== v3) {
-    throw new Error(`Version mismatch: tauri.conf.json=${v1} Cargo.toml=${v2} package.json=${v3}`);
+  const npmLock = packageLock(packageLockText);
+  const rustLock = cargoLockVersion(cargoLockText);
+  if ([v2, v3, npmLock.version, npmLock.packages[''].version, rustLock[2]].some((v) => v !== v1)) {
+    throw new Error(`Version mismatch: tauri.conf.json=${v1} Cargo.toml=${v2} package.json=${v3} package-lock.json=${npmLock.version}/${npmLock.packages[''].version} Cargo.lock=${rustLock[2]}`);
   }
 
   const next = bumpMinor(v1);
@@ -146,6 +167,10 @@ async function main() {
   const nextTauriConf = replaceJsonVersion(tauriConfText, next);
   const nextCargoToml = replaceCargoVersion(cargoTomlText, next);
   const nextPackageJson = replacePackageJsonVersion(packageJsonText, next);
+  npmLock.version = next;
+  npmLock.packages[''].version = next;
+  const nextPackageLock = JSON.stringify(npmLock, null, 2) + '\n';
+  const nextCargoLock = cargoLockText.replace(rustLock[0], `${rustLock[1]}${next}${rustLock[3]}`);
 
   console.log(`Current version: ${v1}`);
   console.log(`Next version:    ${next}`);
@@ -158,8 +183,10 @@ async function main() {
   await fs.writeFile(tauriConfPath, nextTauriConf, 'utf8');
   await fs.writeFile(cargoTomlPath, nextCargoToml, 'utf8');
   await fs.writeFile(packageJsonPath, nextPackageJson, 'utf8');
+  await fs.writeFile(packageLockPath, nextPackageLock, 'utf8');
+  await fs.writeFile(cargoLockPath, nextCargoLock, 'utf8');
 
-  sh('git', ['add', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'package.json'], { cwd: ROOT });
+  sh('git', ['add', 'src-tauri/tauri.conf.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'package.json', 'package-lock.json'], { cwd: ROOT });
 
   if (!args.noCommit) {
     sh('git', ['commit', '-m', `Bump version to v${next}`], { cwd: ROOT });

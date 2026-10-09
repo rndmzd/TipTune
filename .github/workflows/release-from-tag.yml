@@ -88,4 +88,4 @@ jobs:
           releaseBody: "See assets for downloads."
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} -- --locked

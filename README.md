@@ -187,6 +187,8 @@ Steps:
 Notes:
 
 - Spotify playback control typically requires Spotify Premium.
+- Settings shows Spotify API connection and device errors. The Spotify tab's website login is separate from this authorization. Use the same account for both.
+- If devices fail to load, read the error beside **Available devices**. For `invalid_client`, click **Connect Spotify** or **Reconnect Spotify** to replace the saved API login. If authorization still fails, verify the app exists and is enabled in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and its Client ID matches Settings. Save any credential changes before reconnecting. A successful empty response has separate guidance to start playback and refresh.
 - The redirect URL must be `http` and must use `127.0.0.1` or `localhost` with an explicit port.
 
 ---
@@ -312,10 +314,25 @@ This will:
 - Build the Web UI into `webui/dist`.
 - Produce Tauri bundles for your platform.
 
+`package-lock.json` and `src-tauri/Cargo.lock` are committed so local and CI builds
+use the same dependency versions. Update Tauri's CLI, API, Rust crates, and plugin
+pairs together, and commit both lockfiles. CI and releases pass Cargo's `--locked`
+flag so dependency resolution cannot silently change during packaging.
+
+To enforce the same lockfile check locally, including in PowerShell:
+
+```powershell
+node node_modules/@tauri-apps/cli/tauri.js build -- --locked
+```
+
+Windows CI uses 7-Zip to inspect both installer payloads and rejects missing or
+incorrect Tauri installer metadata. MSI and NSIS builds must retain their
+installer identity so the Settings updater selects the appropriate package.
+
 Windows lifecycle regression checks (after building the sidecar):
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --test windows_lifecycle
+cargo test --locked --manifest-path src-tauri/Cargo.toml --test windows_lifecycle
 python scripts/check-packaged-lifecycle.py --backend src-tauri/binaries/TipTune-x86_64-pc-windows-msvc.exe
 ```
 
