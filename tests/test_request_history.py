@@ -112,6 +112,81 @@ class RequestHistoryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(payload['history']), count)
                     self.assertEqual(payload['history'][-1]['id'], 1499)
 
+    def artwork_service(self):
+        service = self.service()
+        del service._enrich_history_items
+        service._fetch_spotify_track_meta = AsyncMock()
+        return service
+
+    async def test_history_reuses_queue_cache_for_uri_and_url(self):
+        service = self.artwork_service()
+        track_id = 'A' * 22
+        meta = {'name': 'Hello', 'album_image_url': 'https://example.com/hello.jpg'}
+        service._cache_put_track(track_id, meta)
+        service._request_history_recent = [
+            {'resolved_uri': f'spotify:track:{track_id}'},
+            {'resolved_uri': f'https://open.spotify.com/track/{track_id}?si=test'},
+        ]
+        items = await service.get_recent_request_history()
+        self.assertEqual([item['spotify_track'] for item in items], [meta, meta])
+        service._fetch_spotify_track_meta.assert_not_awaited()
+        self.assertEqual(json.loads((self.root / 'request_history.json').read_text()), items)
+
+    async def test_newest_artwork_is_fetched_first_and_survives_cache_eviction(self):
+        service = self.artwork_service()
+        service._track_cache_max_items = 2
+        uris = [f'spotify:track:{index:022d}' for index in range(12)]
+        service._request_history_recent = [{'resolved_uri': uri} for uri in uris]
+        service._fetch_spotify_track_meta.side_effect = lambda uri: {'album_image_url': f'https://example.com/{uri}.jpg'}
+        items = await service.get_recent_request_history()
+        self.assertEqual([call.args[0] for call in service._fetch_spotify_track_meta.await_args_list], list(reversed(uris[2:])))
+        self.assertEqual([item['resolved_uri'] for item in items], uris)
+        self.assertEqual(sum('spotify_track' in item for item in items), 10)
+        service._fetch_spotify_track_meta.reset_mock()
+        await service.get_recent_request_history()
+        self.assertEqual(service._fetch_spotify_track_meta.await_count, 2)
+
+    async def test_visible_older_track_api_persists_artwork_across_restart(self):
+        service = self.artwork_service()
+        uri = 'spotify:track:' + 'A' * 22
+        meta = {'name': 'Hello', 'album_image_url': 'https://example.com/hello.jpg'}
+        service._request_history_recent = [{'resolved_uri': uri}, {'resolved_uri': uri}]
+        service._fetch_spotify_track_meta.return_value = meta
+        async with TestClient(TestServer(self.app.WebUI(service)._app)) as client:
+            response = await client.get('/api/history/track', params={'uri': uri})
+            self.assertEqual(response.status, 200)
+            self.assertEqual((await response.json())['track'], meta)
+        service._fetch_spotify_track_meta.assert_awaited_once_with(uri)
+        restored = self.artwork_service()
+        restored._fetch_spotify_track_meta.side_effect = RuntimeError('offline')
+        items = await restored.get_recent_request_history()
+        self.assertEqual([item['spotify_track'] for item in items], [meta, meta])
+        restored._fetch_spotify_track_meta.assert_not_awaited()
+
+    async def test_artwork_failures_leave_history_and_saved_covers_available(self):
+        service = self.artwork_service()
+        saved = {'album_image_url': 'https://example.com/saved.jpg'}
+        service._request_history_recent = [
+            {'resolved_uri': 'spotify:track:' + 'A' * 22, 'spotify_track': saved},
+            {'resolved_uri': 'spotify:track:' + 'B' * 22},
+            {'status': 'failed', 'resolved_uri': None},
+            {'resolved_uri': 'https://youtu.be/example'},
+        ]
+        service._fetch_spotify_track_meta.side_effect = RuntimeError('Spotify unavailable')
+        items = await service.get_recent_request_history()
+        self.assertEqual(items, service._request_history_recent)
+        service._fetch_spotify_track_meta.assert_awaited_once_with('spotify:track:' + 'B' * 22)
+
+    async def test_artwork_api_rejects_invalid_or_unknown_tracks(self):
+        service = self.artwork_service()
+        async with TestClient(TestServer(self.app.WebUI(service)._app)) as client:
+            for query, status in (({}, 400), ({'uri': 'https://youtu.be/example'}, 400),
+                                  ({'uri': 'spotify:track:' + 'A' * 22}, 404)):
+                with self.subTest(query=query):
+                    response = await client.get('/api/history/track', params=query)
+                    self.assertEqual(response.status, status)
+        service._fetch_spotify_track_meta.assert_not_awaited()
+
 
 if __name__ == '__main__':
     unittest.main()

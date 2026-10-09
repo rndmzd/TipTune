@@ -42,3 +42,23 @@ password =
 [Web]
 host = 127.0.0.1
 port = 8765
+
+[Overlay]
+# One transparent Browser Source, served by TipTune. Existing configs without
+# this section retain legacy text display (or Off when OBS was disabled).
+mode = browser
+layout = full
+position = bottom-left
+scale = 100
+margin = 32
+queue_length = 3
+show_now_playing = true
+show_queue = true
+show_alerts = true
+show_artwork = true
+accent_color = #5b8cff
+background_color = #111318
+text_color = #f2f3f5
+opacity = 90
+motion = subtle
+source_name = TipTune Overlay

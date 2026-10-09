@@ -206,7 +206,9 @@ TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.y
 
 ## OBS integration (optional)
 
-If enabled, TipTune connects to OBS via obs-websocket.
+TipTune can display Now Playing, upcoming songs, requester acknowledgments, warnings,
+and notices through **one transparent Browser Source**. Browser display works with
+Spotify, YouTube, and mixed queues and does not play additional audio.
 
 Steps:
 
@@ -217,11 +219,38 @@ Steps:
     - `OBS.enabled=true`
     - `OBS.host`, `OBS.port` (often `4455`), `OBS.password`
 
-1. In Setup Wizard or Settings, use **Create missing text sources** and then position/size them in OBS.
+1. Open **Stream information display** in Setup Wizard or Settings. Choose a scene and source name, save settings, then click **Add browser overlay** (or **Switch to browser overlay** for existing text setups).
+1. Use the **Full** or **Compact** preset and adjust position, scale, colors, visible panels, and motion. Preview buttons affect only the preview; **Send … to OBS** buttons appear on the actual source. Saved appearance changes apply live. Use **Inspect panels** to read the preview at a comfortable size on smaller screens.
 1. Optional: use **Create Spotify audio capture** (Windows) to set up an Application Audio Capture input for `Spotify.exe`.
 1. Optional: use **Create TipTune audio capture** (Windows) to set up an Application Audio Capture input for `TipTune.exe` (for YouTube playback audio sync in OBS).
 
 `scenes.yaml` defines scene metadata used by the project.
+
+For manual setup, select **Browser display**, save, then add a Browser Source in
+OBS with the URL shown in Settings (normally `http://127.0.0.1:8765/overlay`). Set
+its width and height to your OBS base canvas and use 30 FPS. Leave **Shutdown
+source when not visible** and **Refresh browser when scene becomes active** off.
+Manual setup does not require an OBS WebSocket connection. Start TipTune first;
+if OBS loaded the page before TipTune started, refresh the source. When enabled,
+the OBS connection attempts a source refresh after backend startup.
+
+Fresh installations use Browser display. Existing configurations without
+`[Overlay].mode` retain legacy text display when OBS was enabled, or Off when it
+was disabled. **Switch to browser overlay** verifies the browser input first,
+then hides legacy text items in the selected scene and retains their inputs.
+Select **Legacy text sources** and save to switch back. Other scenes are retained;
+hide any old text items there when reusing the browser input across scenes.
+
+The page reads cached display state through `/api/overlay/state` and
+`/api/overlay/events`; it never controls playback or reads raw tip messages.
+Temporary alerts expire independently. On connection loss, alerts clear and
+persistent panels hide after 15 seconds without a heartbeat. Recovery displays
+current state without replaying expired announcements. See `[Overlay]` in
+`config.ini.example` for all appearance settings.
+
+Developer checks: run the Python regression suite and `npm run webui:test`.
+The browser suite uses an isolated illustrative backend; install its browser
+once with `npx playwright install chromium`.
 
 ---
 

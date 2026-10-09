@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
+import { OverlaySettings } from '../components/OverlaySettings';
 
 declare const __APP_VERSION__: string;
 
@@ -189,6 +190,7 @@ export function SettingsPage() {
   });
 
   const [status, setStatus] = useState<string>('');
+  const [saveBusy, setSaveBusy] = useState<boolean>(false);
 
   const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
   const [obsMsg, setObsMsg] = useState<string>('');
@@ -405,12 +407,14 @@ export function SettingsPage() {
   }, [baselineCfgSig, cfg, secrets]);
 
   async function saveSettings() {
+    if (saveBusy) return;
     const historySizeRaw = cfg.General?.request_history_size ?? '1000';
     const historySize = Number(historySizeRaw);
     if (!/^\d+$/.test(historySizeRaw.trim()) || !Number.isSafeInteger(historySize) || historySize < 1) {
       setStatus('Error: Request history size must be a positive whole number.');
       return;
     }
+    setSaveBusy(true);
     setStatus('Saving...');
 
     const payload: Record<string, Record<string, string>> = {
@@ -452,6 +456,7 @@ export function SettingsPage() {
         password: secrets.obsPassword,
         scene_name: v('OBS', 'scene_name'),
       },
+      Overlay: cfg.Overlay || {},
     };
 
     try {
@@ -466,14 +471,37 @@ export function SettingsPage() {
       await loadConfig();
     } catch (e: any) {
       setStatus(`Error: ${e?.message ? e.message : String(e)}`);
+    } finally {
+      setSaveBusy(false);
     }
   }
 
   return (
     <>
-      <HeaderBar
-        title="Settings"
-      />
+      <div className="settingsHeader">
+        {isDirty || status ? (
+          <div className="saveBanner">
+            <div className="saveBannerInner">
+              <div className="saveBannerMessage" role="status" aria-live="polite">
+                {isDirty ? <strong>Unsaved changes</strong> : null}
+                {isDirty && !saveBusy ? <span className="muted">Your changes won’t take effect until you save.</span> : null}
+                {status && (!isDirty || status !== 'Saved.') ? <span className="muted">{status}</span> : null}
+              </div>
+              {isDirty ? (
+                <button
+                  className="saveBannerButton"
+                  type="button"
+                  disabled={saveBusy}
+                  onClick={() => saveSettings().catch(() => {})}
+                >
+                  {saveBusy ? 'Saving…' : 'Save changes'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        <HeaderBar title="Settings" />
+      </div>
 
       <div className="settingsGrid">
         <div className="card">
@@ -734,7 +762,7 @@ export function SettingsPage() {
 
         <div className="card">
           <h2>OBS</h2>
-          <label title={tooltip('OBS', 'enabled')}>{humanizeKey('enabled')}</label>
+          <label title={tooltip('OBS', 'enabled')}>OBS connection (automatic setup)</label>
           <select
             title={tooltip('OBS', 'enabled')}
             value={(v('OBS', 'enabled') || 'false').toLowerCase()}
@@ -765,6 +793,11 @@ export function SettingsPage() {
             value={secrets.obsPassword}
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />
+        </div>
+
+        <div className="card settingsSpanFull overlay-settings-card">
+          <OverlaySettings cfg={cfg} dirty={isDirty} onActivated={() => loadConfig().catch(() => {})}
+            onChange={(section, key, value) => setCfg((c) => ({ ...c, [section]: { ...(c[section] || {}), [key]: value } }))} />
         </div>
 
         {obsEnabled ? (
@@ -806,6 +839,7 @@ export function SettingsPage() {
             </div>
             {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
 
+{cfg.Overlay?.mode === 'text' ? (<>
             <label>Required text sources</label>
             <div className="tableWrap" style={{ marginTop: 8 }}>
               <table className="dataTable">
@@ -845,6 +879,7 @@ export function SettingsPage() {
               </table>
             </div>
 
+</>) : null}
             <label style={{ marginTop: 14 }}>TipTune audio capture (YouTube sync)</label>
             <div className="tableWrap" style={{ marginTop: 8 }}>
               <table className="dataTable">
@@ -1065,7 +1100,7 @@ export function SettingsPage() {
                 Refresh OBS status
               </button>
 
-              {hasMissingSources ? (
+              {cfg.Overlay?.mode === 'text' && hasMissingSources ? (
                 <button
                   type="button"
                   disabled={obsBusy}
@@ -1101,6 +1136,7 @@ export function SettingsPage() {
             {obsMsg ? <div className="muted">{obsMsg}</div> : null}
             {obsEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsEnsureMsg}</div> : null}
 
+{cfg.Overlay?.mode === 'text' ? (<>
             <label style={{ marginTop: 14 }}>Test overlays</label>
             <div className="actions">
               <button
@@ -1173,6 +1209,7 @@ export function SettingsPage() {
             <div className="muted" style={{ marginTop: 8 }}>
               Note: test overlay duration follows your configured OBS overlay duration setting.
             </div>
+</>) : null}
           </div>
         ) : null}
 
@@ -1315,20 +1352,6 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
-
-      {isDirty ? (
-        <div className="saveBanner">
-          <div className="saveBannerInner">
-            <div style={{ fontWeight: 650 }}>Save changes</div>
-            <div className="actions" style={{ marginTop: 0 }}>
-              <button type="button" onClick={() => saveSettings().catch(() => {})}>
-                Save changes
-              </button>
-              <span className="muted">{status}</span>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </>
   );
 }

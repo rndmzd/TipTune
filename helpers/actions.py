@@ -241,16 +241,28 @@ class Actions:
             return False
 
     async def trigger_song_requester_overlay(self, requester: str, song: str, duration: int) -> None:
+        display = getattr(self, 'overlay_service', None)
+        if display is not None and display.config['mode'] != 'text':
+            display.alert('request', song, requester, duration)
+            return
         if not self.obs_integration_enabled:
             return
         await self.obs.trigger_song_requester_overlay(requester, song, duration)
 
     async def trigger_warning_overlay(self, username: str, message: str, duration: int) -> None:
+        display = getattr(self, 'overlay_service', None)
+        if display is not None and display.config['mode'] != 'text':
+            display.alert('warning', message, username, duration)
+            return
         if not self.obs_integration_enabled:
             return
         await self.obs.trigger_warning_overlay(username, message, duration)
 
     async def trigger_queue_state_overlay(self, message: str, duration: Optional[int] = None) -> None:
+        display = getattr(self, 'overlay_service', None)
+        if display is not None and display.config['mode'] != 'text':
+            display.alert('general', message, duration=duration or self.request_overlay_duration)
+            return
         if not self.obs_integration_enabled:
             return
         obs = getattr(self, 'obs', None)

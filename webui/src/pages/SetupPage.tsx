@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { apiJson } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
+import { OverlaySettings } from '../components/OverlaySettings';
 
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 type SpotifyAuthStatusResp = {
@@ -254,14 +255,13 @@ export function SetupPage() {
   const obsEnabled = asBool(v('OBS', 'enabled') || DEFAULT_CFG.OBS.enabled);
 
   const steps = useMemo(() => {
-    if (!obsEnabled) return BASE_STEPS;
     const out: { key: WizardStepKey; title: string }[] = [];
     for (const s of BASE_STEPS) {
       out.push(s);
       if (s.key === 'obs') out.push({ key: 'obs_sources', title: 'OBS Sources' });
     }
     return out;
-  }, [obsEnabled]);
+  }, []);
 
   useEffect(() => {
     if (stepIdx >= steps.length) setStepIdx(Math.max(0, steps.length - 1));
@@ -434,6 +434,7 @@ export function SetupPage() {
         }
       } else if (step === 'obs_sources') {
         await savePartial({
+          Overlay: cfg.Overlay || {},
           OBS: {
             scene_name: v('OBS', 'scene_name'),
           },
@@ -707,6 +708,9 @@ export function SetupPage() {
 
       {currentStep === 'obs_sources' ? (
         <div className="card" style={{ marginTop: 16 }}>
+          <OverlaySettings cfg={cfg} onChange={(section, key, value) =>
+            setCfg((c) => ({ ...c, [section]: { ...(c[section] || {}), [key]: value } }))} />
+{cfg.Overlay?.mode === 'text' ? (<>
           <h2>
             OBS sources setup{' '}
             <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>
@@ -786,6 +790,8 @@ export function SetupPage() {
             </table>
           </div>
 
+</>) : null}
+{obsEnabled ? (<>
           <label style={{ marginTop: 14 }}>TipTune audio capture</label>
           <div className="tableWrap" style={{ marginTop: 8 }}>
             <table className="dataTable">
@@ -984,7 +990,7 @@ export function SetupPage() {
               Refresh OBS status
             </button>
 
-            {hasMissingSources ? (
+            {cfg.Overlay?.mode === 'text' && hasMissingSources ? (
               <button
                 type="button"
                 disabled={obsBusy}
@@ -1018,7 +1024,8 @@ export function SetupPage() {
           {obsMsg ? <div className="muted">{obsMsg}</div> : null}
           {obsEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsEnsureMsg}</div> : null}
 
-          {!obsStatus?.connected ? (
+          </>) : null}
+          {obsEnabled && !obsStatus?.connected ? (
             <div className="muted" style={{ marginTop: 10 }}>
               TipTune couldn’t connect to OBS. Make sure OBS is running, obs-websocket is enabled, and your host/port/password are correct.
             </div>

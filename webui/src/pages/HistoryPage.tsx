@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { apiJson } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
@@ -57,6 +57,63 @@ function summarize(item: any) {
   };
 }
 
+const artworkRequests = new Map<string, Promise<string | null>>();
+
+function loadHistoryArtwork(uri: string): Promise<string | null> {
+  const pending = artworkRequests.get(uri);
+  if (pending) return pending;
+  const request = apiJson<{ ok: true; track: { album_image_url?: string } | null }>(
+    `/api/history/track?uri=${encodeURIComponent(uri)}`,
+  ).then((response) => response.track?.album_image_url?.trim() || null)
+    .catch(() => null)
+    .finally(() => artworkRequests.delete(uri));
+  artworkRequests.set(uri, request);
+  return request;
+}
+
+function HistoryArtwork(props: { item: any; imageUrl: unknown; uri: unknown; songName: string }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const imageUrl = typeof props.imageUrl === 'string' ? props.imageUrl.trim() : '';
+  const uri = typeof props.uri === 'string' ? props.uri.trim() : '';
+
+  useEffect(() => {
+    setLoadedUrl(null);
+    setFailed(false);
+    if (imageUrl || !uri || !(uri.startsWith('spotify:track:') || uri.includes('open.spotify.com/track/'))) return;
+    let active = true;
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      loadHistoryArtwork(uri).then((url) => {
+        if (active) setLoadedUrl(url);
+      });
+    }, { rootMargin: '200px' });
+    if (container.current) observer.observe(container.current);
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  }, [props.item, imageUrl, uri]);
+
+  const src = imageUrl || loadedUrl;
+  return (
+    <div ref={container} style={{ width: 48, height: 48, flex: '0 0 auto', background: '#00000010', borderRadius: 8, overflow: 'hidden', display: 'grid', placeItems: 'center' }}>
+      {src && !failed ? (
+        <img src={src} alt={`Album artwork for ${props.songName}`} loading="lazy" onError={() => setFailed(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      ) : (
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-label="Album artwork unavailable" role="img" style={{ opacity: 0.45 }}>
+          <path d="M9 18V5l12-2v13M9 8l12-2" />
+          <ellipse cx="6" cy="18" rx="3" ry="2" />
+          <ellipse cx="18" cy="16" rx="3" ry="2" />
+        </svg>
+      )}
+    </div>
+  );
+}
+
 function HistoryCard(props: { item: any }) {
   const s = useMemo(() => summarize(props.item), [props.item]);
 
@@ -78,15 +135,7 @@ function HistoryCard(props: { item: any }) {
   return (
     <div className="card">
       <div className="cardHeader" style={{ display: 'flex', alignItems: 'center' }}>
-        <div style={{ width: 48, height: 48, flex: '0 0 auto', background: '#00000010', borderRadius: 8, overflow: 'hidden' }}>
-          {typeof s.spotifyAlbumImageUrl === 'string' && s.spotifyAlbumImageUrl.trim() !== '' ? (
-            <img
-              src={s.spotifyAlbumImageUrl}
-              alt=""
-              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            />
-          ) : null}
-        </div>
+        <HistoryArtwork item={props.item} imageUrl={s.spotifyAlbumImageUrl} uri={s.resolvedUri} songName={songName} />
 
         <div style={{ flex: 1, minWidth: 0, marginLeft: 12 }}>
           <div className="cardTitle" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>

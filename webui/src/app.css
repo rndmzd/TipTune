@@ -132,16 +132,21 @@
 
  .settingsSpanFull { grid-column: 1 / -1; }
 
- .saveBanner {
+ .settingsHeader {
    position: sticky;
-   bottom: 0;
-   left: 0;
-   right: 0;
+   top: 0;
    z-index: 60;
+   margin: -8px 0 18px;
+   background: var(--bg);
+ }
+
+ .settingsHeader .headerBar {
+   position: static;
+   margin: 0;
+ }
+
+ .saveBanner {
    padding: 12px 0;
-   margin-top: 18px;
-   background: rgba(11, 12, 16, 0.65);
-   backdrop-filter: blur(10px);
  }
 
  .saveBannerInner {
@@ -152,13 +157,20 @@
    justify-content: space-between;
    gap: 12px;
    padding: 12px 14px;
-   border: 1px solid rgba(91, 140, 255, 0.30);
+   border: 1px solid var(--accent);
    border-radius: 16px;
-   background: var(--surface);
-   box-shadow: var(--shadow-sm);
+   background: var(--accent-weak);
  }
 
- .saveBannerInner .actions { margin-top: 0; }
+ .saveBannerMessage { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+ .saveBannerMessage strong { font-size: 14px; font-weight: 650; }
+ .saveBannerButton { flex-shrink: 0; background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 650; }
+ .saveBannerButton:hover { background: #7ba2ff; border-color: #7ba2ff; }
+
+ @media (max-width: 480px) {
+   .saveBannerInner { flex-wrap: wrap; }
+   .saveBannerButton { width: 100%; }
+ }
 
  .highlightField {
    border: 1px solid rgba(91, 140, 255, 0.30);

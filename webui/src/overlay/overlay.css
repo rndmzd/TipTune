@@ -1,0 +1,50 @@
+.tt-overlay { position: relative; width: 100%; height: 100%; overflow: hidden; color: var(--tt-text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.3; text-align: left; }
+.tt-overlay *, .tt-overlay *::before, .tt-overlay *::after { box-sizing: border-box; }
+.tt-group { position: absolute; width: 560px; display: flex; flex-direction: column; gap: 12px; transform: scale(var(--tt-scale)); }
+.tt-bottom-left .tt-group { bottom: var(--tt-margin); left: var(--tt-margin); transform-origin: bottom left; }
+.tt-bottom-right .tt-group { bottom: var(--tt-margin); right: var(--tt-margin); transform-origin: bottom right; }
+.tt-top-left .tt-group { top: var(--tt-margin); left: var(--tt-margin); transform-origin: top left; }
+.tt-top-right .tt-group { top: var(--tt-margin); right: var(--tt-margin); transform-origin: top right; }
+.tt-now, .tt-queue, .tt-alert { background: var(--tt-background); border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.24); padding: 22px 24px; }
+.tt-panel-heading { display: flex; align-items: center; gap: 9px; font-size: 17px; margin-bottom: 15px; }
+.tt-panel-heading strong { font-weight: 650; }
+.tt-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--tt-accent); }
+.tt-source, .tt-queue-count { margin-left: auto; opacity: .8; font-size: 15px; }
+.tt-now-track { display: flex; align-items: center; gap: 20px; }
+.tt-artwork { width: 96px; height: 96px; flex: 0 0 96px; display: grid; place-items: center; border-radius: 8px; overflow: hidden; color: var(--tt-accent); background: rgba(127,127,127,.12); }
+.tt-artwork img { width: 100%; height: 100%; object-fit: cover; }
+.tt-artwork svg { width: 56px; height: 56px; }
+.tt-track-text { flex: 1; min-width: 0; }
+.tt-title { font-size: 30px; font-weight: 700; letter-spacing: -.02em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.tt-artist { font-size: 21px; margin-top: 5px; opacity: .85; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tt-requester { font-size: 15px; margin-top: 9px; opacity: .8; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tt-requester strong { font-weight: 650; }
+.tt-queue ol { margin: 0; padding: 0; list-style: none; }
+.tt-queue li { display: flex; gap: 14px; align-items: center; padding: 13px 0; border-top: 1px solid rgba(127,127,127,.2); }
+.tt-order { font-size: 15px; opacity: .75; font-variant-numeric: tabular-nums; }
+.tt-queue .tt-title { font-size: 21px; -webkit-line-clamp: 1; }
+.tt-queue .tt-artist { font-size: 16px; margin-top: 3px; }
+.tt-queue .tt-requester { font-size: 14px; margin-top: 4px; }
+.tt-queue-source { font-size: 12px; opacity: .75; flex-shrink: 0; }
+.tt-more { font-size: 14px; margin-top: 10px; opacity: .8; }
+.tt-alerts { display: flex; flex-direction: column; gap: 10px; }
+.tt-alert-heading { display: flex; gap: 9px; align-items: center; font-size: 17px; }
+.tt-alert-requester { margin-left: auto; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
+.tt-alert-message { font-size: 22px; margin-top: 9px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+.tt-alert-warning .tt-status-dot { background: #ffca76; }
+.tt-compact .tt-group { width: 440px; gap: 8px; }
+.tt-compact .tt-now, .tt-compact .tt-queue, .tt-compact .tt-alert { padding: 16px 18px; border-radius: 12px; }
+.tt-compact .tt-artwork { width: 64px; height: 64px; flex-basis: 64px; }
+.tt-compact .tt-now-track { gap: 14px; }
+.tt-compact .tt-title { font-size: 24px; }
+.tt-compact .tt-artist { font-size: 17px; }
+.tt-compact .tt-panel-heading { font-size: 15px; margin-bottom: 10px; }
+.tt-compact .tt-queue .tt-title { font-size: 18px; }
+.tt-compact .tt-queue li { padding: 9px 0; }
+.tt-compact .tt-alert-message { font-size: 19px; }
+.tt-overlay.tt-inspect { width: 600px; height: var(--tt-inspection-height); overflow: visible; }
+.tt-overlay.tt-inspect.tt-compact { width: 480px; }
+.tt-inspect .tt-group { top: 20px; left: 20px; bottom: auto; right: auto; transform-origin: top left; }
+.tt-motion-subtle .tt-alert { animation: tt-alert-enter 180ms cubic-bezier(.16,1,.3,1); }
+@keyframes tt-alert-enter { from { opacity: .3; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .tt-overlay * { animation: none !important; transition: none !important; } }

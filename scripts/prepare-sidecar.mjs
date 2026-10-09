@@ -50,6 +50,12 @@ function newestMtimeMs(paths) {
     try {
       if (fs.existsSync(p)) {
         const st = fs.statSync(p);
+        if (st.isDirectory()) {
+          const children = fs.readdirSync(p).filter((name) => name !== '__pycache__')
+            .map((name) => path.join(p, name));
+          newest = Math.max(newest, newestMtimeMs(children));
+          continue;
+        }
         if (st.mtimeMs > newest) newest = st.mtimeMs;
       }
     } catch {
@@ -92,6 +98,14 @@ function ensureSidecarBuilt(sidecarName, extension) {
     path.join(repoRoot, 'app.py'),
     path.join(repoRoot, 'helpers', '__init__.py'),
     path.join(repoRoot, 'utils', 'runtime_paths.py'),
+    path.join(repoRoot, 'helpers'),
+    path.join(repoRoot, 'handlers'),
+    path.join(repoRoot, 'chatdj'),
+    path.join(repoRoot, 'utils'),
+    path.join(repoRoot, 'webui', 'dist'),
+    path.join(repoRoot, 'docs', 'USER_MANUAL.md'),
+    path.join(repoRoot, 'docs', 'QUICK_START.md'),
+    path.join(repoRoot, 'config.ini.example'),
   ];
 
   if (fs.existsSync(distPath) && !forceRebuild) {

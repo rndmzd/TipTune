@@ -167,10 +167,15 @@ In Settings:
 
 - Set `OBS.enabled=true`
 - Set `OBS.host`, `OBS.port`, `OBS.password`
-- Click **Create missing text sources**
+- Open **Stream information display**, select an OBS scene, and save settings.
+- Click **Add browser overlay**, or **Switch to browser overlay** for an existing text setup.
+- Choose Full or Compact, adjust the appearance, then save. Preview buttons affect only the preview.
+- Alternatively, choose Browser display and save, then add a Browser Source manually using the URL shown in Settings (normally `http://127.0.0.1:8765/overlay`). Use your OBS base canvas dimensions and 30 FPS; leave shutdown and scene-activation refresh off. Manual setup works with the OBS connection disabled.
 - (Windows) optionally click **Create Spotify audio capture**
 - (Windows) optionally click **Create TipTune audio capture** (for YouTube playback audio sync in OBS)
-- Use **Test overlays** to confirm they display correctly
+- Use **Send request/warning/notice to OBS** to test the actual source.
+- Start TipTune first. If OBS opened the source before TipTune started, refresh its browser page.
+- Existing text inputs remain available. Select Legacy text sources and save to switch back.
 
 ---
 
