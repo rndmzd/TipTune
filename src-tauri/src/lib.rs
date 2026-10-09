@@ -11,32 +11,43 @@ use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 #[cfg(all(not(mobile), windows))]
-use std::process::{Command, Stdio};
+mod windows_job;
 
 #[cfg(not(mobile))]
-struct SidecarState(Mutex<Option<CommandChild>>);
+struct RunningSidecar {
+    child: CommandChild,
+    #[cfg(windows)]
+    job: windows_job::ProcessJob,
+}
+
+#[cfg(not(mobile))]
+struct SidecarState(Mutex<Option<RunningSidecar>>);
 
 #[cfg(not(mobile))]
 mod spotify_player;
 
 #[cfg(not(mobile))]
 fn kill_sidecar(app: &tauri::AppHandle) {
-    if let Ok(mut guard) = app.state::<SidecarState>().0.lock() {
-        if let Some(child) = guard.take() {
-            #[cfg(windows)]
-            {
-                let pid = child.pid();
-                let _ = Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+    let Some(state) = app.try_state::<SidecarState>() else {
+        return;
+    };
+    let running = state
+        .0
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    if let Some(running) = running {
+        #[cfg(windows)]
+        if let Err(error) = running.job.terminate() {
+            eprintln!("[sidecar shutdown] {error}");
+            // Dropping the job also terminates its remaining members.
+            if let Err(error) = running.child.kill() {
+                eprintln!("[sidecar shutdown fallback] {error}");
             }
-
-            #[cfg(not(windows))]
-            {
-                let _ = child.kill();
-            }
+        }
+        #[cfg(not(windows))]
+        if let Err(error) = running.child.kill() {
+            eprintln!("[sidecar shutdown] {error}");
         }
     }
 }
@@ -95,9 +106,23 @@ pub fn run() {
                     }
                 }
 
-                let (mut rx, child) = sidecar_command.spawn()?;
+                #[cfg(windows)]
+                let job = windows_job::ProcessJob::new()?;
+                #[cfg(windows)]
+                let sidecar_command = sidecar_command.env("TIPTUNE_WINDOWS_JOB_NAME", &job.name);
 
-                app.manage(SidecarState(Mutex::new(Some(child))));
+                let (mut rx, child) = sidecar_command.spawn()?;
+                #[cfg(windows)]
+                if let Err(error) = job.assign(child.pid()) {
+                    let _ = child.kill();
+                    return Err(error.into());
+                }
+
+                app.manage(SidecarState(Mutex::new(Some(RunningSidecar {
+                    child,
+                    #[cfg(windows)]
+                    job,
+                }))));
                 let app_handle = app.handle().clone();
 
                 tauri::async_runtime::spawn(async move {

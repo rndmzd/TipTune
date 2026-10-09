@@ -265,6 +265,11 @@ In Settings → **App Updates**:
 - Click **Check for Updates**
 - If an update is available, click **Download + Install**
 
+Windows closes TipTune while the installer runs. The desktop owns the complete
+backend process tree, including PyInstaller workers and playback helpers, so
+normal exit, an update, or forced app termination releases the local server port.
+The backend aborts startup if that port is already occupied.
+
 Update metadata endpoint is configured in `src-tauri/tauri.conf.json` under `plugins.updater.endpoints`.
 
 ---
@@ -308,6 +313,17 @@ This will:
 - Build/prepare the Python sidecar into `src-tauri/binaries/`.
 - Build the Web UI into `webui/dist`.
 - Produce Tauri bundles for your platform.
+
+Windows lifecycle regression checks (after building the sidecar):
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --test windows_lifecycle
+python scripts/check-packaged-lifecycle.py --backend src-tauri/binaries/TipTune-x86_64-pc-windows-msvc.exe
+```
+
+These use isolated settings and check normal shutdown, updater-style process
+exit, forced termination, and an occupied HTTP port. The packaged check exercises
+both PyInstaller processes and verifies that the server port is released.
 
 ---
 

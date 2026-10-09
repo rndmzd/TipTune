@@ -751,6 +751,18 @@ If the message is blank, TipTune will fail the request and may warn that the not
 - Confirm host/port/password match OBS settings.
 - Use Settings → Refresh OBS status.
 
+### Old pages or backend processes remain after closing TipTune
+
+On Windows, the desktop owns its backend process tree and stops it on normal
+exit, during an update, and if the desktop is terminated unexpectedly. A second
+backend aborts startup if the server port is occupied.
+
+If upgrading from an older version that already left a backend running, close
+TipTune completely before installing the new version. In Task Manager, end only
+the leftover TipTune processes from that installation, then relaunch TipTune.
+Refresh the OBS browser source if it loaded an old error page. Other Python,
+OBS, and Spotify applications should remain running.
+
 ---
 ## Spotify web player in the desktop app
 
