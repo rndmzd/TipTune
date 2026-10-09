@@ -353,8 +353,10 @@ The workflow is: `.github/workflows/release-from-tag.yml`.
 1. Ensure versions match
 
     - `package.json` `version`
+    - `package-lock.json` root and `packages[""]` versions
     - `src-tauri/tauri.conf.json` `version`
     - `src-tauri/Cargo.toml` `version`
+    - `src-tauri/Cargo.lock` `tiptune-tauri` package version
 
 1. Commit the version bump
 1. Create and push a tag
@@ -367,8 +369,17 @@ git push origin v0.1.0
 GitHub Actions will:
 
 - Build desktop artifacts for macOS, Linux, and Windows.
-- Create a GitHub Release for the tag.
+- Create a draft GitHub Release for the tag.
 - Upload platform installers/bundles and updater metadata (such as `latest.json`).
+
+Wait for both platform jobs to succeed, verify the installers and updater
+manifest, then publish the draft and mark it latest. Draft assets are available
+to authenticated release maintainers for validation; the installed updater keeps
+using the previous published release until this step.
+
+```bash
+gh release edit v0.1.0 --draft=false --latest
+```
 
 Typical output formats (varies by platform/runner configuration):
 

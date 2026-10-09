@@ -86,6 +86,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "TipTune ${{ github.ref_name }}"
           releaseBody: "See assets for downloads."
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }} -- --locked
