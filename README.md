@@ -187,6 +187,8 @@ Steps:
 Notes:
 
 - Spotify playback control typically requires Spotify Premium.
+- Settings shows Spotify API connection and device errors. The Spotify tab's website login is separate from this authorization. Use the same account for both.
+- If devices fail to load, read the error beside **Available devices**. For `invalid_client`, click **Connect Spotify** or **Reconnect Spotify** to replace the saved API login. If authorization still fails, verify the app exists and is enabled in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and its Client ID matches Settings. Save any credential changes before reconnecting. A successful empty response has separate guidance to start playback and refresh.
 - The redirect URL must be `http` and must use `127.0.0.1` or `localhost` with an explicit port.
 
 ---

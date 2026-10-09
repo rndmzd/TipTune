@@ -181,9 +181,9 @@ async function ensureYtDlp(destDir) {
   const filename = ytDlpFilename(key);
   const destPath = path.join(destDir, filename);
 
-  if (!fileExistsNonEmpty(destPath)) {
-    await downloadToFile(url, destPath);
-  }
+  // Always fetch the latest release asset, including when a previous build exists.
+  // The self-updater queries GitHub's API anonymously and can hit shared CI limits.
+  await downloadToFile(url, destPath);
 
   if (key !== 'windows') {
     try {
@@ -197,14 +197,14 @@ async function ensureYtDlp(destDir) {
       ...process.env,
       PATH: `${destDir}${path.delimiter}${process.env.PATH || ''}`,
     };
-     execFileSync(destPath, ['-U'], {
+    execFileSync(destPath, ['--version'], {
       cwd: destDir,
       env,
       stdio: 'inherit',
     });
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
-    throw new Error(`yt-dlp update failed; refusing to bundle a potentially stale extractor: ${msg}`);
+    throw new Error(`Downloaded yt-dlp failed verification; refusing to bundle it: ${msg}`);
   }
 
   if (key !== 'windows') {

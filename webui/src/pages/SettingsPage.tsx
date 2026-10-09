@@ -7,7 +7,7 @@ import { OverlaySettings } from '../components/OverlaySettings';
 
 declare const __APP_VERSION__: string;
 
-type DevicesResp = { ok: true; devices: Device[] };
+type DevicesResp = { ok: true; devices: Device[]; error?: string };
 type QueueResp = { ok: true; queue: QueueState };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 
@@ -23,6 +23,10 @@ type SetupStatusResp = {
 type SpotifyAuthStatusResp = {
   ok: true;
   configured: boolean;
+  authorized: boolean;
+  client_ready: boolean;
+  in_progress: boolean;
+  error?: string | null;
 };
 
 type ObsSourceStatus = {
@@ -175,6 +179,13 @@ export function SettingsPage() {
   const [currentDeviceText, setCurrentDeviceText] = useState<string>('Loading...');
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceId, setDeviceId] = useState<string>('');
+  const [devicesBusy, setDevicesBusy] = useState(false);
+  const [devicesError, setDevicesError] = useState('');
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
+  const [deviceApplyBusy, setDeviceApplyBusy] = useState(false);
+  const [deviceApplyMsg, setDeviceApplyMsg] = useState('');
+  const [spotifyAuthBusy, setSpotifyAuthBusy] = useState(false);
+  const [spotifyAuthMsg, setSpotifyAuthMsg] = useState('');
 
   const [runtimeAppVersion, setRuntimeAppVersion] = useState<string>('');
 
@@ -241,14 +252,29 @@ export function SettingsPage() {
   }
 
   async function refreshDevices() {
-    const data = await apiJson<DevicesResp>('/api/spotify/devices');
-    setDevices(data.devices || []);
-
+    setDevicesBusy(true);
+    setDevicesError('');
     try {
-      const qst = await apiJson<QueueResp>('/api/queue');
-      const cur = (qst.queue || {}).playback_device_id;
-      if (cur) setDeviceId(String(cur));
-    } catch {
+      const data = await apiJson<DevicesResp>('/api/spotify/devices');
+      // Also accept the older backend's ok:true + error response during upgrades.
+      if (data.error) throw new Error(data.error);
+      const next = Array.isArray(data.devices) ? data.devices : [];
+      setDevices(next);
+      let current = '';
+      try {
+        const qst = await apiJson<QueueResp>('/api/queue');
+        current = String(qst.queue?.playback_device_id || '');
+      } catch {}
+      setDeviceId((previous) => next.some((d) => d.id === previous) ? previous
+        : next.some((d) => d.id === current) ? current : next.find((d) => d.is_active && d.id)?.id || next.find((d) => d.id)?.id || '');
+    } catch (e: any) {
+      setDevices([]);
+      setDeviceId('');
+      setDevicesError(e?.message || String(e));
+    } finally {
+      setDevicesLoaded(true);
+      setDevicesBusy(false);
+      loadSpotifyStatus().catch(() => {});
     }
   }
 
@@ -268,6 +294,45 @@ export function SettingsPage() {
     const data = await apiJson<SpotifyAuthStatusResp>('/api/spotify/auth/status');
     setSpotifyStatus(data);
   }
+
+  async function connectSpotify() {
+    setSpotifyAuthBusy(true);
+    setSpotifyAuthMsg('Starting Spotify authorization…');
+    try {
+      const data = await apiJson<{ ok: true; auth_url: string }>('/api/spotify/auth/start', { method: 'POST' });
+      if (isTauriRuntime()) {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        await open(data.auth_url);
+      } else {
+        window.open(data.auth_url, '_blank', 'noopener,noreferrer');
+      }
+      setSpotifyAuthMsg('Complete authorization in your browser with the same account used in the Spotify player.');
+    } catch (e: any) {
+      setSpotifyAuthMsg(`Error: ${e?.message || String(e)}`);
+    } finally {
+      setSpotifyAuthBusy(false);
+      loadSpotifyStatus().catch(() => {});
+    }
+  }
+
+  useEffect(() => {
+    if (!spotifyStatus?.in_progress) return;
+    let cancelled = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const data = await apiJson<SpotifyAuthStatusResp>('/api/spotify/auth/status');
+        if (cancelled) return;
+        setSpotifyStatus(data);
+        if (!data.in_progress) {
+          setSpotifyAuthMsg(data.error ? `Error: ${data.error}` : data.client_ready ? 'Spotify API connected.' : 'Spotify authorization did not complete. Try connecting again.');
+          await refreshDevices();
+        }
+      } catch (e: any) {
+        if (!cancelled) setSpotifyAuthMsg(`Error: ${e?.message || String(e)}`);
+      }
+    }, 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [spotifyStatus?.in_progress]);
 
   async function loadObsStatus() {
     try {
@@ -406,6 +471,9 @@ export function SettingsPage() {
     return Object.values(secrets).some((s) => String(s || '').trim() !== '');
   }, [baselineCfgSig, cfg, secrets]);
 
+  const savedSpotify = baselineCfgSig ? JSON.parse(baselineCfgSig).Spotify || {} : {};
+  const spotifySettingsDirty = ['client_id', 'redirect_url'].some((key) => (cfg.Spotify?.[key] || '') !== (savedSpotify[key] || ''));
+
   async function saveSettings() {
     if (saveBusy) return;
     const historySizeRaw = cfg.General?.request_history_size ?? '1000';
@@ -469,6 +537,7 @@ export function SettingsPage() {
       setStatus('Saved.');
       setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
       await loadConfig();
+      await refreshDevices();
     } catch (e: any) {
       setStatus(`Error: ${e?.message ? e.message : String(e)}`);
     } finally {
@@ -526,32 +595,42 @@ export function SettingsPage() {
             </label>
             <div className="muted">{currentDeviceText}</div>
             <label htmlFor="deviceSelect" title={tooltip('Playback', 'device_id')}>Available devices</label>
-            <select id="deviceSelect" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+            <select id="deviceSelect" value={deviceId} disabled={devicesBusy || !devices.length} onChange={(e) => { setDeviceId(e.target.value); setDeviceApplyMsg(''); }}>
+              {!devices.length ? <option value="">{devicesBusy ? 'Loading devices…' : devicesError ? 'Devices unavailable' : 'No devices reported by Spotify'}</option> : null}
               {(devices || []).map((d, idx) => (
-                <option key={idx} value={d.id || ''}>
-                  {(d.name || '(unknown)') + (d.is_active ? ' (active)' : '')}
+                <option key={d.id || idx} value={d.id || ''} disabled={!d.id || d.is_restricted}>
+                  {(d.name || '(unknown)') + (d.is_active ? ' (active)' : '') + (d.is_restricted ? ' (restricted)' : '')}
                 </option>
               ))}
             </select>
             <div className="actions">
-              <button type="button" onClick={() => refreshDevices().catch(() => {})}>
-                Refresh
+              <button type="button" disabled={devicesBusy} onClick={() => refreshDevices()}>
+                {devicesBusy ? 'Refreshing…' : 'Refresh'}
               </button>
               <button
                 type="button"
+                disabled={devicesBusy || deviceApplyBusy || !devices.some((d) => d.id === deviceId && !d.is_restricted && d.id)}
                 onClick={async () => {
-                  await apiJson('/api/spotify/device', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ device_id: deviceId, persist: true }),
-                  });
-                  await refreshCurrentDevice();
-                  await refreshDevices();
+                  setDeviceApplyBusy(true);
+                  setDeviceApplyMsg('');
+                  try {
+                    await apiJson('/api/spotify/device', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ device_id: deviceId, persist: true }),
+                    });
+                    await refreshCurrentDevice();
+                    await refreshDevices();
+                    setDeviceApplyMsg('Playback device saved.');
+                  } catch (e: any) { setDeviceApplyMsg(`Error: ${e?.message || String(e)}`); }
+                  finally { setDeviceApplyBusy(false); }
                 }}
               >
-                Apply + Save
+                {deviceApplyBusy ? 'Applying…' : 'Apply + Save'}
               </button>
             </div>
+            {devicesError ? <p role="alert">{devicesError}</p> : devicesLoaded && !devices.length && !devicesBusy ? <p className="muted" role="status">Spotify returned no devices. Check that the player uses the same account you authorized for TipTune, start playback, then refresh.</p> : null}
+            {deviceApplyMsg ? <p role="status">{deviceApplyMsg}</p> : null}
+            <p className="muted">The Spotify player login and TipTune API authorization are separate. Connect Spotify below to allow TipTune to discover and control devices.</p>
           </div>
         </div>
 
@@ -725,15 +804,25 @@ export function SettingsPage() {
 
         <div className="card">
           <h2>Spotify</h2>
-          <label title={tooltip('Spotify', 'client_id')}>{humanizeKey('client_id')}</label>
+          <p role="status">{spotifyStatus?.client_ready && spotifyStatus?.authorized ? 'Spotify API connected.' : spotifyStatus?.in_progress ? 'Waiting for Spotify authorization…' : 'Spotify API is not connected.'}</p>
+          {spotifyStatus?.error ? <p role="alert">{spotifyStatus.error}</p> : null}
+          <div className="actions">
+            <button type="button" disabled={spotifyAuthBusy || spotifySettingsDirty || !spotifyStatus?.configured}
+              onClick={() => connectSpotify()}>{spotifyAuthBusy ? 'Connecting…' : spotifyStatus?.authorized ? 'Reconnect Spotify' : 'Connect Spotify'}</button>
+          </div>
+          {spotifySettingsDirty ? <p className="muted">Save changes before connecting Spotify.</p> : null}
+          {spotifyAuthMsg ? <p role="status">{spotifyAuthMsg}</p> : null}
+          <label htmlFor="spotify-client-id" title={tooltip('Spotify', 'client_id')}>{humanizeKey('client_id')}</label>
           <input
+            id="spotify-client-id"
             type="text"
             title={tooltip('Spotify', 'client_id')}
             value={v('Spotify', 'client_id')}
             onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), client_id: e.target.value } }))}
           />
-          <label title={tooltip('Spotify', 'redirect_url')}>{humanizeKey('redirect_url')}</label>
+          <label htmlFor="spotify-redirect-url" title={tooltip('Spotify', 'redirect_url')}>{humanizeKey('redirect_url')}</label>
           <input
+            id="spotify-redirect-url"
             type="text"
             title={tooltip('Spotify', 'redirect_url')}
             value={v('Spotify', 'redirect_url')}
