@@ -296,6 +296,16 @@ class OverlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(':0/', webui.overlay_url)
         self.assertTrue(webui.overlay_url.endswith('/overlay'))
 
+    async def test_busy_http_port_aborts_before_request_processing_starts(self):
+        occupied = self.app.WebUI(self.service, port=0)
+        await occupied.start()
+        self.addAsyncCleanup(occupied.stop)
+        with patch.dict(os.environ, {'TIPTUNE_WEB_HOST': '127.0.0.1', 'TIPTUNE_WEB_PORT': str(occupied._port)}):
+            with self.assertRaises(OSError):
+                await self.service.start()
+        self.assertEqual(self.service._tasks, [])
+        await self.service._web.stop()
+
     async def test_each_new_queue_entry_gets_an_independent_id(self):
         entry = {'source': 'spotify', 'uri': 'spotify:track:0JvxCw2L2ChMeVpIfSwvqN',
                  'queue_entry_id': 'copied-id', 'requester': 'alice'}

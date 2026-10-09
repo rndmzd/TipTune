@@ -90,3 +90,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run build
+
+      - name: Native process lifecycle regression tests
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test windows_lifecycle
+
+      - name: Packaged backend lifecycle regression tests
+        if: runner.os == 'Windows'
+        run: python scripts/check-packaged-lifecycle.py --backend src-tauri/binaries/TipTune-x86_64-pc-windows-msvc.exe
