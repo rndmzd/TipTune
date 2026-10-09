@@ -2,14 +2,17 @@
 
 import os
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, is_module_or_submodule
 
 block_cipher = None
 
 hiddenimports = []
 hiddenimports += collect_submodules('aiohttp')
 hiddenimports += collect_submodules('httpx')
-hiddenimports += collect_submodules('httpx2')
+# Responses uses HTTP; HTTPX2's optional WebSocket extra needs wsproto and is unused.
+hiddenimports += collect_submodules(
+    'httpx2', filter=lambda name: not is_module_or_submodule(name, 'httpx2.websockets'),
+)
 hiddenimports += collect_submodules('spotipy')
 hiddenimports += collect_submodules('simpleobsws')
 
@@ -57,7 +60,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['httpx2.websockets'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
