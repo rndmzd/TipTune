@@ -314,10 +314,25 @@ This will:
 - Build the Web UI into `webui/dist`.
 - Produce Tauri bundles for your platform.
 
+`package-lock.json` and `src-tauri/Cargo.lock` are committed so local and CI builds
+use the same dependency versions. Update Tauri's CLI, API, Rust crates, and plugin
+pairs together, and commit both lockfiles. CI and releases pass Cargo's `--locked`
+flag so dependency resolution cannot silently change during packaging.
+
+To enforce the same lockfile check locally, including in PowerShell:
+
+```powershell
+node node_modules/@tauri-apps/cli/tauri.js build -- --locked
+```
+
+Windows CI uses 7-Zip to inspect both installer payloads and rejects missing or
+incorrect Tauri installer metadata. MSI and NSIS builds must retain their
+installer identity so the Settings updater selects the appropriate package.
+
 Windows lifecycle regression checks (after building the sidecar):
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --test windows_lifecycle
+cargo test --locked --manifest-path src-tauri/Cargo.toml --test windows_lifecycle
 python scripts/check-packaged-lifecycle.py --backend src-tauri/binaries/TipTune-x86_64-pc-windows-msvc.exe
 ```
 
