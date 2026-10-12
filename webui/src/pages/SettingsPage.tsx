@@ -11,6 +11,10 @@ type DevicesResp = { ok: true; devices: Device[]; error?: string };
 type QueueResp = { ok: true; queue: QueueState };
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 
+function historyDebugEnabled(raw: unknown): boolean {
+  return ['true', '1', 'yes', 'on'].includes(String(raw ?? '').trim().toLowerCase());
+}
+
 type SetupStatusResp = {
   ok: true;
   setup_complete: boolean;
@@ -279,9 +283,12 @@ export function SettingsPage() {
     }
   }
 
-  async function loadConfig() {
-    const data = await apiJson<ConfigResp>('/api/config');
+  async function loadConfig(expectedHistoryDebug?: boolean) {
+    const data = await apiJson<ConfigResp>('/api/config', { cache: 'no-store' });
     const next = data.config || {};
+    if (expectedHistoryDebug !== undefined && historyDebugEnabled(next.General?.show_history_debug) !== expectedHistoryDebug) {
+      throw new Error('The history debug setting did not persist. Your changes are still shown; try saving again.');
+    }
     setCfg(next);
     setBaselineCfgSig(stableStringify(next));
   }
@@ -436,7 +443,7 @@ export function SettingsPage() {
   })();
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
-  const showHistoryDebugEnabled = ['true', '1', 'yes', 'on'].includes(v('General', 'show_history_debug').trim().toLowerCase());
+  const showHistoryDebugEnabled = historyDebugEnabled(v('General', 'show_history_debug'));
   const obsHost = (v('OBS', 'host') || '').trim();
   const obsPort = (v('OBS', 'port') || '').trim();
   const obsSceneName = (v('OBS', 'scene_name') || '').trim();
@@ -537,9 +544,9 @@ export function SettingsPage() {
         body: JSON.stringify(payload),
       });
 
-      setStatus('Saved.');
+      await loadConfig(showHistoryDebugEnabled);
       setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
-      await loadConfig();
+      setStatus('Saved.');
       await refreshDevices();
     } catch (e: any) {
       setStatus(`Error: ${e?.message ? e.message : String(e)}`);
@@ -659,9 +666,12 @@ export function SettingsPage() {
               type="checkbox"
               checked={showHistoryDebugEnabled}
               aria-describedby="history-debug-help"
-              onChange={(e) => setCfg((c) => ({
-                ...c, General: { ...(c.General || {}), show_history_debug: e.target.checked ? 'true' : 'false' },
-              }))}
+              onChange={(e) => {
+                const value = e.currentTarget.checked ? 'true' : 'false';
+                setCfg((c) => ({
+                  ...c, General: { ...(c.General || {}), show_history_debug: value },
+                }));
+              }}
             />
             <span>Show debug output in history</span>
           </label>

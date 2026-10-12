@@ -126,7 +126,12 @@ class RequestHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service.get_config_for_ui()['General']['show_history_debug'], 'false')
         async with TestClient(TestServer(self.app.WebUI(service)._app)) as client:
             for value, enabled in [('true', True), ('false', False)]:
-                self.assertEqual(await service.update_config_from_ui({'General': {'show_history_debug': value}}), (True, None))
+                response = await client.post('/api/config', json={'General': {'show_history_debug': value}})
+                self.assertEqual(response.status, 200)
+                self.assertEqual(await response.json(), {'ok': True})
+                response = await client.get('/api/config')
+                self.assertEqual(response.headers.get('Cache-Control'), 'no-store')
+                self.assertEqual((await response.json())['config']['General']['show_history_debug'], value)
                 response = await client.get('/api/history/recent')
                 data = await response.json()
                 self.assertEqual(data['show_history_debug'], enabled)
