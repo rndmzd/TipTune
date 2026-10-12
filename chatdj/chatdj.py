@@ -23,42 +23,10 @@ class AutoDJ:
         self.playback_device: Optional[str] = None
         self.playback_device_name: Optional[str] = None
 
-        if playback_device_id:
-            try:
-                self.set_playback_device(playback_device_id, silent=True)
-            except Exception:
-                pass
-
-        if not self.playback_device:
-            try:
-                device = self._auto_select_playback_device()
-                if device and isinstance(device, dict):
-                    self.playback_device = device.get('id')
-                    self.playback_device_name = device.get('name')
-                    if self.playback_device:
-                        logger.info(
-                            "spotify.device.selected",
-                            message="Device auto-selected",
-                            data={
-                                "name": self.playback_device_name,
-                                "id": self.playback_device,
-                                "auto": True
-                            }
-                        )
-            except Exception:
-                pass
-
-        if not self.playback_device:
-            selected_device_id = self._select_playback_device()
-            self.playback_device = selected_device_id
-            try:
-                for d in self.get_available_devices():
-                    if isinstance(d, dict) and d.get('id') == selected_device_id:
-                        self.playback_device_name = d.get('name')
-                        break
-            except Exception:
-                pass
-            self.set_playback_device(selected_device_id, silent=True)
+        # Spotify Web Player IDs change between sessions. Resolve the saved ID
+        # against the current list without transferring playback during startup.
+        self.playback_device = playback_device_id
+        self._refresh_playback_device()
 
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
@@ -71,7 +39,8 @@ class AutoDJ:
 
         self.queued_tracks = []
         self.now_playing_track_uri = None
-        self.clear_playback_context(persist=False)
+        if self.playback_device:
+            self.clear_playback_context(persist=False)
         try:
             self._restore_persisted_queue_state()
         except Exception:
@@ -228,14 +197,45 @@ class AutoDJ:
             logger.exception("spotify.devices.error", message="Failed to list Spotify devices", exc=exc)
             return []
 
-    def _auto_select_playback_device(self) -> Optional[Dict[str, Any]]:
-        devices = self.get_available_devices()
+    def _auto_select_playback_device(
+        self, preferred_id: Optional[str] = None, preferred_name: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        devices = [
+            d for d in self.get_available_devices()
+            if isinstance(d, dict) and isinstance(d.get('id'), str)
+            and d['id'].strip() and not d.get('is_restricted')
+        ]
         if not devices:
             return None
-        active = [d for d in devices if isinstance(d, dict) and d.get('is_active')]
-        if active:
-            return active[0]
-        return devices[0] if isinstance(devices[0], dict) else None
+        for device in devices:
+            if device['id'] == preferred_id:
+                return device
+        if preferred_name:
+            for device in devices:
+                if device.get('name') == preferred_name:
+                    return device
+        return next((d for d in devices if d.get('is_active')), devices[0])
+
+    def _refresh_playback_device(self) -> bool:
+        old_id = self.playback_device
+        device = self._auto_select_playback_device(
+            old_id, getattr(self, 'playback_device_name', None)
+        )
+        if device is None:
+            self.playback_device = None
+            logger.warning(
+                "spotify.device.unavailable",
+                message="No available Spotify playback device. Open Spotify, then select a device in Settings or resume the queue.",
+            )
+            return False
+        self.playback_device = device['id']
+        self.playback_device_name = device.get('name')
+        if old_id != self.playback_device:
+            logger.info(
+                "spotify.device.selected", message="Device auto-selected",
+                data={"name": self.playback_device_name, "id": self.playback_device, "auto": True},
+            )
+        return True
 
     def set_playback_device(self, device_id: str, force_play: bool = False, silent: bool = False) -> bool:
         try:
@@ -270,44 +270,6 @@ class AutoDJ:
 
     def _print_variables(self, return_value=None):
         """Stub function for logging internal state."""
-
-    def _select_playback_device(self) -> str:
-        try:
-            devices = self.spotify.devices()['devices']
-            logger.debug(f"Available devices: {devices}")
-            if not devices:
-                logger.error("spotify.devices.error",
-                           message="No Spotify devices found")
-                raise ValueError("No available Spotify devices found.")
-            print("\n==[ Available Spotify Devices ]==\n")
-            for idx, device in enumerate(devices):
-                print(f"{idx+1} - {device['name']}")
-            while True:
-                try:
-                    selection = int(input("\nChoose playback device number: "))
-                    device = devices[selection - 1]
-                    self.playback_device_name = device.get('name')
-                    logger.info("spotify.device.selected",
-                              message="Device selected",
-                              data={
-                                  "name": device['name'],
-                                  "id": device['id']
-                              })
-                    return device['id']
-                except KeyboardInterrupt:
-                    logger.info("spotify.device.cancel",
-                              message="User cancelled device selection")
-                    raise
-                except (ValueError, IndexError):
-                    logger.error("spotify.device.error",
-                               message="Invalid device selection")
-                    print("Invalid selection. Please try again.")
-        except Exception as e:
-            logger.exception("spotify.device.error",
-                            message="Failed to select playback device",
-                            exc=e)
-
-            raise
 
     def search_track_uri(self, song: str, artist: str) -> Optional[str]:
         """Compatibility helper for exact catalog lookup; request resolution uses SongExtractor."""
@@ -552,7 +514,18 @@ class AutoDJ:
 
     def start_track(self, track_uri: str) -> bool:
         """Start a request and confirm the device actually began playing it."""
-        self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+        if not self._refresh_playback_device():
+            raise ValueError("No available Spotify playback device. Open Spotify and resume the queue.")
+        try:
+            self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+        except SpotifyException as exc:
+            if exc.http_status != 404:
+                raise
+            # A Web Player can reconnect after the device list was fetched.
+            old_id = self.playback_device
+            if not self._refresh_playback_device() or self.playback_device == old_id:
+                raise
+            self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
         for attempt in range(11):
             if attempt:
                 time.sleep(0.5)

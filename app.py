@@ -4360,7 +4360,8 @@ class SongRequestService:
             return False
 
         if persist:
-            await self.update_config_from_ui({"Spotify": {"playback_device_id": device_id}})
+            saved, _ = await self.update_config_from_ui({"Spotify": {"playback_device_id": device_id}})
+            return saved
         return True
 
     async def set_spotify_device(self, device_id: Any, persist: bool = True) -> bool:
@@ -4392,7 +4393,7 @@ class SongRequestService:
             return False
 
         try:
-            ok = await asyncio.wait_for(
+            await asyncio.wait_for(
                 loop.run_in_executor(None, helpers_spotify_client.transfer_playback, device_id, False),
                 timeout=10,
             )
@@ -4401,11 +4402,9 @@ class SongRequestService:
         except Exception:
             return False
 
-        if not ok:
-            return False
-
         if persist:
-            await self.update_config_from_ui({"Spotify": {"playback_device_id": device_id}})
+            saved, _ = await self.update_config_from_ui({"Spotify": {"playback_device_id": device_id}})
+            return saved
         return True
 
     def get_config_for_ui(self) -> Dict[str, Dict[str, str]]:
