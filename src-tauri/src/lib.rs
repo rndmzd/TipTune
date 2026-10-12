@@ -14,6 +14,9 @@ use tauri_plugin_shell::{process::CommandChild, ShellExt};
 mod windows_job;
 
 #[cfg(not(mobile))]
+mod startup;
+
+#[cfg(not(mobile))]
 struct RunningSidecar {
     child: CommandChild,
     #[cfg(windows)]
@@ -55,6 +58,14 @@ fn kill_sidecar(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    #[cfg(all(not(mobile), windows))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
     #[cfg(not(mobile))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         spotify_player::spotify_player_show,
@@ -69,6 +80,20 @@ pub fn run() {
             #[cfg(not(mobile))]
             {
                 use tauri_plugin_shell::process::CommandEvent;
+                use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+                // Older versions do not have the single-instance guard. Do not
+                // let this window silently connect to their surviving backend.
+                if let Err(error) = startup::check_backend_port("127.0.0.1:8765") {
+                    eprintln!("[startup] {error}");
+                    let exit_handle = app.handle().clone();
+                    app.dialog()
+                        .message("TipTune's background service port is already in use. Close all TipTune windows, then launch TipTune again. If the problem continues, restart Windows to close a leftover service.")
+                        .title("TipTune could not start")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |_| exit_handle.exit(1));
+                    return Ok(());
+                }
 
                 let mut sidecar_log_path: Option<std::path::PathBuf> = None;
                 if let Ok(data_dir) = app.path().app_data_dir() {
@@ -123,6 +148,9 @@ pub fn run() {
                     #[cfg(windows)]
                     job,
                 }))));
+                if let Some(window) = app.get_webview_window("main") {
+                    window.show()?;
+                }
                 let app_handle = app.handle().clone();
 
                 tauri::async_runtime::spawn(async move {
@@ -143,7 +171,22 @@ pub fn run() {
                             }
                             CommandEvent::Terminated(payload) => {
                                 eprintln!("[sidecar terminated] {:?}", payload);
+                                let unexpected = app_handle
+                                    .try_state::<SidecarState>()
+                                    .map(|state| state.0.lock().unwrap_or_else(|e| e.into_inner()).is_some())
+                                    .unwrap_or(false);
                                 kill_sidecar(&app_handle);
+                                if unexpected {
+                                    if let Some(window) = app_handle.get_webview_window("main") {
+                                        let _ = window.hide();
+                                    }
+                                    let exit_handle = app_handle.clone();
+                                    app_handle.dialog()
+                                        .message("TipTune's background service stopped. Close TipTune and launch it again. If it still cannot start, share the tiptune-sidecar.log file for diagnosis.")
+                                        .title("TipTune could not start")
+                                        .kind(MessageDialogKind::Error)
+                                        .show(move |_| exit_handle.exit(1));
+                                }
                                 break;
                             }
                             _ => {}

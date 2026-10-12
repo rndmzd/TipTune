@@ -3,6 +3,7 @@ import configparser
 import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+from types import SimpleNamespace
 
 from requests.exceptions import ConnectionError, Timeout
 from spotipy import SpotifyException
@@ -10,11 +11,61 @@ from spotipy.exceptions import SpotifyOauthError
 
 import helpers
 from app import SongRequestService, WebUI
+from chatdj.chatdj import AutoDJ
 from utils.spotify_errors import spotify_error_message
 
 
 SCOPE = 'user-modify-playback-state user-read-playback-state user-read-currently-playing user-read-private'
 INVALID_CLIENT = SpotifyOauthError('private provider payload', error='invalid_client')
+
+
+class PlaybackDeviceStartupTests(unittest.TestCase):
+    def setUp(self):
+        self.client = Mock()
+        for name in ('clear_playback_context', '_restore_persisted_queue_state'):
+            p = patch.object(AutoDJ, name); p.start(); self.addCleanup(p.stop)
+        p = patch('builtins.input', side_effect=AssertionError('Startup must never prompt'))
+        self.prompt = p.start(); self.addCleanup(p.stop)
+
+    def test_no_devices_allows_startup_without_console_or_transfer(self):
+        self.client.devices.return_value = {'devices': []}
+        dj = AutoDJ(self.client, playback_device_id='expired-web')
+        self.assertIsNone(dj.playback_device)
+        self.assertEqual(dj.queued_tracks, [])
+        self.assertFalse(dj.queue_paused())
+        self.prompt.assert_not_called()
+        self.client.transfer_playback.assert_not_called()
+        self.client.devices.assert_called_once()
+
+    def test_failed_device_lookup_allows_startup(self):
+        self.client.devices.side_effect = Timeout('Spotify is temporarily unreachable')
+        self.assertIsNone(AutoDJ(self.client).playback_device)
+        self.prompt.assert_not_called()
+
+    def test_stale_saved_id_selects_current_active_device_without_transfer(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'other', 'name': 'Speaker'},
+            {'id': 'new-web', 'name': 'Web Player', 'is_active': True},
+        ]}
+        dj = AutoDJ(self.client, playback_device_id='expired-web')
+        self.assertEqual(dj.playback_device, 'new-web')
+        self.assertEqual(dj.playback_device_name, 'Web Player')
+        self.client.transfer_playback.assert_not_called()
+
+    def test_valid_saved_device_is_preserved_over_another_active_player(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'other', 'name': 'Speaker', 'is_active': True},
+            {'id': 'saved', 'name': 'Web Player'},
+        ]}
+        self.assertEqual(AutoDJ(self.client, playback_device_id='saved').playback_device, 'saved')
+
+    def test_restricted_and_missing_device_ids_are_skipped(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': None, 'is_active': True},
+            {'id': 'restricted', 'is_restricted': True, 'is_active': True},
+            {'id': 'usable', 'name': 'Web Player'},
+        ]}
+        self.assertEqual(AutoDJ(self.client, playback_device_id='restricted').playback_device, 'usable')
 
 
 class SpotifyInitializationTests(unittest.TestCase):
@@ -138,6 +189,34 @@ class SpotifyDeviceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Reconnect', payload['error'])
         server._service.get_spotify_devices.return_value = ([], None)
         self.assertEqual(json.loads((await server._api_devices(None)).text), {'ok': True, 'devices': []})
+
+    async def test_spotify_204_transfer_is_successfully_saved_without_chatdj(self):
+        self.service.actions = SimpleNamespace(chatdj_enabled=False)
+        self.service.update_config_from_ui = AsyncMock(return_value=(True, None))
+        client = Mock()
+        client.transfer_playback.return_value = None
+        with patch.object(helpers, 'spotify_client', client):
+            self.assertTrue(await self.service.set_spotify_device('new-web'))
+        client.transfer_playback.assert_called_once_with('new-web', False)
+        self.service.update_config_from_ui.assert_awaited_once_with({'Spotify': {'playback_device_id': 'new-web'}})
+
+    async def test_failed_transfer_does_not_save_device(self):
+        self.service.actions = SimpleNamespace(chatdj_enabled=False)
+        self.service.update_config_from_ui = AsyncMock()
+        client = Mock()
+        client.transfer_playback.side_effect = SpotifyException(404, -1, 'Device not found')
+        with patch.object(helpers, 'spotify_client', client):
+            self.assertFalse(await self.service.set_spotify_device('expired-web'))
+        self.service.update_config_from_ui.assert_not_awaited()
+
+    async def test_device_save_failure_is_reported_for_both_runtime_paths(self):
+        for enabled in (False, True):
+            with self.subTest(chatdj_enabled=enabled):
+                self.service.actions = SimpleNamespace(chatdj_enabled=enabled,
+                    auto_dj=Mock(set_playback_device=Mock(return_value=True)))
+                self.service.update_config_from_ui = AsyncMock(return_value=(False, 'Disk full'))
+                with patch.object(helpers, 'spotify_client', Mock()):
+                    self.assertFalse(await self.service.set_spotify_device('new-web'))
 
 
 class SpotifyErrorTests(unittest.TestCase):

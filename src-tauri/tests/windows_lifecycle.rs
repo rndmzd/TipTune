@@ -3,6 +3,9 @@
 #[path = "../src/windows_job.rs"]
 mod windows_job;
 
+#[path = "../src/startup.rs"]
+mod startup;
+
 use std::{
     fs,
     net::TcpListener,
@@ -31,6 +34,18 @@ child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], 
 pathlib.Path(os.environ['TIPTUNE_TEST_READY']).write_text(json.dumps({'root': os.getpid(), 'child': child.pid, 'port': server.getsockname()[1]}))
 time.sleep(60)
 "#;
+
+#[test]
+fn startup_refuses_an_existing_backend_without_disturbing_it() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    assert!(startup::check_backend_port(&address).is_err());
+    assert!(std::net::TcpStream::connect(&address).is_ok());
+    drop(listener);
+    startup::check_backend_port(&address).unwrap();
+    // The check releases its listener so the new backend can actually start.
+    let _new_backend = TcpListener::bind(&address).unwrap();
+}
 
 struct TestChild(Child);
 impl Drop for TestChild {

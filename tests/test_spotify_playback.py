@@ -24,6 +24,7 @@ def playback(uri=URI, playing=True, device='desktop'):
 def make_dj():
     dj = AutoDJ.__new__(AutoDJ)
     dj.spotify = Mock()
+    dj.spotify.devices.return_value = {'devices': [{'id': 'desktop', 'name': 'Desktop'}]}
     dj.playback_device = 'desktop'
     dj.now_playing_track_uri = None
     dj._last_start_playback_ts = 0
@@ -59,6 +60,40 @@ class StartTrackTests(unittest.TestCase):
         state['item']['linked_from'] = {'uri': URI}
         self.dj.spotify.current_playback.return_value = state
         self.assertTrue(self.dj.start_track(URI))
+
+    def test_expired_web_player_id_is_replaced_before_starting(self):
+        self.dj.playback_device_name = 'Web Player'
+        self.dj.spotify.devices.return_value = {'devices': [
+            {'id': 'speaker', 'name': 'Speaker', 'is_active': True},
+            {'id': 'new-web', 'name': 'Web Player'},
+        ]}
+        self.dj.spotify.current_playback.return_value = playback(device='new-web')
+        self.assertTrue(self.dj.start_track(URI))
+        self.dj.spotify.start_playback.assert_called_once_with(device_id='new-web', uris=[URI])
+
+    def test_device_disappearing_after_lookup_is_refreshed_once(self):
+        self.dj.playback_device_name = 'Web Player'
+        self.dj.spotify.devices.side_effect = [
+            {'devices': [{'id': 'desktop', 'name': 'Web Player'}]},
+            {'devices': [{'id': 'new-web', 'name': 'Web Player'}]},
+        ]
+        self.dj.spotify.start_playback.side_effect = [SpotifyException(404, -1, 'Device not found'), None]
+        self.dj.spotify.current_playback.return_value = playback(device='new-web')
+        self.assertTrue(self.dj.start_track(URI))
+        self.assertEqual([call.kwargs['device_id'] for call in self.dj.spotify.start_playback.call_args_list],
+                         ['desktop', 'new-web'])
+
+    def test_no_device_does_not_send_playback_to_an_unspecified_player(self):
+        self.dj.spotify.devices.return_value = {'devices': []}
+        with self.assertRaisesRegex(ValueError, 'Open Spotify'):
+            self.dj.start_track(URI)
+        self.dj.spotify.start_playback.assert_not_called()
+
+    def test_404_without_a_replacement_does_not_repeat_playback(self):
+        self.dj.spotify.start_playback.side_effect = SpotifyException(404, -1, 'Not found')
+        with self.assertRaises(SpotifyException):
+            self.dj.start_track(URI)
+        self.dj.spotify.start_playback.assert_called_once()
 
     def test_clearing_idle_player_does_not_pause(self):
         self.dj.spotify.current_playback.return_value = playback(None, False)
@@ -104,6 +139,18 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.service._queue_now_playing)
         self.assertIsNone(self.service._queue_started_ts)
         self.assertEqual([item['uri'] for item in self.service._queue_items], [URI])
+
+    async def test_no_device_preserves_request_for_resume_after_spotify_opens(self):
+        self.dj.spotify.devices.return_value = {'devices': []}
+        self.assertFalse(await self.service._queue_start_next_if_needed())
+        self.assertEqual([item['uri'] for item in self.service._queue_items], [URI])
+        self.dj.spotify.start_playback.assert_not_called()
+        self.dj.spotify.devices.return_value = {'devices': [{'id': 'new-web', 'name': 'Web Player'}]}
+        self.dj.spotify.current_playback.return_value = playback(device='new-web')
+        self.service.actions.trigger_queue_state_overlay = AsyncMock()
+        self.assertTrue(await self.service.resume_queue())
+        self.assertEqual(self.service._queue_items, [])
+        self.assertEqual(self.service._queue_now_playing['uri'], URI)
 
     async def test_start_is_not_timed_as_playing_until_confirmed(self):
         def confirm():
