@@ -155,6 +155,7 @@ function tooltip(section: string, key: string) {
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
     'General.request_history_size': 'Maximum number of song request results to save. Default: 1,000 entries.',
     'General.show_debug_data': 'Show extra debug information in the dashboard (like YouTube playback details).',
+    'General.show_history_debug': 'Show saved song extraction diagnostics on failed History entries. Details are saved even when this display is off. Default: off.',
     'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
     'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
   };
@@ -435,6 +436,7 @@ export function SettingsPage() {
   })();
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
+  const showHistoryDebugEnabled = ['true', '1', 'yes', 'on'].includes(v('General', 'show_history_debug').trim().toLowerCase());
   const obsHost = (v('OBS', 'host') || '').trim();
   const obsPort = (v('OBS', 'port') || '').trim();
   const obsSceneName = (v('OBS', 'scene_name') || '').trim();
@@ -514,6 +516,7 @@ export function SettingsPage() {
         request_history_size: String(historySize),
         auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
         show_debug_data: showDebugDataEnabled ? 'true' : 'false',
+        show_history_debug: showHistoryDebugEnabled ? 'true' : 'false',
         debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
         debug_log_path: v('General', 'debug_log_path'),
       },
@@ -649,6 +652,21 @@ export function SettingsPage() {
           />
           <p id="request-history-size-help" className="muted">
             Maximum saved request entries (default: 1,000). Lowering this removes the oldest entries when you save.
+          </p>
+
+          <label className="historyDebugSetting" title={tooltip('General', 'show_history_debug')}>
+            <input
+              type="checkbox"
+              checked={showHistoryDebugEnabled}
+              aria-describedby="history-debug-help"
+              onChange={(e) => setCfg((c) => ({
+                ...c, General: { ...(c.General || {}), show_history_debug: e.target.checked ? 'true' : 'false' },
+              }))}
+            />
+            <span>Show debug output in history</span>
+          </label>
+          <p id="history-debug-help" className="muted">
+            Show extraction errors, model input and responses, and timing on failed requests. Diagnostics are saved even when hidden.
           </p>
 
           <label title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>

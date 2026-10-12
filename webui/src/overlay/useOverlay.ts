@@ -26,7 +26,7 @@ export function useOverlay(enabled = true) {
     events.addEventListener('heartbeat', heard);
     events.onerror = () => {
       setConnected(false);
-      setState((previous) => previous ? { ...previous, alerts: [] } : null);
+      setState((previous) => previous ? { ...previous, alerts: [], advertisement: null } : null);
     };
     const timer = window.setInterval(() => {
       setTick(Date.now());
@@ -36,6 +36,8 @@ export function useOverlay(enabled = true) {
   }, [enabled]);
   const visible = state && !stale ? {
     ...state, alerts: state.alerts.filter((alert) => alert.expires_at * 1000 + offset.current > tick),
+    advertisement: state.advertisement && state.advertisement.expires_at * 1000 + offset.current > tick
+      ? state.advertisement : null,
   } : null;
   return { state: visible, connected, stale };
 }

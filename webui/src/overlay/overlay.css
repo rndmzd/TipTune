@@ -5,7 +5,7 @@
 .tt-bottom-right .tt-group { bottom: var(--tt-margin); right: var(--tt-margin); transform-origin: bottom right; }
 .tt-top-left .tt-group { top: var(--tt-margin); left: var(--tt-margin); transform-origin: top left; }
 .tt-top-right .tt-group { top: var(--tt-margin); right: var(--tt-margin); transform-origin: top right; }
-.tt-now, .tt-queue, .tt-alert { background: var(--tt-background); border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.24); padding: 22px 24px; }
+.tt-now, .tt-queue, .tt-alert, .tt-advertisement { background: var(--tt-background); border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.24); padding: 22px 24px; }
 .tt-panel-heading { display: flex; align-items: center; gap: 9px; font-size: 17px; margin-bottom: 15px; }
 .tt-panel-heading strong { font-weight: 650; }
 .tt-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--tt-accent); }
@@ -32,8 +32,18 @@
 .tt-alert-requester { margin-left: auto; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
 .tt-alert-message { font-size: 22px; margin-top: 9px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
 .tt-alert-warning .tt-status-dot { background: #ffca76; }
+.tt-advertisement-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 24px; }
+.tt-advertisement-heading strong { font-weight: 650; }
+.tt-advertisement-heading svg { width: 30px; height: 30px; flex-shrink: 0; color: var(--tt-accent); }
+.tt-advertisement-price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 10px 0 14px; }
+.tt-advertisement-price strong { font-size: 34px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tt-advertisement-price span { font-size: 18px; opacity: .85; }
+.tt-advertisement-instructions { margin: 0; font-size: 21px; line-height: 1.4; overflow-wrap: anywhere; }
+.tt-advertisement-instructions strong { font-weight: 650; }
+.tt-advertisement-skip { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(127,127,127,.2); font-size: 18px; }
+.tt-advertisement-skip strong { font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .tt-compact .tt-group { width: 440px; gap: 8px; }
-.tt-compact .tt-now, .tt-compact .tt-queue, .tt-compact .tt-alert { padding: 16px 18px; border-radius: 12px; }
+.tt-compact .tt-now, .tt-compact .tt-queue, .tt-compact .tt-alert, .tt-compact .tt-advertisement { padding: 16px 18px; border-radius: 12px; }
 .tt-compact .tt-artwork { width: 64px; height: 64px; flex-basis: 64px; }
 .tt-compact .tt-now-track { gap: 14px; }
 .tt-compact .tt-title { font-size: 24px; }
@@ -42,9 +52,15 @@
 .tt-compact .tt-queue .tt-title { font-size: 18px; }
 .tt-compact .tt-queue li { padding: 9px 0; }
 .tt-compact .tt-alert-message { font-size: 19px; }
+.tt-compact .tt-advertisement-heading { font-size: 21px; }
+.tt-compact .tt-advertisement-price strong { font-size: 28px; }
+.tt-compact .tt-advertisement-instructions { font-size: 18px; }
+.tt-compact .tt-advertisement-skip { font-size: 16px; margin-top: 14px; padding-top: 12px; }
 .tt-overlay.tt-inspect { width: 600px; height: var(--tt-inspection-height); overflow: visible; }
 .tt-overlay.tt-inspect.tt-compact { width: 480px; }
 .tt-inspect .tt-group { top: 20px; left: 20px; bottom: auto; right: auto; transform-origin: top left; }
 .tt-motion-subtle .tt-alert { animation: tt-alert-enter 180ms cubic-bezier(.16,1,.3,1); }
+.tt-motion-subtle .tt-advertisement { animation: tt-advertisement-enter 450ms cubic-bezier(.16,1,.3,1); }
+@keyframes tt-advertisement-enter { from { opacity: .35; transform: translateX(18px); clip-path: inset(0 0 0 12% round 14px); } to { opacity: 1; transform: translateX(0); clip-path: inset(0 round 14px); } }
 @keyframes tt-alert-enter { from { opacity: .3; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .tt-overlay * { animation: none !important; transition: none !important; } }

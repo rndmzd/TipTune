@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { QueueItem } from '../types';
-import { overlayDefaults, type OverlayState } from './types';
+import { defaultRequestInfo, overlayDefaults, type OverlayState } from './types';
 import './overlay.css';
 
 function Artwork({ url }: { url?: string }) {
@@ -35,7 +35,9 @@ export function OverlayCanvas({ state, config, preview = false, inspect = false 
   const now = enabled && show('show_now_playing') ? state?.now_playing : null;
   const queue = enabled && show('show_queue') ? state?.upcoming.slice(0, Number(settings.queue_length)) || [] : [];
   const alerts = enabled && show('show_alerts') ? state?.alerts || [] : [];
-  const contentKey = JSON.stringify([now, queue, alerts, settings]);
+  const advertisement = enabled && settings.show_advertisements === 'true' ? state?.advertisement : null;
+  const prices = state?.request_info || defaultRequestInfo;
+  const contentKey = JSON.stringify([now, queue, alerts, advertisement, prices, settings]);
 
   useLayoutEffect(() => {
     const root = viewport.current, panel = group.current;
@@ -70,6 +72,12 @@ export function OverlayCanvas({ state, config, preview = false, inspect = false 
         <div className="tt-alert-heading"><span className="tt-status-dot" /><strong>{({ request: 'Song requested', warning: 'Request notice', general: 'Queue update', now_playing: 'Now Playing' } as Record<string, string>)[alert.kind] || 'TipTune'}</strong>{alert.requester ? <span className="tt-alert-requester">{alert.requester}</span> : null}</div>
         <div className="tt-alert-message">{alert.message}</div>
       </div>)}</div> : null}
+      {advertisement ? <section key={advertisement.id} className="tt-advertisement" aria-label="Song request advertisement">
+        <div className="tt-advertisement-heading"><strong>Request a song</strong><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18V5l11-2v13M9 9l11-2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><ellipse cx="6" cy="18" rx="3" ry="2.5" stroke="currentColor" strokeWidth="1.8" /><ellipse cx="17" cy="16" rx="3" ry="2.5" stroke="currentColor" strokeWidth="1.8" /></svg></div>
+        <p className="tt-advertisement-price"><strong>{prices.song_cost} tokens</strong><span>per song</span></p>
+        <p className="tt-advertisement-instructions">Tip <strong>{prices.song_cost} tokens</strong> and include the <strong>song title and artist</strong> in your tip message.</p>
+        <div className="tt-advertisement-skip"><span>Skip the current song</span><strong>Tip {prices.skip_song_cost} tokens</strong></div>
+      </section> : null}
       {now ? <section className="tt-now" aria-label="Now Playing">
         <div className="tt-panel-heading"><span className="tt-status-dot" /><strong>{state?.status.starting ? 'Starting' : state?.status.playback_paused ? 'Playback paused' : 'Now Playing'}</strong><span className="tt-source">{now.source === 'youtube' ? 'YouTube' : 'Spotify'}</span></div>
         <div className="tt-now-track">{show('show_artwork') ? <Artwork url={now.album_image_url} /> : null}<TrackText track={now} /></div>

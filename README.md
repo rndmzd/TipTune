@@ -121,9 +121,11 @@ TipTune uses these sections/keys (see `config.ini.example`):
 - `[Music]` (required)
   - `source`
 - `[General]` (required)
-  - `song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `request_history_size`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
+  - `song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `request_history_size`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `show_history_debug`, `debug_log_to_file`, `debug_log_path`
 
 Request history retains the latest 1,000 entries by default. Change **Settings → General → Request history size** (or `General.request_history_size`) to any positive whole number. Changes apply when saved; lowering the size removes the oldest excess entries. History, exports, and Stats use the configured capacity.
+
+Failed song extractions save diagnostics with the History record: the failure stage, effective model, request input and output schema, model response and usage when available, exception causes and traceback, API status/request ID, Spotify link failures, source selection, configuration availability, and elapsed time. Blank messages and requests where no song was identified also include diagnostics. Enable **Settings → General → Show debug output in history** and save to view **Song extraction debug details** on failed entries. This display defaults to off; diagnostics remain saved and included in History exports when hidden. Credentials are redacted and oversized diagnostic fields are marked as truncated. Earlier entries without saved diagnostics cannot recover their original failure details.
 
 ### Multi-song tips
 
@@ -223,6 +225,7 @@ Steps:
 
 1. Open **Stream information display** in Setup Wizard or Settings. Choose a scene and source name, save settings, then click **Add browser overlay** (or **Switch to browser overlay** for existing text setups).
 1. Use the **Full** or **Compact** preset and adjust position, scale, colors, visible panels, and motion. Preview buttons affect only the preview; **Send … to OBS** buttons appear on the actual source. Saved appearance changes apply live. Use **Inspect panels** to read the preview at a comfortable size on smaller screens.
+1. Optional: under **Advertisements**, enable **Show song request advertisements**, choose the interval and duration in seconds, then save. Ads show the current song/skip token prices and explain how to include the song title and artist in a tip message. **Preview advertisement** uses your draft prices without changing the broadcast. Ads default to off; when enabled, they default to every 300 seconds for 15 seconds. The interval can be 60–86400 seconds and the duration 5–30 seconds. The first ad waits one interval; intervals are measured between ad starts. Ads share the overlay’s layout, colors, opacity, and Motion setting and respect reduced motion.
 1. Optional: use **Create Spotify audio capture** (Windows) to set up an Application Audio Capture input for `Spotify.exe`.
 1. Optional: use **Create TipTune audio capture** (Windows) to set up an Application Audio Capture input for `TipTune.exe` (for YouTube playback audio sync in OBS).
 
@@ -245,7 +248,7 @@ hide any old text items there when reusing the browser input across scenes.
 
 The page reads cached display state through `/api/overlay/state` and
 `/api/overlay/events`; it never controls playback or reads raw tip messages.
-Temporary alerts expire independently. On connection loss, alerts clear and
+Temporary alerts and advertisements expire independently. On connection loss, both clear and
 persistent panels hide after 15 seconds without a heartbeat. Recovery displays
 current state without replaying expired announcements. See `[Overlay]` in
 `config.ini.example` for all appearance settings.

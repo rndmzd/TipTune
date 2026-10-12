@@ -1,6 +1,7 @@
 """Cached viewer-facing overlay state. No playback or network operations live here."""
 
 import asyncio
+import configparser
 import copy
 import re
 import time
@@ -15,14 +16,17 @@ DEFAULTS = {
     'show_artwork': 'true', 'accent_color': '#5b8cff',
     'background_color': '#111318', 'text_color': '#f2f3f5',
     'opacity': '90', 'motion': 'subtle', 'source_name': 'TipTune Overlay',
+    'show_advertisements': 'false', 'advertisement_interval': '300',
+    'advertisement_duration': '15',
 }
 CHOICES = {
     'mode': {'browser', 'text', 'off'}, 'layout': {'full', 'compact'},
     'position': {'bottom-left', 'bottom-right', 'top-left', 'top-right'},
     'motion': {'subtle', 'off'},
 }
-RANGES = {'scale': (50, 150), 'margin': (0, 200), 'queue_length': (1, 5), 'opacity': (0, 100)}
-BOOL_KEYS = {'show_now_playing', 'show_queue', 'show_alerts', 'show_artwork'}
+RANGES = {'scale': (50, 150), 'margin': (0, 200), 'queue_length': (1, 5), 'opacity': (0, 100),
+          'advertisement_interval': (60, 86400), 'advertisement_duration': (5, 30)}
+BOOL_KEYS = {'show_now_playing', 'show_queue', 'show_alerts', 'show_artwork', 'show_advertisements'}
 COLOR_KEYS = {'accent_color', 'background_color', 'text_color'}
 
 
@@ -96,12 +100,28 @@ def public_track(item):
     return out
 
 
+def read_request_info(config):
+    """Expose only the effective token prices, using the same fallbacks as Checks."""
+    prices = {'song_cost': 27, 'skip_song_cost': 51}
+    for key, fallback in prices.items():
+        try:
+            value = config.getint('General', key, fallback=fallback)
+        except (ValueError, configparser.Error):
+            value = fallback
+        prices[key] = value if value > 0 else fallback
+    return prices
+
+
 class OverlayService:
     def __init__(self, config, clock=time.time):
         self.clock = clock
         self.session_id = uuid.uuid4().hex
         self.revision = 0
         self.config = read_settings(config)
+        self.request_info = read_request_info(config)
+        self.advertisement = None
+        self._next_advertisement_at = None
+        self._reset_advertisement_schedule()
         self.now_playing = None
         self.upcoming = []
         self.total_queue_count = 0
@@ -117,6 +137,7 @@ class OverlayService:
             'config': self.config, 'now_playing': self.now_playing,
             'upcoming': self.upcoming, 'total_queue_count': self.total_queue_count,
             'status': self.status, 'alerts': self.active,
+            'request_info': self.request_info, 'advertisement': self.advertisement,
         })
 
     def publish(self):
@@ -139,14 +160,26 @@ class OverlayService:
 
     def configure(self, config):
         settings = read_settings(config)
-        if settings == self.config:
+        prices = read_request_info(config)
+        if settings == self.config and prices == self.request_info:
             return
+        schedule_keys = ('mode', 'show_advertisements', 'advertisement_interval', 'advertisement_duration')
+        reschedule = any(settings[key] != self.config[key] for key in schedule_keys)
         if settings['mode'] != self.config['mode']:
             self.active.clear()
             self.pending.clear()
         self.config = settings
+        self.request_info = prices
+        if reschedule:
+            self._reset_advertisement_schedule()
         self.upcoming = self.upcoming[:int(settings['queue_length'])]
         self.publish()
+
+    def _reset_advertisement_schedule(self):
+        self.advertisement = None
+        enabled = self.config['mode'] == 'browser' and self.config['show_advertisements'] == 'true'
+        self._next_advertisement_at = (
+            self.clock() + int(self.config['advertisement_interval']) if enabled else None)
 
     def update_tracks(self, now_playing, upcoming, status):
         current = public_track(now_playing)
@@ -177,6 +210,17 @@ class OverlayService:
         active = [item for item in self.active if item['expires_at'] > now]
         changed = len(active) != len(self.active)
         self.active = active
+        if self.advertisement and self.advertisement['expires_at'] <= now:
+            self.advertisement = None
+            changed = True
+        if self._next_advertisement_at is not None and now >= self._next_advertisement_at:
+            self.advertisement = {
+                'id': uuid.uuid4().hex, 'created_at': now,
+                'expires_at': now + int(self.config['advertisement_duration']),
+            }
+            # Delayed ticks produce one current advertisement, never a catch-up backlog.
+            self._next_advertisement_at = now + int(self.config['advertisement_interval'])
+            changed = True
         while self.pending and self.pending[0]['created_at'] < now - 60:
             self.pending.popleft()
         while self.pending and len(self.active) < 3:

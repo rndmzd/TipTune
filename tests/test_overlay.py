@@ -16,9 +16,9 @@ from helpers.actions import Actions
 from handlers.obshandler import OBSHandler
 
 
-def config(mode='browser'):
+def config(mode='browser', **overlay):
     cfg = configparser.ConfigParser()
-    cfg.read_dict({'Overlay': {'mode': mode}})
+    cfg.read_dict({'Overlay': {'mode': mode, **overlay}})
     return cfg
 
 
@@ -38,7 +38,10 @@ class OverlayStateTests(unittest.TestCase):
     def test_config_validation_is_bounded(self):
         for values in ({'scale': '49'}, {'queue_length': '6'}, {'opacity': '101'},
                        {'margin': '-1'}, {'accent_color': 'red'}, {'source_name': ''},
-                       {'show_queue': 'sometimes'}, {'position': 'center'}):
+                       {'show_queue': 'sometimes'}, {'position': 'center'},
+                       {'show_advertisements': 'sometimes'}, {'advertisement_interval': '59'},
+                       {'advertisement_interval': '86401'}, {'advertisement_interval': '1.5'},
+                       {'advertisement_duration': '4'}, {'advertisement_duration': '31'}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 validate_settings(values)
 
@@ -89,6 +92,100 @@ class OverlayStateTests(unittest.TestCase):
         self.display.configure(config('off'))
         self.display.alert('request', 'hidden')
         self.assertEqual(self.display.snapshot()['alerts'], [])
+
+    def test_advertisements_are_opt_in_and_only_run_in_browser_mode(self):
+        self.now += 86401
+        self.display.tick()
+        self.assertIsNone(self.display.snapshot()['advertisement'])
+        for mode in ('off', 'text', 'browser'):
+            with self.subTest(mode=mode):
+                self.display.configure(config(mode, show_advertisements='true'))
+                self.now += 300
+                self.display.tick()
+                self.assertEqual(self.display.advertisement is not None, mode == 'browser')
+
+    def test_advertisements_repeat_from_start_and_expire_separately_from_alerts(self):
+        self.display.configure(config(show_advertisements='true', advertisement_interval='60'))
+        self.now += 59
+        self.display.tick()
+        self.assertIsNone(self.display.advertisement)
+        self.now += 1
+        self.display.alert('request', 'A real request', duration=30)
+        first = self.display.snapshot()['advertisement']
+        self.assertEqual(first['expires_at'], self.now + 15)
+        self.now += 15
+        self.display.tick()
+        self.assertIsNone(self.display.advertisement)
+        self.assertEqual(len(self.display.active), 1)
+        self.now += 45
+        self.display.tick()
+        self.assertNotEqual(self.display.advertisement['id'], first['id'])
+        self.assertFalse(self.display.active)
+
+    def test_advertisement_schedule_survives_reconnect_and_price_or_style_changes(self):
+        cfg = config(show_advertisements='true', advertisement_interval='60', show_alerts='false')
+        cfg.read_dict({'General': {'song_cost': '42', 'skip_song_cost': '73', 'password': 'secret'}})
+        self.display.configure(cfg)
+        self.now += 60
+        self.display.tick()
+        original = self.display.snapshot()['advertisement']
+        subscriber = self.display.subscribe()
+        self.assertEqual(subscriber.get_nowait()['advertisement'], original)
+        self.display.unsubscribe(subscriber)
+        self.now += 5
+        cfg['General']['song_cost'] = '44'
+        self.display.configure(cfg)
+        updated = self.display.snapshot()
+        self.assertEqual(updated['request_info'], {'song_cost': 44, 'skip_song_cost': 73})
+        self.assertEqual(updated['advertisement'], original)
+        self.assertNotIn('secret', json.dumps(updated))
+        cfg['Overlay']['layout'] = 'compact'
+        self.display.configure(cfg)
+        self.now += 55
+        self.display.tick()
+        self.assertNotEqual(self.display.advertisement['id'], original['id'])
+
+    def test_disabling_or_changing_timing_clears_ad_and_resets_schedule(self):
+        cfg = config(show_advertisements='true', advertisement_interval='60')
+        self.display.configure(cfg)
+        self.now += 60
+        self.display.tick()
+        cfg['Overlay']['advertisement_interval'] = '120'
+        cfg['Overlay']['advertisement_duration'] = '5'
+        self.display.configure(cfg)
+        self.assertIsNone(self.display.advertisement)
+        self.now += 120
+        self.display.tick()
+        self.assertEqual(self.display.advertisement['expires_at'], self.now + 5)
+        cfg['Overlay']['show_advertisements'] = 'false'
+        self.display.configure(cfg)
+        self.now += 1000
+        self.display.tick()
+        self.assertIsNone(self.display.advertisement)
+
+    def test_delayed_tick_shows_one_current_ad_and_snapshot_cannot_mutate_it(self):
+        self.display.configure(config(show_advertisements='true', advertisement_interval='60'))
+        self.now += 1000
+        self.display.tick()
+        original = self.display.snapshot()['advertisement']
+        self.assertEqual(original['created_at'], self.now)
+        snapshot = self.display.snapshot()
+        snapshot['advertisement']['expires_at'] = 0
+        snapshot['request_info']['song_cost'] = 0
+        self.assertEqual(self.display.advertisement, original)
+        self.assertEqual(self.display.request_info['song_cost'], 27)
+        self.now += 15
+        self.display.tick()
+        self.assertIsNone(self.display.advertisement)
+
+    def test_invalid_saved_ad_settings_and_prices_use_effective_defaults(self):
+        cfg = config(show_advertisements='invalid', advertisement_interval='0', advertisement_duration='invalid')
+        cfg.read_dict({'General': {'song_cost': '-1', 'skip_song_cost': 'invalid'}})
+        self.display.configure(cfg)
+        self.assertEqual(self.display.config['show_advertisements'], 'false')
+        self.assertEqual(self.display.config['advertisement_interval'], '300')
+        self.assertEqual(self.display.config['advertisement_duration'], '15')
+        self.assertEqual(self.display.snapshot()['request_info'], {'song_cost': 27, 'skip_song_cost': 51})
 
 
 class OverlayDispatchTests(unittest.IsolatedAsyncioTestCase):
@@ -277,6 +374,26 @@ class OverlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ok, error = await self.service.update_config_from_ui({'Overlay': {'layout': 'compact', 'queue_length': '5'}})
         self.assertTrue(ok, error)
         self.assertEqual(subscriber.get_nowait()['config']['layout'], 'compact')
+
+    async def test_advertisement_save_persists_timing_and_price_only_updates_publish(self):
+        ok, _ = await self.service.update_config_from_ui({'Overlay': {'advertisement_interval': '59'}})
+        self.assertFalse(ok)
+        self.assertFalse((self.root / 'config.ini').exists())
+        ok, error = await self.service.update_config_from_ui({
+            'Overlay': {'show_advertisements': 'true', 'advertisement_interval': '120', 'advertisement_duration': '20'},
+            'General': {'song_cost': '35', 'skip_song_cost': '80'},
+        })
+        self.assertTrue(ok, error)
+        restored = self.app.SongRequestService()
+        self.assertEqual(restored.overlay.config['advertisement_interval'], '120')
+        self.assertEqual(restored.overlay.config['advertisement_duration'], '20')
+        self.assertEqual(restored.overlay.config['show_advertisements'], 'true')
+        self.assertEqual(restored.overlay.request_info, {'song_cost': 35, 'skip_song_cost': 80})
+        subscriber = self.service.overlay.subscribe()
+        ok, error = await self.service.update_config_from_ui({'General': {'song_cost': '40'}})
+        self.assertTrue(ok, error)
+        self.assertEqual(subscriber.get_nowait()['request_info']['song_cost'], 40)
+        self.service.overlay.unsubscribe(subscriber)
 
     async def test_failed_source_creation_does_not_switch_modes(self):
         self.cfg['OBS']['enabled'] = 'true'
