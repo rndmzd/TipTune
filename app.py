@@ -37,6 +37,7 @@ from utils.overlay import OverlayService, DEFAULTS as OVERLAY_DEFAULTS, read_set
 from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_path, get_cache_dir, get_bundled_bin_dir, get_config_path, get_resource_path, get_spotipy_cache_path, read_text_if_exists, get_app_dir
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 from utils.spotify_errors import spotify_error_message
+from utils.song_extraction_debug import extraction_exception_debug, sanitize_extraction_debug
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -59,6 +60,26 @@ def _request_history_size() -> int:
         return size if size > 0 else 1000
     except (ValueError, configparser.Error):
         return 1000
+
+
+def _show_history_debug() -> bool:
+    try:
+        return config.getboolean('General', 'show_history_debug', fallback=False)
+    except (ValueError, configparser.Error):
+        return False
+
+
+def _history_extraction_debug(details: dict) -> dict:
+    secrets = []
+    for section in config.sections():
+        for key, value in config.items(section, raw=True):
+            if _is_secret_field(section, key):
+                secrets.append(value)
+                try:
+                    secrets.append(config.get(section, key))
+                except configparser.Error:
+                    pass
+    return sanitize_extraction_debug(details, secrets)
 
 
 def _prepend_bundled_bin_to_path() -> None:
@@ -1019,7 +1040,8 @@ class WebUI:
         except Exception:
             limit = history_size
         history = await self._service.get_recent_request_history(limit=limit)
-        return web.json_response({"ok": True, "history": history, "history_size": history_size})
+        return web.json_response({"ok": True, "history": history, "history_size": history_size,
+                                  "show_history_debug": _show_history_debug()})
 
     async def _api_history_track(self, request: web.Request) -> web.Response:
         track_id = self._service._parse_spotify_track_id(request.query.get('uri'))
@@ -3120,6 +3142,20 @@ class SongRequestService:
 
             request_count = max(1, self.checks.get_request_count(tip_amount))
 
+            extractor = getattr(self.actions, 'song_extractor', None)
+            model = getattr(extractor, 'model', None)
+            extraction_debug = {
+                'stage': 'input_validation', 'message': tip_message, 'request_count': request_count,
+                'model': model if isinstance(model, str) else (
+                    config.get('OpenAI', 'model', fallback=DEFAULT_MODEL).strip() or DEFAULT_MODEL),
+                'music_source': source, 'active_music_source': active_source, 'source_override': source_override,
+                'configuration': {
+                    'chatdj_enabled': getattr(self.actions, 'chatdj_enabled', None),
+                    'openai_key_configured': bool(config.get('OpenAI', 'api_key', fallback='').strip()),
+                    'spotify_client_configured': getattr(extractor, 'spotify_client', None) is not None,
+                },
+            }
+
             if tip_message == "":
                 self.publish_request_history_item({
                     "ts": time.time(),
@@ -3129,6 +3165,9 @@ class SongRequestService:
                     "tip_message": tip_message,
                     "status": "failed",
                     "error": "blank tip message",
+                    "extraction_debug": _history_extraction_debug({
+                        **extraction_debug, 'outcome': 'blank_tip_message', 'elapsed_ms': 0,
+                    }),
                 })
                 await self.actions.trigger_warning_overlay(
                     username,
@@ -3139,22 +3178,33 @@ class SongRequestService:
 
             direct_youtube = self._youtube_url_from_text(tip_message) if source == 'youtube' else None
             extraction_error = None
+            extraction_started = time.monotonic()
             try:
                 if direct_youtube:
                     song_extracts = [SongRequest(song=direct_youtube, artist="")]
                 else:
-                    song_extracts = await self.actions.extract_song_titles(tip_message, request_count)
+                    song_extracts = await self.actions.extract_song_titles(
+                        tip_message, request_count, diagnostics=extraction_debug)
             except Exception as exc:
                 logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
                 extraction_error = "song extraction failed"
                 song_extracts = []
+                details = getattr(exc, 'diagnostics', None)
+                if isinstance(details, dict):
+                    extraction_debug.update(details)
+                extraction_debug['exception'] = extraction_exception_debug(exc)
 
             if not song_extracts:
+                extraction_debug.update({
+                    'outcome': 'extraction_failed' if extraction_error else 'no_songs_identified',
+                    'elapsed_ms': round((time.monotonic() - extraction_started) * 1000, 2),
+                })
                 self.publish_request_history_item({
                     "ts": time.time(), "tip_ts": tip_ts, "username": username,
                     "tip_amount": tip_amount, "tip_message": tip_message,
                     "request_count": request_count, "status": "failed",
                     "error": extraction_error or "no song identified",
+                    "extraction_debug": _history_extraction_debug(extraction_debug),
                 })
                 await self.actions.trigger_warning_overlay(
                     username,
@@ -4369,6 +4419,7 @@ class SongRequestService:
                     cfg[section][key] = val
         general_cfg = cfg.setdefault("General", {})
         general_cfg['request_history_size'] = str(self._request_history_recent_max)
+        general_cfg['show_history_debug'] = 'true' if _show_history_debug() else 'false'
         cfg['Overlay'] = read_overlay_settings(config)
         if not str(general_cfg.get("debug_log_path", "")).strip():
             general_cfg["debug_log_path"] = str(_default_log_path())
@@ -4395,6 +4446,7 @@ class SongRequestService:
                 "setup_complete",
                 "auto_check_updates",
                 "show_debug_data",
+                "show_history_debug",
                 "debug_log_to_file",
                 "debug_log_path",
             },
@@ -4420,6 +4472,11 @@ class SongRequestService:
                     continue
 
                 value_str = str(value)
+                if section == 'General' and key == 'show_history_debug':
+                    enabled = configparser.ConfigParser.BOOLEAN_STATES.get(value_str.strip().lower())
+                    if enabled is None:
+                        return (False, "Show debug output in history must be true or false.")
+                    value_str = 'true' if enabled else 'false'
                 if section == 'General' and key == 'request_history_size':
                     try:
                         history_size = int(value_str)

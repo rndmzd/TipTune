@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from chatdj.song_requests import SongRequest, SongExtractionError, SongResolutionError
 
@@ -62,11 +62,70 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.actions.extract_song_titles.side_effect = SongExtractionError('timeout')
         await self.handle()
         self.assertEqual(self.history()[0]['error'], 'song extraction failed')
+        debug = self.history()[0]['extraction_debug']
+        self.assertEqual(debug['exception']['message'], 'timeout')
+        self.assertEqual(debug['request_count'], 2)
+        self.assertEqual(debug['music_source'], 'spotify')
+        self.assertEqual(debug['outcome'], 'extraction_failed')
+        self.assertGreaterEqual(debug['elapsed_ms'], 0)
         self.actions.find_song_spotify.assert_not_called()
+
+    async def test_failure_retains_model_response_and_exception_cause(self):
+        error = SongExtractionError('Song extraction failed', diagnostics={
+            'stage': 'response_validation', 'model': 'test-model',
+            'response': {'id': 'resp_test', 'status': 'incomplete',
+                         'incomplete_details': {'reason': 'max_output_tokens'}},
+        })
+        error.__cause__ = ValueError('Incomplete model response')
+        self.actions.extract_song_titles.side_effect = error
+        await self.handle()
+        debug = self.history()[0]['extraction_debug']
+        self.assertEqual(debug['stage'], 'response_validation')
+        self.assertEqual(debug['model'], 'test-model')
+        self.assertEqual(debug['response']['id'], 'resp_test')
+        self.assertEqual(debug['exception']['chain'][-1]['message'], 'Incomplete model response')
+        self.assertIn('ValueError', debug['exception']['traceback'])
+
+    async def test_history_redacts_configured_credentials_from_errors(self):
+        self.app.config.read_string('[OpenAI]\napi_key = private-test-credential\n[OBS]\npassword = private%%password')
+        self.addCleanup(self.app.config.remove_section, 'OpenAI')
+        self.addCleanup(self.app.config.remove_section, 'OBS')
+        self.actions.extract_song_titles.side_effect = RuntimeError(
+            'Bad credential: private-test-credential; OBS private%password')
+        await self.handle()
+        import json
+        saved = json.dumps(self.history()[0]['extraction_debug'])
+        self.assertNotIn('private-test-credential', saved)
+        self.assertNotIn('private%password', saved)
+        self.assertIn('[REDACTED]', saved)
+
+    async def test_empty_output_retains_per_call_model_diagnostics(self):
+        async def extract(message, count, *, diagnostics):
+            diagnostics.update({'stage': 'grounding_validation', 'response': {'output_parsed': {'songs': []}}})
+            return []
+        self.actions.extract_song_titles.side_effect = extract
+        await self.handle('thank you')
+        debug = self.history()[0]['extraction_debug']
+        self.assertEqual(debug['response']['output_parsed'], {'songs': []})
+        self.assertEqual(debug['outcome'], 'no_songs_identified')
+
+    async def test_blank_input_has_diagnostics_without_calling_model(self):
+        await self.handle('   ')
+        debug = self.history()[0]['extraction_debug']
+        self.assertEqual(debug['stage'], 'input_validation')
+        self.assertEqual(debug['outcome'], 'blank_tip_message')
+        self.actions.extract_song_titles.assert_not_called()
+
+    async def test_unconfigured_extractor_reports_configuration_failure(self):
+        actions = SimpleNamespace(chatdj_enabled=False)
+        self.actions.extract_song_titles = lambda *args, **kwargs: self.Actions.extract_song_titles(actions, *args, **kwargs)
+        await self.handle()
+        self.assertEqual(self.history()[0]['extraction_debug']['stage'], 'configuration')
+        self.assertIn('not configured', self.history()[0]['extraction_debug']['exception']['message'])
 
     async def test_short_title_is_unmodified(self):
         await self.handle('U')
-        self.actions.extract_song_titles.assert_awaited_once_with('U', 2)
+        self.actions.extract_song_titles.assert_awaited_once_with('U', 2, diagnostics=ANY)
 
     async def test_partial_resolution_survives_exception(self):
         self.actions.extract_song_titles.return_value = [SongRequest(song='One', artist=''),

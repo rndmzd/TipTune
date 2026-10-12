@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import httpx2
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from pydantic import ValidationError
 
 from chatdj.song_requests import (
@@ -145,6 +145,89 @@ class SongRequestTests(unittest.TestCase):
             CandidateSelection(candidate_id='0', uri=URI)
         self.assertEqual(set(SongRequest(song='Hi', artist='').model_dump()),
                          {'song', 'artist', 'spotify_uri'})
+
+    def test_api_error_diagnostics_include_status_id_body_and_redacted_credentials(self):
+        self.extractor.openai_client.api_key = 'private-openai-test-key'
+        response = httpx2.Response(429, headers={'x-request-id': 'req_test'},
+                                  request=httpx2.Request('POST', 'https://api.openai.com/v1/responses'))
+        self.api.side_effect = RateLimitError('Rate limited; private-openai-test-key', response=response,
+            body={'code': 'rate_limit_exceeded', 'message': 'Retry later', 'api_key': 'private-openai-test-key'})
+        with self.assertRaises(SongExtractionError) as raised:
+            self.extractor.extract_songs('Hello', 2)
+        debug = raised.exception.diagnostics
+        self.assertEqual(debug['stage'], 'model_request')
+        self.assertEqual(debug['request']['model'], DEFAULT_MODEL)
+        self.assertEqual(json.loads(debug['request']['input'][1]['content'])['max_songs'], 2)
+        self.assertEqual(debug['exception']['chain'][0]['status_code'], 429)
+        self.assertEqual(debug['exception']['chain'][0]['request_id'], 'req_test')
+        self.assertEqual(debug['exception']['chain'][0]['body']['code'], 'rate_limit_exceeded')
+        self.assertNotIn('private-openai-test-key', json.dumps(debug))
+        self.assertIn('[REDACTED]', json.dumps(debug))
+
+    def test_incomplete_and_refused_responses_retain_provider_output(self):
+        responses = [
+            SimpleNamespace(id='resp_incomplete', model=DEFAULT_MODEL, _request_id='req_incomplete',
+                status='incomplete', incomplete_details={'reason': 'max_output_tokens'},
+                usage={'output_tokens': 100}, output=[], output_parsed=None),
+            SimpleNamespace(id='resp_refusal', status='completed', output_parsed=None, output=[
+                SimpleNamespace(type='message', content=[SimpleNamespace(type='refusal', refusal='Cannot process')])]),
+        ]
+        for response in responses:
+            with self.subTest(id=response.id):
+                self.api.return_value = response
+                with self.assertRaises(SongExtractionError) as raised:
+                    self.extractor.extract_songs('Hello')
+                debug = raised.exception.diagnostics
+                self.assertEqual(debug['stage'], 'response_validation')
+                self.assertEqual(debug['response']['id'], response.id)
+                if response.status == 'incomplete':
+                    self.assertEqual(debug['response']['incomplete_details']['reason'], 'max_output_tokens')
+                    self.assertEqual(debug['response']['_request_id'], 'req_incomplete')
+                    self.assertEqual(debug['response']['usage']['output_tokens'], 100)
+                else:
+                    self.assertEqual(debug['response']['output'][0]['content'][0]['refusal'], 'Cannot process')
+
+    def test_validation_errors_and_ungrounded_output_have_distinct_stages(self):
+        for songs, stage in [
+            ([{'song': 'Hello'}], 'structured_output_validation'),
+            ([extracted(source='invented')], 'grounding_validation'),
+        ]:
+            with self.subTest(stage=stage):
+                self.api.return_value = completed({'songs': songs})
+                with self.assertRaises(SongExtractionError) as raised:
+                    self.extractor.extract_songs('Hello')
+                debug = raised.exception.diagnostics
+                self.assertEqual(debug['stage'], stage)
+                self.assertEqual(debug['response']['output_parsed']['songs'], songs)
+                if stage == 'structured_output_validation':
+                    self.assertIn('validation_errors', debug['exception']['chain'][0])
+                else:
+                    self.assertEqual(debug['exception']['message'], 'Ungrounded extracted request')
+
+    def test_link_only_failures_retain_lookup_cause_and_missing_configuration(self):
+        self.spotify.track.side_effect = RuntimeError('Spotify unavailable')
+        with self.assertRaises(SongExtractionError) as raised:
+            self.extractor.extract_songs(URI)
+        debug = raised.exception.diagnostics
+        self.assertEqual(debug['stage'], 'spotify_link_lookup')
+        self.assertEqual(debug['link_failures'][0]['uri'], URI)
+        self.assertEqual(debug['link_failures'][0]['exception']['message'], 'Spotify unavailable')
+        self.extractor.spotify_client = None
+        with self.assertRaises(SongExtractionError) as raised:
+            self.extractor.extract_songs(URI)
+        self.assertEqual(raised.exception.diagnostics['link_failures'][0]['reason'], 'Spotify is not configured')
+        self.api.assert_not_called()
+
+    def test_empty_output_diagnostics_remain_attached_to_their_call(self):
+        self.output([])
+        first, second = {}, {}
+        self.assertEqual(self.extractor.extract_songs('thanks', diagnostics=first), [])
+        original = json.dumps(first)
+        self.extractor.extract_songs('Adele', diagnostics=second)
+        self.assertEqual(json.dumps(first), original)
+        self.assertEqual(first['outcome'], 'no_songs_identified')
+        self.assertEqual(first['response']['output_parsed'], {'songs': []})
+        self.assertEqual(json.loads(second['request']['input'][1]['content'])['message'], 'Adele')
 
     def test_actual_sdk_sends_strict_responses_schema(self):
         captured = []

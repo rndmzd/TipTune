@@ -379,6 +379,9 @@
  .queueCardDragOver { outline: 2px dashed rgba(91, 140, 255, 0.65); outline-offset: 2px; }
 
  details { margin-top: 10px; }
+ .historyDebug pre { max-height: 360px; overflow: auto; }
+ .historyDebugSetting { display: flex; gap: 8px; align-items: center; }
+ .historyDebugSetting input { width: 16px; height: 16px; padding: 0; margin: 0; flex: 0 0 auto; }
  summary { cursor: pointer; user-select: none; color: var(--muted); }
  summary:hover { color: rgba(255, 255, 255, 0.82); }
 

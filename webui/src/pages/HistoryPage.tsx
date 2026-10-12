@@ -114,8 +114,12 @@ function HistoryArtwork(props: { item: any; imageUrl: unknown; uri: unknown; son
   );
 }
 
-function HistoryCard(props: { item: any }) {
+function HistoryCard(props: { item: any; showDebug: boolean }) {
   const s = useMemo(() => summarize(props.item), [props.item]);
+  const extractionDebug = props.item?.extraction_debug;
+  const extractionFailed = s.status === 'failed' && (
+    extractionDebug || ['song extraction failed', 'no song identified', 'blank tip message'].includes(s.error)
+  );
 
   const t = typeof s.spotifyName === 'string' && s.spotifyName.trim() !== '' ? s.spotifyName.trim() : null;
   const a = typeof s.spotifyArtists === 'string' && s.spotifyArtists.trim() !== '' ? s.spotifyArtists.trim() : null;
@@ -165,6 +169,16 @@ function HistoryCard(props: { item: any }) {
       </div>
       <div className="cardBody">
         {typeof s.error === 'string' && s.error.trim() !== '' ? <div className="message">{s.error}</div> : null}
+        {props.showDebug && extractionFailed ? (
+          <details className="historyDebug">
+            <summary>Song extraction debug details</summary>
+            {extractionDebug && typeof extractionDebug === 'object' ? (
+              <pre>{JSON.stringify(extractionDebug, null, 2)}</pre>
+            ) : (
+              <p className="muted">No extraction debug details were saved for this request. New failures will include diagnostics.</p>
+            )}
+          </details>
+        ) : null}
         {typeof s.tipMessage === 'string' && s.tipMessage.trim() !== '' ? (
           <details>
             <summary>Tip message</summary>
@@ -182,7 +196,7 @@ function HistoryCard(props: { item: any }) {
   );
 }
 
-type HistoryRecentResp = { ok: true; history: any[]; history_size: number };
+type HistoryRecentResp = { ok: true; history: any[]; history_size: number; show_history_debug?: boolean };
 
 function makeExportFilename(): string {
   const d = new Date();
@@ -209,6 +223,7 @@ export function HistoryPage() {
   const [items, setItems] = useState<any[]>([]);
   const [limit, setLimit] = useState<number | null>(null);
   const [historySize, setHistorySize] = useState<number>(1000);
+  const [showDebug, setShowDebug] = useState(false);
   const [exporting, setExporting] = useState<boolean>(false);
 
   async function refresh() {
@@ -218,6 +233,7 @@ export function HistoryPage() {
       const query = limit == null ? '' : `?limit=${encodeURIComponent(String(limit))}`;
       const j = await apiJson<HistoryRecentResp>(`/api/history/recent${query}`);
       setHistorySize(j.history_size);
+      setShowDebug(j.show_history_debug === true);
       setLimit(limit == null ? j.history_size : Math.max(1, Math.min(limit, j.history_size)));
       const hist = Array.isArray(j?.history) ? j.history : [];
       setItems(hist.slice().reverse());
@@ -299,7 +315,7 @@ export function HistoryPage() {
 
       <div className="out">
         {items.map((item, idx) => (
-          <HistoryCard key={idx} item={item} />
+          <HistoryCard key={idx} item={item} showDebug={showDebug} />
         ))}
       </div>
     </div>

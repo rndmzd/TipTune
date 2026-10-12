@@ -29,6 +29,8 @@ allow_source_override_in_request_message = true
 skip_song_cost = 51
 request_overlay_duration = 10
 request_history_size = 1000
+# Display saved extraction diagnostics on failed History entries (also retained in exports).
+show_history_debug = false
 debug_log_to_file = false
 debug_log_path =
 
@@ -62,3 +64,8 @@ text_color = #f2f3f5
 opacity = 90
 motion = subtle
 source_name = TipTune Overlay
+# Optional song request advertisements (Browser display only). The interval is
+# measured between ad starts; the first ad waits one complete interval.
+show_advertisements = false
+advertisement_interval = 300
+advertisement_duration = 15

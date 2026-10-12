@@ -118,6 +118,35 @@ class RequestHistoryTests(unittest.IsolatedAsyncioTestCase):
         service._fetch_spotify_track_meta = AsyncMock()
         return service
 
+    async def test_history_debug_setting_defaults_off_and_updates_without_restart(self):
+        service = self.service()
+        item = {'status': 'failed', 'error': 'song extraction failed',
+                'extraction_debug': {'stage': 'model_request', 'exception': {'message': 'Timeout'}}}
+        service.publish_request_history_item(item)
+        self.assertEqual(service.get_config_for_ui()['General']['show_history_debug'], 'false')
+        async with TestClient(TestServer(self.app.WebUI(service)._app)) as client:
+            for value, enabled in [('true', True), ('false', False)]:
+                self.assertEqual(await service.update_config_from_ui({'General': {'show_history_debug': value}}), (True, None))
+                response = await client.get('/api/history/recent')
+                data = await response.json()
+                self.assertEqual(data['show_history_debug'], enabled)
+                self.assertEqual(data['history'], [item])
+                saved = configparser.ConfigParser()
+                saved.read(self.root / 'config.ini')
+                self.assertEqual(saved.getboolean('General', 'show_history_debug'), enabled)
+                self.assertEqual(self.service()._request_history_recent, [item])
+
+    async def test_invalid_history_debug_value_does_not_write_other_settings(self):
+        service = self.service()
+        ok, error = await service.update_config_from_ui({'General': {
+            'song_cost': '99', 'show_history_debug': 'sometimes',
+        }})
+        self.assertFalse(ok)
+        self.assertIn('true or false', error)
+        self.assertFalse((self.root / 'config.ini').exists())
+        self.config.read_dict({'General': {'show_history_debug': 'invalid'}})
+        self.assertEqual(service.get_config_for_ui()['General']['show_history_debug'], 'false')
+
     async def test_history_reuses_queue_cache_for_uri_and_url(self):
         service = self.artwork_service()
         track_id = 'A' * 22

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiJson } from '../api';
 import { OverlayCanvas } from '../overlay/OverlayCanvas';
-import { overlayDefaults, sampleState, type OverlayAlert } from '../overlay/types';
+import { overlayDefaults, requestInfoFromConfig, sampleState, type OverlayAdvertisement, type OverlayAlert } from '../overlay/types';
 import { useOverlay } from '../overlay/useOverlay';
 import './overlay-settings.css';
 
@@ -21,6 +21,7 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
   const [framing, setFraming] = useState('canvas');
   const live = useOverlay(previewMode === 'live');
   const [alerts, setAlerts] = useState<OverlayAlert[]>([]);
+  const [advertisement, setAdvertisement] = useState<OverlayAdvertisement | null>(null);
   const [status, setStatus] = useState<DisplayStatus>({});
   const [scenes, setScenes] = useState<string[]>([]);
   const [message, setMessage] = useState('');
@@ -54,10 +55,14 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
     if (connectionEnabled) refreshScenes();
   }, [connectionEnabled]);
   useEffect(() => {
-    const timer = window.setInterval(() => setAlerts((previous) => {
-      const active = previous.filter((a) => a.expires_at > Date.now() / 1000);
-      return active.length === previous.length ? previous : active;
-    }), 250);
+    const timer = window.setInterval(() => {
+      const now = Date.now() / 1000;
+      setAlerts((previous) => {
+        const active = previous.filter((a) => a.expires_at > now);
+        return active.length === previous.length ? previous : active;
+      });
+      setAdvertisement((previous) => previous && previous.expires_at <= now ? null : previous);
+    }, 250);
     return () => window.clearInterval(timer);
   }, []);
   function sample(kind: string) {
@@ -68,6 +73,13 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
       id: `${now}-${kind}`, kind, message: text[kind as keyof typeof text],
       requester: kind === 'general' ? null : 'StarGazer', created_at: now, expires_at: now + 10,
     }]);
+  }
+  function previewAdvertisement() {
+    setPreviewMode('sample');
+    const now = Date.now() / 1000;
+    const duration = Number(settings.advertisement_duration);
+    setAdvertisement({ id: `preview-ad-${now}`, created_at: now,
+      expires_at: now + (Number.isFinite(duration) ? Math.max(5, Math.min(30, duration)) : 15) });
   }
   async function addBrowser() {
     setBusy(true); setMessage('Adding the browser overlay…');
@@ -96,6 +108,10 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
     finally { setBusy(false); }
   }
   const sampleData = sampleState(); sampleData.alerts = alerts;
+  sampleData.advertisement = advertisement;
+  sampleData.request_info = requestInfoFromConfig(cfg.General);
+  const previewSettings = previewMode === 'sample' && advertisement
+    ? { ...settings, show_advertisements: 'true' } : settings;
   const url = status.overlay_url || 'http://127.0.0.1:8765/overlay';
   const dimensions = status.viewport || { width: 1920, height: 1080 };
   return <div className="overlay-settings">
@@ -113,6 +129,17 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
       <div><label htmlFor="overlay-motion">Motion</label><select id="overlay-motion" value={settings.motion} onChange={(e) => update('motion', e.target.value)}><option value="subtle">Subtle</option><option value="off">Off</option></select></div>
     </div>
     <div className="overlay-toggles">{([['show_now_playing', 'Now Playing'], ['show_queue', 'Queue'], ['show_alerts', 'Alerts'], ['show_artwork', 'Artwork']] as const).map(([key, label]) => <label key={key}><input type="checkbox" checked={settings[key] !== 'false'} onChange={(e) => update(key, String(e.target.checked))} />{label}</label>)}</div>
+    <section className="overlay-advertisements" aria-labelledby="overlay-advertisements-heading">
+      <h3 id="overlay-advertisements-heading">Advertisements</h3>
+      <div className="overlay-toggles"><label><input type="checkbox" checked={settings.show_advertisements === 'true'} onChange={(e) => update('show_advertisements', String(e.target.checked))} />Show song request advertisements</label></div>
+      <p className="muted">Periodically show the song price, how to request a song, and the skip price on the browser display. Prices follow your General settings.</p>
+      <div className="overlay-controls">
+        <div><label htmlFor="overlay-advertisement-interval">Ad interval (seconds)</label><input id="overlay-advertisement-interval" type="number" min={60} max={86400} step={1} disabled={settings.show_advertisements !== 'true'} value={settings.advertisement_interval} onChange={(e) => update('advertisement_interval', e.target.value)} /></div>
+        <div><label htmlFor="overlay-advertisement-duration">Ad duration (seconds)</label><input id="overlay-advertisement-duration" type="number" min={5} max={30} step={1} disabled={settings.show_advertisements !== 'true'} value={settings.advertisement_duration} onChange={(e) => update('advertisement_duration', e.target.value)} /></div>
+      </div>
+      <p className="muted">The first ad appears after one interval, then repeats from the start of each ad. Save changes to apply. Motion follows the display’s Motion setting.</p>
+      {settings.show_advertisements === 'true' && settings.mode !== 'browser' ? <p role="status">Choose Browser display to show advertisements on your overlay.</p> : null}
+    </section>
     <div className="overlay-preview-toolbar"><strong>Preview</strong><select aria-label="Preview content" value={previewMode} onChange={(e) => setPreviewMode(e.target.value)}><option value="sample">Sample</option><option value="live">Live</option></select><span className="muted">{previewMode === 'sample' ? 'Illustrative songs; preview only' : live.connected ? 'Display connected' : live.stale ? 'Waiting for TipTune' : 'Reconnecting…'}</span></div>
     <label htmlFor="overlay-preview-framing">Preview framing</label>
     <select id="overlay-preview-framing" value={framing} onChange={(e) => setFraming(e.target.value)}>
@@ -120,8 +147,8 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
       <option value="inspect">Inspect panels — readable, scrollable detail</option>
     </select>
     {framing === 'inspect' ? <p className="muted">Scroll to inspect song, requester, and alert text. This view uses a readable size and does not change your broadcast scale or position.</p> : null}
-    <div className={`overlay-preview${framing === 'inspect' ? ' overlay-preview-inspect' : ''}`}><OverlayCanvas state={previewMode === 'sample' ? sampleData : live.state} config={settings} preview inspect={framing === 'inspect'} /></div>
-    <div className="actions"><button type="button" onClick={() => sample('request')}>Preview request</button><button type="button" onClick={() => sample('warning')}>Preview warning</button><button type="button" onClick={() => sample('general')}>Preview notice</button></div>
+    <div className={`overlay-preview${framing === 'inspect' ? ' overlay-preview-inspect' : ''}`}><OverlayCanvas state={previewMode === 'sample' ? sampleData : live.state} config={previewSettings} preview inspect={framing === 'inspect'} /></div>
+    <div className="actions"><button type="button" onClick={() => sample('request')}>Preview request</button><button type="button" onClick={() => sample('warning')}>Preview warning</button><button type="button" onClick={() => sample('general')}>Preview notice</button><button type="button" onClick={previewAdvertisement}>Preview advertisement</button></div>
     <div className="overlay-setup">
       <h3>Add to OBS</h3>
       <div className="overlay-status"><span>OBS: {status.connected ? 'connected' : 'not connected'}</span><span>Browser source: {status.browser_source?.configured ? 'configured' : 'not configured'}</span><span>Display clients: {status.display_clients || 0}</span></div>
