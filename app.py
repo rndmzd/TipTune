@@ -977,10 +977,12 @@ class WebUI:
 
     async def _api_get_config(self, _request: web.Request) -> web.Response:
         try:
-            return web.json_response({"ok": True, "config": self._service.get_config_for_ui()})
+            return web.json_response({"ok": True, "config": self._service.get_config_for_ui()},
+                                     headers={"Cache-Control": "no-store"})
         except Exception as exc:
             logger.exception("webui.api.config.error", exc=exc, message="Failed to read config for UI")
-            return web.json_response({"ok": False, "error": str(exc), "config": {}})
+            return web.json_response({"ok": False, "error": str(exc), "config": {}},
+                                     headers={"Cache-Control": "no-store"})
 
     async def _api_setup_status(self, _request: web.Request) -> web.Response:
         try:
