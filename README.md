@@ -7,7 +7,7 @@ This repo contains:
 - A **desktop app** (Tauri v2) for macOS/Linux/Windows.
 - A **Python sidecar** (built with PyInstaller) that runs the TipTune service + local Web UI API.
 - A **React Web UI** bundled into the desktop app.
-- A **tag-triggered GitHub Actions release pipeline** (starting with `v0.1.0`) to publish builds for macOS/Linux/Windows.
+- A **tag-triggered GitHub Actions release pipeline** to publish Windows builds.
 
 ---
 
@@ -345,9 +345,9 @@ both PyInstaller processes and verifies that the server port is released.
 
 ---
 
-## Releases (macOS / Linux / Windows)
+## Releases (Windows)
 
-Starting with **`v0.1.0`**, releases are built by GitHub Actions when you push a tag matching `v*`.
+Windows releases are built by GitHub Actions when you push a tag matching `v*`.
 
 The workflow is: `.github/workflows/release-from-tag.yml`.
 
@@ -371,11 +371,11 @@ git push origin v0.1.0
 
 GitHub Actions will:
 
-- Build desktop artifacts for macOS, Linux, and Windows.
+- Build the Windows desktop app.
 - Create a draft GitHub Release for the tag.
-- Upload platform installers/bundles and updater metadata (such as `latest.json`).
+- Upload Windows installers and updater metadata (such as `latest.json`).
 
-Wait for both platform jobs to succeed, verify the installers and updater
+Wait for the Windows build to succeed, verify the installers and updater
 manifest, then publish the draft and mark it latest. Draft assets are available
 to authenticated release maintainers for validation; the installed updater keeps
 using the previous published release until this step.
@@ -384,11 +384,10 @@ using the previous published release until this step.
 gh release edit v0.1.0 --draft=false --latest
 ```
 
-Typical output formats (varies by platform/runner configuration):
+Windows installer formats:
 
-- Windows: `.msi` / installer artifacts
-- macOS: `.dmg`
-- Linux: `.AppImage` / `.deb`
+- NSIS: `.exe`
+- MSI: `.msi`
 
 ### Version bump helper
 
@@ -411,5 +410,3 @@ The release workflow is configured to use Tauri updater signing secrets:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-
-Optional (macOS signing/notarization) secrets are listed in the workflow but commented out.
