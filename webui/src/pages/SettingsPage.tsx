@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
@@ -184,6 +184,7 @@ export function SettingsPage() {
   const [currentDeviceText, setCurrentDeviceText] = useState<string>('Loading...');
   const [devices, setDevices] = useState<Device[]>([]);
   const [deviceId, setDeviceId] = useState<string>('');
+  const manualDeviceId = useRef('');
   const [devicesBusy, setDevicesBusy] = useState(false);
   const [devicesError, setDevicesError] = useState('');
   const [devicesLoaded, setDevicesLoaded] = useState(false);
@@ -266,12 +267,24 @@ export function SettingsPage() {
       const next = Array.isArray(data.devices) ? data.devices : [];
       setDevices(next);
       let current = '';
+      let currentExplicit = false;
       try {
         const qst = await apiJson<QueueResp>('/api/queue');
         current = String(qst.queue?.playback_device_id || '');
+        currentExplicit = qst.queue?.playback_device_explicit === true;
       } catch {}
-      setDeviceId((previous) => next.some((d) => d.id === previous) ? previous
-        : next.some((d) => d.id === current) ? current : next.find((d) => d.is_active && d.id)?.id || next.find((d) => d.id)?.id || '');
+      const usable = next.filter((d) => d.id?.trim() && !d.is_restricted);
+      const embedded = usable.filter((d) => d.name?.trim().toLowerCase() === 'web player (microsoft edge)');
+      const defaultId = embedded.find((d) => d.id === current)?.id
+        || embedded.find((d) => d.is_active)?.id || embedded[0]?.id;
+      setDeviceId((previous) => {
+        if (usable.some((d) => d.id === manualDeviceId.current)) return manualDeviceId.current;
+        if (currentExplicit && usable.some((d) => d.id === current)) return current;
+        if (defaultId) return defaultId;
+        if (usable.some((d) => d.id === previous)) return previous;
+        if (usable.some((d) => d.id === current)) return current;
+        return usable.find((d) => d.is_active)?.id || usable[0]?.id || '';
+      });
     } catch (e: any) {
       setDevices([]);
       setDeviceId('');
@@ -605,7 +618,7 @@ export function SettingsPage() {
             </label>
             <div className="muted">{currentDeviceText}</div>
             <label htmlFor="deviceSelect" title={tooltip('Playback', 'device_id')}>Available devices</label>
-            <select id="deviceSelect" value={deviceId} disabled={devicesBusy || !devices.length} onChange={(e) => { setDeviceId(e.target.value); setDeviceApplyMsg(''); }}>
+            <select id="deviceSelect" value={deviceId} disabled={devicesBusy || !devices.length} onChange={(e) => { manualDeviceId.current = e.target.value; setDeviceId(e.target.value); setDeviceApplyMsg(''); }}>
               {!devices.length ? <option value="">{devicesBusy ? 'Loading devices…' : devicesError ? 'Devices unavailable' : 'No devices reported by Spotify'}</option> : null}
               {(devices || []).map((d, idx) => (
                 <option key={d.id || idx} value={d.id || ''} disabled={!d.id || d.is_restricted}>
@@ -640,6 +653,7 @@ export function SettingsPage() {
             </div>
             {devicesError ? <p role="alert">{devicesError}</p> : devicesLoaded && !devices.length && !devicesBusy ? <p className="muted" role="status">Spotify returned no devices. Check that the player uses the same account you authorized for TipTune, start playback, then refresh.</p> : null}
             {deviceApplyMsg ? <p role="status">{deviceApplyMsg}</p> : null}
+            <p className="muted">Web Player (Microsoft Edge) is selected automatically when available. Use Apply + Save to choose another device for this session.</p>
             <p className="muted">The Spotify player login and TipTune API authorization are separate. Connect Spotify below to allow TipTune to discover and control devices.</p>
           </div>
         </div>

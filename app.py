@@ -3557,6 +3557,7 @@ class SongRequestService:
             "queued_items": queued_items,
             "playback_device_id": playback_device_id,
             "playback_device_name": playback_device_name,
+            "playback_device_explicit": bool(getattr(getattr(self.actions, 'auto_dj', None), 'playback_device_explicit', False)),
         }
 
     def _parse_spotify_track_id(self, v: Any) -> Optional[str]:

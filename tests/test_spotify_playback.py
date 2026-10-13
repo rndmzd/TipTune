@@ -71,6 +71,25 @@ class StartTrackTests(unittest.TestCase):
         self.assertTrue(self.dj.start_track(URI))
         self.dj.spotify.start_playback.assert_called_once_with(device_id='new-web', uris=[URI])
 
+    def test_request_uses_embedded_player_when_it_appears_after_device_selection(self):
+        self.dj.spotify.devices.return_value = {'devices': [
+            {'id': 'desktop', 'name': 'Desktop', 'is_active': True},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        self.dj.spotify.current_playback.return_value = playback(device='embedded')
+        self.assertTrue(self.dj.start_track(URI))
+        self.dj.spotify.start_playback.assert_called_once_with(device_id='embedded', uris=[URI])
+
+    def test_request_preserves_manual_device_with_embedded_player_available(self):
+        self.dj.playback_device_explicit = True
+        self.dj.spotify.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+            {'id': 'desktop', 'name': 'Desktop'},
+        ]}
+        self.dj.spotify.current_playback.return_value = playback()
+        self.assertTrue(self.dj.start_track(URI))
+        self.dj.spotify.start_playback.assert_called_once_with(device_id='desktop', uris=[URI])
+
     def test_device_disappearing_after_lookup_is_refreshed_once(self):
         self.dj.playback_device_name = 'Web Player'
         self.dj.spotify.devices.side_effect = [

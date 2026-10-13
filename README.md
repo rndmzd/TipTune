@@ -184,7 +184,8 @@ Steps:
 
 1. In Settings:
 
-    - Choose the playback device and click **Apply + Save** (writes `Spotify.playback_device_id`)
+    - On Windows, TipTune automatically prefers **Web Player (Microsoft Edge)** when Spotify reports it as an available, unrestricted device, including when it appears after startup. This preference takes priority over a saved device during automatic selection.
+    - To use another device for the current session, choose it and click **Apply + Save** (writes `Spotify.playback_device_id`). The saved device remains the fallback when the embedded player is unavailable.
 
 Notes:
 
