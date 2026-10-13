@@ -106,6 +106,9 @@ function ensureSidecarBuilt(sidecarName, extension) {
     path.join(repoRoot, 'docs', 'USER_MANUAL.md'),
     path.join(repoRoot, 'docs', 'QUICK_START.md'),
     path.join(repoRoot, 'config.ini.example'),
+    path.join(repoRoot, 'sentry.json'),
+    path.join(repoRoot, 'package.json'),
+    path.join(repoRoot, 'requirements.txt'),
   ];
 
   if (fs.existsSync(distPath) && !forceRebuild) {

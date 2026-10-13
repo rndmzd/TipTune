@@ -9,7 +9,9 @@
     "build": "tauri build",
     "version:bump-minor": "node ./scripts/bump-minor.mjs",
     "webui:dev": "vite --config webui/vite.config.ts webui",
-    "webui:build": "tsc -p webui/tsconfig.json && vite build --config webui/vite.config.ts webui",
+    "webui:build": "tsc -p webui/tsconfig.json && vite build --config webui/vite.config.ts webui && node scripts/sentry-source-maps.mjs prepare",
+    "sentry:verify": "node scripts/sentry-source-maps.mjs verify",
+    "sentry:upload": "node scripts/sentry-source-maps.mjs upload",
     "webui:preview": "vite preview --config webui/vite.config.ts webui",
     "webui:test": "npm run webui:build && playwright test"
   },
@@ -27,6 +29,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
+    "@sentry/cli": "3.8.0",
+    "@sentry/vite-plugin": "5.4.1",
     "@tauri-apps/cli": "2.12.1",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",

@@ -31,6 +31,8 @@ request_overlay_duration = 10
 request_history_size = 1000
 # Display saved extraction diagnostics on failed History entries (also retained in exports).
 show_history_debug = false
+# Separately opt in to sending technical error reports to the TipTune developer.
+send_error_reports = false
 debug_log_to_file = false
 debug_log_path =
 
