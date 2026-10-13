@@ -38,6 +38,7 @@ from utils.runtime_paths import ensure_dir, ensure_parent_dir, find_bundled_bin_
 from utils.structured_logging import get_structured_logger, StructuredLogFormatter
 from utils.spotify_errors import spotify_error_message
 from utils.song_extraction_debug import extraction_exception_debug, sanitize_extraction_debug
+from utils.error_reporting import ErrorReporter, install_reporter, reporting_enabled, MAX_REPORT_BYTES
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -342,6 +343,10 @@ def _default_log_path() -> Path:
 
 _setup_logging()
 
+# No SDK client or sender is started unless durable consent and a DSN are present.
+error_reporter = ErrorReporter(config_path, get_cache_dir())
+install_reporter(error_reporter)
+
 
 async def _watch_parent_process() -> None:
     pid_str = os.getenv('TIPTUNE_PARENT_PID')
@@ -628,6 +633,9 @@ class WebUI:
             web.get('/api/help/user-manual', self._api_help_user_manual),
             web.get('/api/config', self._api_get_config),
             web.post('/api/config', self._api_update_config),
+            web.get('/api/error-reporting', self._api_error_reporting_status),
+            web.post('/api/error-reporting/event', self._api_error_reporting_event),
+            web.post('/api/error-reporting/test', self._api_error_reporting_test),
             web.post('/api/queue/next', self._api_queue_next),
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
@@ -984,6 +992,34 @@ class WebUI:
             return web.json_response({"ok": False, "error": str(exc), "config": {}},
                                      headers={"Cache-Control": "no-store"})
 
+    async def _api_error_reporting_status(self, _request: web.Request) -> web.Response:
+        return web.json_response({'ok': True, **error_reporter.status()}, headers={'Cache-Control': 'no-store'})
+
+    async def _api_error_reporting_event(self, request: web.Request) -> web.Response:
+        if not error_reporter.can_send():
+            return web.json_response({'ok': True, 'queued': False})
+        body = bytearray()
+        async for chunk in request.content.iter_chunked(8192):
+            body.extend(chunk)
+            if len(body) > MAX_REPORT_BYTES:
+                return web.json_response({'ok': False, 'error': 'Error report is too large.'}, status=413)
+        try:
+            payload = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response({'ok': False, 'error': 'Invalid error report.'}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({'ok': False, 'error': 'Invalid error report.'}, status=400)
+        report_id = error_reporter.capture_frontend(payload)
+        return web.json_response({'ok': True, 'queued': bool(report_id)})
+
+    async def _api_error_reporting_test(self, _request: web.Request) -> web.Response:
+        if not error_reporter.can_send():
+            return web.json_response({'ok': False, 'error': 'Save your reporting opt-in before sending a test report.'}, status=409)
+        report_id = error_reporter.capture_exception('tiptune.reporting.test', RuntimeError('Synthetic test'))
+        if not report_id:
+            return web.json_response({'ok': False, 'error': 'A recent identical test was already queued. Try again in a minute.'}, status=429)
+        return web.json_response({'ok': True, 'report_id': report_id, 'queued': True})
+
     async def _api_setup_status(self, _request: web.Request) -> web.Response:
         try:
             fresh_config = configparser.ConfigParser()
@@ -1228,10 +1264,12 @@ class WebUI:
 def handle_exception(_loop, context):
     if shutdown_event.is_set():
         return
-    msg = context.get("exception", context.get("message"))
-    logger.error("app.error",
-                 message="Caught exception in event loop",
-                 data={"error": str(msg)})
+    exc = context.get("exception")
+    if isinstance(exc, Exception):
+        logger.exception("app.error", exc=exc, message="Caught exception in event loop")
+    else:
+        logger.error("app.error", message="Caught exception in event loop",
+                     data={"error": str(context.get("message", ""))})
 
 
 class EventsAPIClient:
@@ -3194,6 +3232,7 @@ class SongRequestService:
                 details = getattr(exc, 'diagnostics', None)
                 if isinstance(details, dict):
                     extraction_debug.update(details)
+                error_reporter.capture_exception('song.extract.failed', exc, details=extraction_debug)
                 extraction_debug['exception'] = extraction_exception_debug(exc)
 
             if not song_extracts:
@@ -4422,6 +4461,7 @@ class SongRequestService:
         general_cfg = cfg.setdefault("General", {})
         general_cfg['request_history_size'] = str(self._request_history_recent_max)
         general_cfg['show_history_debug'] = 'true' if _show_history_debug() else 'false'
+        general_cfg['send_error_reports'] = 'true' if reporting_enabled(config_path) else 'false'
         cfg['Overlay'] = read_overlay_settings(config)
         if not str(general_cfg.get("debug_log_path", "")).strip():
             general_cfg["debug_log_path"] = str(_default_log_path())
@@ -4449,6 +4489,7 @@ class SongRequestService:
                 "auto_check_updates",
                 "show_debug_data",
                 "show_history_debug",
+                "send_error_reports",
                 "debug_log_to_file",
                 "debug_log_path",
             },
@@ -4474,10 +4515,11 @@ class SongRequestService:
                     continue
 
                 value_str = str(value)
-                if section == 'General' and key == 'show_history_debug':
+                if section == 'General' and key in ('show_history_debug', 'send_error_reports'):
                     enabled = configparser.ConfigParser.BOOLEAN_STATES.get(value_str.strip().lower())
                     if enabled is None:
-                        return (False, "Show debug output in history must be true or false.")
+                        label = 'Send error reports' if key == 'send_error_reports' else 'Show debug output in history'
+                        return (False, f"{label} must be true or false.")
                     value_str = 'true' if enabled else 'false'
                 if section == 'General' and key == 'request_history_size':
                     try:
@@ -4504,6 +4546,9 @@ class SongRequestService:
             config.read(config_path)
         except Exception:
             pass
+
+        if 'send_error_reports' in updates.get('General', {}):
+            error_reporter.configure()
 
         if hasattr(self, 'overlay'):
             self.overlay.configure(config)

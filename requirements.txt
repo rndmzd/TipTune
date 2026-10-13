@@ -8,3 +8,4 @@ spotipy
 simpleobsws
 PyYAML
 aiohttp
+sentry-sdk>=2.72.0,<3

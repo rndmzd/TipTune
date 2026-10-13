@@ -17,6 +17,9 @@ mod windows_job;
 mod startup;
 
 #[cfg(not(mobile))]
+mod error_reporting;
+
+#[cfg(not(mobile))]
 struct RunningSidecar {
     child: CommandChild,
     #[cfg(windows)]
@@ -57,6 +60,8 @@ fn kill_sidecar(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(not(mobile))]
+    error_reporting::install_panic_hook();
     let builder = tauri::Builder::default();
     #[cfg(all(not(mobile), windows))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -85,6 +90,7 @@ pub fn run() {
                 // Older versions do not have the single-instance guard. Do not
                 // let this window silently connect to their surviving backend.
                 if let Err(error) = startup::check_backend_port("127.0.0.1:8765") {
+                    error_reporting::record("desktop.startup.port_busy", "BackendPortBusy", None);
                     eprintln!("[startup] {error}");
                     let exit_handle = app.handle().clone();
                     app.dialog()
@@ -106,7 +112,15 @@ pub fn run() {
                     .sidecar("TipTune")?
                     .env("TIPTUNE_PARENT_PID", std::process::id().to_string())
                     .env("TIPTUNE_WEB_HOST", "127.0.0.1")
+                    .env("TIPTUNE_APP_VERSION", app.package_info().version.to_string())
                     .env("TIPTUNE_WEB_PORT", "8765");
+
+                // The launcher and sender must read exactly the same consent and queue.
+                let sidecar_command = if let Some(paths) = error_reporting::runtime_paths() {
+                    sidecar_command.env("TIPTUNE_CONFIG", paths.config).env("TIPTUNE_CACHE_DIR", paths.cache)
+                } else {
+                    sidecar_command
+                };
 
                 let mut sidecar_command = if env::var("TIPTUNE_LOG_LEVEL").is_err() {
                     sidecar_command.env("TIPTUNE_LOG_LEVEL", "INFO")
@@ -136,7 +150,10 @@ pub fn run() {
                 #[cfg(windows)]
                 let sidecar_command = sidecar_command.env("TIPTUNE_WINDOWS_JOB_NAME", &job.name);
 
-                let (mut rx, child) = sidecar_command.spawn()?;
+                let (mut rx, child) = sidecar_command.spawn().map_err(|error| {
+                    error_reporting::record("desktop.sidecar.spawn.error", "SidecarSpawnError", None);
+                    error
+                })?;
                 #[cfg(windows)]
                 if let Err(error) = job.assign(child.pid()) {
                     let _ = child.kill();
@@ -167,6 +184,7 @@ pub fn run() {
                                 eprintln!("[sidecar stderr] {}", s);
                             }
                             CommandEvent::Error(err) => {
+                                error_reporting::record("desktop.sidecar.error", "SidecarError", None);
                                 eprintln!("[sidecar error] {}", err);
                             }
                             CommandEvent::Terminated(payload) => {
@@ -177,6 +195,7 @@ pub fn run() {
                                     .unwrap_or(false);
                                 kill_sidecar(&app_handle);
                                 if unexpected {
+                                    error_reporting::record("desktop.sidecar.terminated", "SidecarExited", payload.code);
                                     if let Some(window) = app_handle.get_webview_window("main") {
                                         let _ = window.hide();
                                     }

@@ -437,6 +437,7 @@ Used to improve song metadata when the artist is missing.
 - `General.request_overlay_duration` (seconds)
 - `General.auto_check_updates` (UI toggle)
 - `General.show_debug_data` (UI toggle)
+- `General.send_error_reports` (off by default)
 - `General.debug_log_to_file`
 - `General.debug_log_path`
 
@@ -461,6 +462,8 @@ Logging notes:
 - When `false`: source keywords in tip messages are ignored; all requests use `Music.source`.
 
 `General.show_debug_data` toggles the display of debug information in the UI.
+
+**Automatically send error reports to the TipTune developer** is a separate opt-in setting. Save after enabling it to send technical exception types, code locations, app/OS versions, failure stages, and provider status/request IDs through Sentry. Usernames, tip messages, credentials, raw error text, and complete logs/History records are excluded. Reports retry in the background and expire after seven days; turning reporting off and saving deletes unsent reports. **Send test report** queues a synthetic report and shows its ID. Desktop launcher failures and unexpected service exits send on the next successful launch while reporting remains enabled.
 
 ---
 

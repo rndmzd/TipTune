@@ -97,6 +97,7 @@ class StructuredLogger:
              message: str = None,
              data: Dict[str, Any] = None,
              error: Dict[str, Any] = None,
+             exc_info=None,
              **extra: Any) -> None:
         """Internal method to create structured log entries."""
         log_entry = {
@@ -111,7 +112,7 @@ class StructuredLogger:
         if error:
             log_entry["error"] = error
 
-        self._logger.log(level, log_entry)
+        self._logger.log(level, log_entry, exc_info=exc_info)
 
     def debug(self, event_type: str, message: str = None, **kwargs) -> None:
         """Log a debug message with structured data."""
@@ -139,7 +140,8 @@ class StructuredLogger:
             "type": type(exc).__name__,
             "message": str(exc)
         }
-        self._log(logging.ERROR, event_type, message, error=error, **kwargs)
+        self._log(logging.ERROR, event_type, message, error=error,
+                  exc_info=(type(exc), exc, exc.__traceback__), **kwargs)
 
 def get_structured_logger(name: str) -> StructuredLogger:
     """Get a structured logger instance."""

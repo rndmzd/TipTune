@@ -4,11 +4,13 @@ import { BrowserRouter } from 'react-router-dom';
 
 import './app.css';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { installErrorReporting } from './errorReporting';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+void installErrorReporting('webui').then(() => ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <ErrorBoundary><BrowserRouter>
       <App />
-    </BrowserRouter>
+    </BrowserRouter></ErrorBoundary>
   </React.StrictMode>,
-);
+));

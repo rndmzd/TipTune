@@ -15,6 +15,8 @@ hiddenimports += collect_submodules(
 )
 hiddenimports += collect_submodules('spotipy')
 hiddenimports += collect_submodules('simpleobsws')
+# Only the explicit error-reporting client is used; no automatic integrations.
+hiddenimports += collect_submodules('sentry_sdk', filter=lambda name: not name.startswith('sentry_sdk.integrations.'))
 
 
 ROOT = os.path.abspath(SPECPATH)
@@ -40,10 +42,14 @@ def _datas():
             rel_base = os.path.relpath(base, src_dir)
             dest = os.path.join(rel_dest_dir, rel_base) if rel_base != '.' else rel_dest_dir
             for fn in files:
+                if fn.endswith('.map'):
+                    continue
                 items.append((os.path.join(base, fn), dest))
 
     add('scenes.yaml', '.')
     add('config.ini.example', '.')
+    add('sentry.json', '.')
+    add('package.json', '.')
     add('docs/USER_MANUAL.md', 'docs')
     add('docs/QUICK_START.md', 'docs')
     add_dir('webui/dist', 'webui/dist')

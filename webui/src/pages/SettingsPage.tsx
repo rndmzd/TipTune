@@ -4,6 +4,7 @@ import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { OverlaySettings } from '../components/OverlaySettings';
+import { refreshReportingConsent, setReportingConsent, type ReportingStatus } from '../errorReporting';
 
 declare const __APP_VERSION__: string;
 
@@ -160,6 +161,7 @@ function tooltip(section: string, key: string) {
     'General.request_history_size': 'Maximum number of song request results to save. Default: 1,000 entries.',
     'General.show_debug_data': 'Show extra debug information in the dashboard (like YouTube playback details).',
     'General.show_history_debug': 'Show saved song extraction diagnostics on failed History entries. Details are saved even when this display is off. Default: off.',
+    'General.send_error_reports': 'Opt in to automatically sending technical error reports to the TipTune developer through Sentry. Default: off.',
     'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
     'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
   };
@@ -208,6 +210,9 @@ export function SettingsPage() {
 
   const [status, setStatus] = useState<string>('');
   const [saveBusy, setSaveBusy] = useState<boolean>(false);
+  const [reportingStatus, setReportingStatus] = useState<ReportingStatus | null>(null);
+  const [reportingBusy, setReportingBusy] = useState(false);
+  const [reportingMessage, setReportingMessage] = useState('');
 
   const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
   const [obsMsg, setObsMsg] = useState<string>('');
@@ -296,14 +301,32 @@ export function SettingsPage() {
     }
   }
 
-  async function loadConfig(expectedHistoryDebug?: boolean) {
+  async function loadConfig(expectedHistoryDebug?: boolean, expectedSendReports?: boolean) {
     const data = await apiJson<ConfigResp>('/api/config', { cache: 'no-store' });
     const next = data.config || {};
     if (expectedHistoryDebug !== undefined && historyDebugEnabled(next.General?.show_history_debug) !== expectedHistoryDebug) {
       throw new Error('The history debug setting did not persist. Your changes are still shown; try saving again.');
     }
+    if (expectedSendReports !== undefined && historyDebugEnabled(next.General?.send_error_reports) !== expectedSendReports) {
+      throw new Error('The error reporting setting did not persist. Your changes are still shown; try saving again.');
+    }
     setCfg(next);
     setBaselineCfgSig(stableStringify(next));
+    setReportingStatus(await refreshReportingConsent());
+  }
+
+  async function sendTestReport() {
+    setReportingBusy(true);
+    setReportingMessage('');
+    try {
+      const response = await apiJson<{ ok: true; report_id: string }>('/api/error-reporting/test', { method: 'POST' });
+      setReportingMessage(`Test report queued. Report ID: ${response.report_id}`);
+      setReportingStatus(await refreshReportingConsent());
+    } catch (error: any) {
+      setReportingMessage(error?.message || 'The test report could not be queued.');
+    } finally {
+      setReportingBusy(false);
+    }
   }
 
   async function loadSetupStatus() {
@@ -457,6 +480,7 @@ export function SettingsPage() {
 
   const obsEnabled = (v('OBS', 'enabled') || 'false').toLowerCase() === 'true';
   const showHistoryDebugEnabled = historyDebugEnabled(v('General', 'show_history_debug'));
+  const sendErrorReportsEnabled = historyDebugEnabled(v('General', 'send_error_reports'));
   const obsHost = (v('OBS', 'host') || '').trim();
   const obsPort = (v('OBS', 'port') || '').trim();
   const obsSceneName = (v('OBS', 'scene_name') || '').trim();
@@ -537,6 +561,7 @@ export function SettingsPage() {
         auto_check_updates: autoCheckUpdatesEnabled ? 'true' : 'false',
         show_debug_data: showDebugDataEnabled ? 'true' : 'false',
         show_history_debug: showHistoryDebugEnabled ? 'true' : 'false',
+        send_error_reports: sendErrorReportsEnabled ? 'true' : 'false',
         debug_log_to_file: debugLogToFileEnabled ? 'true' : 'false',
         debug_log_path: v('General', 'debug_log_path'),
       },
@@ -557,7 +582,8 @@ export function SettingsPage() {
         body: JSON.stringify(payload),
       });
 
-      await loadConfig(showHistoryDebugEnabled);
+      if (!sendErrorReportsEnabled) setReportingConsent(false);
+      await loadConfig(showHistoryDebugEnabled, sendErrorReportsEnabled);
       setSecrets({ eventsUrl: '', openaiKey: '', googleKey: '', obsPassword: '' });
       setStatus('Saved.');
       await refreshDevices();
@@ -692,6 +718,31 @@ export function SettingsPage() {
           <p id="history-debug-help" className="muted">
             Show extraction errors, model input and responses, and timing on failed requests. Diagnostics are saved even when hidden.
           </p>
+
+          <label className="historyDebugSetting" title={tooltip('General', 'send_error_reports')}>
+            <input
+              type="checkbox"
+              checked={sendErrorReportsEnabled}
+              disabled={!reportingStatus?.configured}
+              aria-describedby="error-reporting-help"
+              onChange={(e) => {
+                const value = e.currentTarget.checked ? 'true' : 'false';
+                setCfg((c) => ({ ...c, General: { ...(c.General || {}), send_error_reports: value } }));
+              }}
+            />
+            <span>Automatically send error reports to the TipTune developer</span>
+          </label>
+          <p id="error-reporting-help" className="muted">
+            Off by default. Reports go through Sentry and include the app version, operating system,
+            exception types, code locations, and technical failure details. Usernames, tip messages,
+            credentials, and raw error text are excluded. Turning this off and saving deletes unsent reports.
+          </p>
+          {reportingStatus?.configured === false && <p className="muted">Error reporting is unavailable in this build.</p>}
+          {sendErrorReportsEnabled && isDirty && <p className="muted">Save your changes before sending a test report.</p>}
+          <button type="button" disabled={reportingBusy || isDirty || !sendErrorReportsEnabled || !reportingStatus?.enabled || !reportingStatus?.configured}
+            onClick={sendTestReport}>{reportingBusy ? 'Queuing test…' : 'Send test report'}</button>
+          {reportingMessage && <p role="status">{reportingMessage}</p>}
+          {reportingStatus?.error && <p role="status">{reportingStatus.error}</p>}
 
           <label title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>
           <input

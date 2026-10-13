@@ -4,6 +4,11 @@ on:
   #push:
   #  tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      source_maps_only:
+        description: Build and upload private frontend source maps only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,7 +17,28 @@ env:
   FFMPEG_VERSION: "7.1.1"
 
 jobs:
+  source-maps:
+    if: ${{ inputs.source_maps_only }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install frontend deps
+        run: npm ci
+      - name: Build frontend and archive private maps
+        run: npm run webui:build
+      - name: Upload private source maps
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: npm run sentry:upload
+
   build:
+    if: ${{ !inputs.source_maps_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -66,3 +92,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
+
+      - name: Upload private source maps for the final build
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: npm run sentry:upload
