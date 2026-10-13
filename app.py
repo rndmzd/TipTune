@@ -2591,6 +2591,15 @@ class SongRequestService:
                 loop = asyncio.get_running_loop()
 
                 if getattr(self.actions, 'chatdj_enabled', False) and hasattr(self.actions, 'auto_dj'):
+                    # Activate the selected player even with an empty or paused
+                    # queue, including when the Web Player connects after startup.
+                    # Wait while starting a request or playing YouTube audio.
+                    async with self._queue_lock:
+                        starting = self._queue_starting
+                        now_item = self._queue_now_playing
+                        source = _normalize_music_source((now_item or {}).get('source'), default=self._active_source())
+                    if source == 'spotify' and not starting:
+                        await loop.run_in_executor(None, self.actions.auto_dj.ensure_playback_device_active)
                     await loop.run_in_executor(None, self.actions.auto_dj.check_queue_status)
 
                 try:

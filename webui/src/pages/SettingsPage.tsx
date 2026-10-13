@@ -254,12 +254,15 @@ export function SettingsPage() {
     }
   }
 
-  async function refreshCurrentDevice() {
-    const data = await apiJson<QueueResp>('/api/queue');
-    const st = data.queue ?? {};
+  function showCurrentDevice(st: QueueState) {
     const devName = st.playback_device_name || '';
     const devId = st.playback_device_id || '';
     setCurrentDeviceText(devId ? `Current: ${devName ? `${devName} ` : ''}(${devId})` : 'Current: (none)');
+  }
+
+  async function refreshCurrentDevice() {
+    const data = await apiJson<QueueResp>('/api/queue');
+    showCurrentDevice(data.queue ?? {});
   }
 
   async function refreshDevices() {
@@ -277,6 +280,7 @@ export function SettingsPage() {
         const qst = await apiJson<QueueResp>('/api/queue');
         current = String(qst.queue?.playback_device_id || '');
         currentExplicit = qst.queue?.playback_device_explicit === true;
+        showCurrentDevice(qst.queue ?? {});
       } catch {}
       const usable = next.filter((d) => d.id?.trim() && !d.is_restricted);
       const embedded = usable.filter((d) => d.name?.trim().toLowerCase() === 'web player (microsoft edge)');
@@ -679,7 +683,7 @@ export function SettingsPage() {
             </div>
             {devicesError ? <p role="alert">{devicesError}</p> : devicesLoaded && !devices.length && !devicesBusy ? <p className="muted" role="status">Spotify returned no devices. Check that the player uses the same account you authorized for TipTune, start playback, then refresh.</p> : null}
             {deviceApplyMsg ? <p role="status">{deviceApplyMsg}</p> : null}
-            <p className="muted">Web Player (Microsoft Edge) is selected automatically when available. Use Apply + Save to choose another device for this session.</p>
+            <p className="muted">Web Player (Microsoft Edge) is selected and activated automatically when available. Use Apply + Save to choose another device for this session.</p>
             <p className="muted">The Spotify player login and TipTune API authorization are separate. Connect Spotify below to allow TipTune to discover and control devices.</p>
           </div>
         </div>
