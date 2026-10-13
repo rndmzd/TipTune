@@ -506,6 +506,15 @@ def _update_ini_file(path: Path, updates: Dict[str, Dict[str, str]]) -> None:
                 break
         return (start, end)
 
+    # Remove the retired option when saving an existing configuration.
+    general_bounds = find_section_bounds('General')
+    if general_bounds is not None:
+        start, end = general_bounds
+        lines[start + 1:end] = [
+            line for line in lines[start + 1:end]
+            if not re.match(r'\s*multi_request_tips\s*[=:]', line, re.IGNORECASE)
+        ]
+
     for section, section_updates in updates.items():
         if not isinstance(section_updates, dict):
             continue
@@ -3189,12 +3198,10 @@ class SongRequestService:
             source_override = self._source_override_from_text(tip_message) if self._allow_source_override_in_request_message() else None
             source = _normalize_music_source(source_override, default=active_source)
 
-            request_count = max(1, self.checks.get_request_count(tip_amount))
-
             extractor = getattr(self.actions, 'song_extractor', None)
             model = getattr(extractor, 'model', None)
             extraction_debug = {
-                'stage': 'input_validation', 'message': tip_message, 'request_count': request_count,
+                'stage': 'input_validation', 'message': tip_message, 'request_count': 1,
                 'model': model if isinstance(model, str) else (
                     config.get('OpenAI', 'model', fallback=DEFAULT_MODEL).strip() or DEFAULT_MODEL),
                 'music_source': source, 'active_music_source': active_source, 'source_override': source_override,
@@ -3233,7 +3240,7 @@ class SongRequestService:
                     song_extracts = [SongRequest(song=direct_youtube, artist="")]
                 else:
                     song_extracts = await self.actions.extract_song_titles(
-                        tip_message, request_count, diagnostics=extraction_debug)
+                        tip_message, diagnostics=extraction_debug)
             except Exception as exc:
                 logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
                 extraction_error = "song extraction failed"
@@ -3252,7 +3259,7 @@ class SongRequestService:
                 self.publish_request_history_item({
                     "ts": time.time(), "tip_ts": tip_ts, "username": username,
                     "tip_amount": tip_amount, "tip_message": tip_message,
-                    "request_count": request_count, "status": "failed",
+                    "request_count": 1, "status": "failed",
                     "error": extraction_error or "no song identified",
                     "extraction_debug": _history_extraction_debug(extraction_debug),
                 })
@@ -3264,113 +3271,113 @@ class SongRequestService:
                 )
                 return
 
-            for song_info in song_extracts:
-                song_uri: Optional[str] = None
-                lookup_error = None
+            song_info = song_extracts[0]
+            song_uri: Optional[str] = None
+            lookup_error = None
 
-                if source == 'youtube':
-                    direct = self._youtube_url_from_text(tip_message)
-                    if direct:
-                        song_uri = direct
-                    else:
-                        q = f"{getattr(song_info, 'artist', '')} - {getattr(song_info, 'song', '')}".strip(' -')
-                        try:
-                            results = await self.search_youtube_tracks(q, limit=1)
-                            if results and isinstance(results[0], dict):
-                                song_uri = results[0].get('uri') if isinstance(results[0].get('uri'), str) else None
-                        except Exception as exc:
-                            logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
-                            lookup_error = "youtube lookup failed"
-                            song_uri = None
+            if source == 'youtube':
+                direct = self._youtube_url_from_text(tip_message)
+                if direct:
+                    song_uri = direct
                 else:
-                    if getattr(song_info, 'spotify_uri', None):
-                        song_uri = song_info.spotify_uri
-                    else:
-                        try:
-                            song_uri = await self.actions.find_song_spotify(song_info)
-                        except Exception as exc:
-                            logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
-                            lookup_error = "spotify lookup failed"
-
-                if not song_uri:
-                    not_found_error = lookup_error or ('youtube track not found' if source == 'youtube' else 'spotify track not found')
-                    not_found_msg = "Couldn't find song on YouTube." if source == 'youtube' else "Couldn't find song on Spotify. Did you include artist and song name?"
-                    self.publish_request_history_item({
-                        "ts": time.time(),
-                        "tip_ts": tip_ts,
-                        "username": username,
-                        "tip_amount": tip_amount,
-                        "tip_message": tip_message,
-                        "request_count": request_count,
-                        "song": getattr(song_info, 'song', None),
-                        "artist": getattr(song_info, 'artist', None),
-                        "spotify_uri": getattr(song_info, 'spotify_uri', None),
-                        "resolved_uri": None,
-                        "status": "failed",
-                        "error": not_found_error,
-                    })
-                    await self.actions.trigger_warning_overlay(
-                        username,
-                        not_found_msg,
-                        10
-                    )
-                    continue
-
-                if source != 'youtube' and not await self.actions.available_in_market(song_uri):
-                    self.publish_request_history_item({
-                        "ts": time.time(),
-                        "tip_ts": tip_ts,
-                        "username": username,
-                        "tip_amount": tip_amount,
-                        "tip_message": tip_message,
-                        "request_count": request_count,
-                        "song": getattr(song_info, 'song', None),
-                        "artist": getattr(song_info, 'artist', None),
-                        "spotify_uri": getattr(song_info, 'spotify_uri', None),
-                        "resolved_uri": song_uri,
-                        "status": "failed",
-                        "error": "not available in market",
-                    })
-                    await self.actions.trigger_warning_overlay(
-                        username,
-                        "Requested song not available in your Spotify market.",
-                        10
-                    )
-                    continue
-
-                song_details = f"{song_info.artist} - {song_info.song}".strip()
-                try:
-                    ok = await self.add_track_to_queue({"source": source, "uri": song_uri, "requester": username})
-                except Exception as exc:
-                    logger.warning("song.queue.failed", data={"error_type": type(exc).__name__})
-                    ok = False
-                if not ok:
-                    await self.actions.trigger_warning_overlay(username, "Couldn't add song to the queue.", 10)
-                if ok:
+                    q = f"{getattr(song_info, 'artist', '')} - {getattr(song_info, 'song', '')}".strip(' -')
                     try:
-                        await self.actions.trigger_song_requester_overlay(
-                            username,
-                            song_details,
-                            self._get_obs_overlay_duration_seconds(),
-                        )
-                    except Exception:
-                        pass
+                        results = await self.search_youtube_tracks(q, limit=1)
+                        if results and isinstance(results[0], dict):
+                            song_uri = results[0].get('uri') if isinstance(results[0].get('uri'), str) else None
+                    except Exception as exc:
+                        logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
+                        lookup_error = "youtube lookup failed"
+                        song_uri = None
+            else:
+                if getattr(song_info, 'spotify_uri', None):
+                    song_uri = song_info.spotify_uri
+                else:
+                    try:
+                        song_uri = await self.actions.find_song_spotify(song_info)
+                    except Exception as exc:
+                        logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
+                        lookup_error = "spotify lookup failed"
 
+            if not song_uri:
+                not_found_error = lookup_error or ('youtube track not found' if source == 'youtube' else 'spotify track not found')
+                not_found_msg = "Couldn't find song on YouTube." if source == 'youtube' else "Couldn't find song on Spotify. Did you include artist and song name?"
                 self.publish_request_history_item({
                     "ts": time.time(),
                     "tip_ts": tip_ts,
                     "username": username,
                     "tip_amount": tip_amount,
                     "tip_message": tip_message,
-                    "request_count": request_count,
+                    "request_count": 1,
+                    "song": getattr(song_info, 'song', None),
+                    "artist": getattr(song_info, 'artist', None),
+                    "spotify_uri": getattr(song_info, 'spotify_uri', None),
+                    "resolved_uri": None,
+                    "status": "failed",
+                    "error": not_found_error,
+                })
+                await self.actions.trigger_warning_overlay(
+                    username,
+                    not_found_msg,
+                    10
+                )
+                return
+
+            if source != 'youtube' and not await self.actions.available_in_market(song_uri):
+                self.publish_request_history_item({
+                    "ts": time.time(),
+                    "tip_ts": tip_ts,
+                    "username": username,
+                    "tip_amount": tip_amount,
+                    "tip_message": tip_message,
+                    "request_count": 1,
                     "song": getattr(song_info, 'song', None),
                     "artist": getattr(song_info, 'artist', None),
                     "spotify_uri": getattr(song_info, 'spotify_uri', None),
                     "resolved_uri": song_uri,
-                    "song_details": song_details,
-                    "status": "added" if ok else "failed",
-                    **({"error": "queue insertion failed"} if not ok else {}),
+                    "status": "failed",
+                    "error": "not available in market",
                 })
+                await self.actions.trigger_warning_overlay(
+                    username,
+                    "Requested song not available in your Spotify market.",
+                    10
+                )
+                return
+
+            song_details = f"{song_info.artist} - {song_info.song}".strip()
+            try:
+                ok = await self.add_track_to_queue({"source": source, "uri": song_uri, "requester": username})
+            except Exception as exc:
+                logger.warning("song.queue.failed", data={"error_type": type(exc).__name__})
+                ok = False
+            if not ok:
+                await self.actions.trigger_warning_overlay(username, "Couldn't add song to the queue.", 10)
+            if ok:
+                try:
+                    await self.actions.trigger_song_requester_overlay(
+                        username,
+                        song_details,
+                        self._get_obs_overlay_duration_seconds(),
+                    )
+                except Exception:
+                    pass
+
+            self.publish_request_history_item({
+                "ts": time.time(),
+                "tip_ts": tip_ts,
+                "username": username,
+                "tip_amount": tip_amount,
+                "tip_message": tip_message,
+                "request_count": 1,
+                "song": getattr(song_info, 'song', None),
+                "artist": getattr(song_info, 'artist', None),
+                "spotify_uri": getattr(song_info, 'spotify_uri', None),
+                "resolved_uri": song_uri,
+                "song_details": song_details,
+                "status": "added" if ok else "failed",
+                **({"error": "queue insertion failed"} if not ok else {}),
+            })
 
         except Exception as exc:
             logger.exception("event.tip.error", exc=exc, message="Error processing tip event")
@@ -4463,6 +4470,8 @@ class SongRequestService:
                 continue
             cfg[section] = {}
             for key, val in config.items(section):
+                if section == 'General' and key == 'multi_request_tips':
+                    continue
                 if _is_secret_field(section, key):
                     cfg[section][key] = ""
                 else:
@@ -4490,7 +4499,6 @@ class SongRequestService:
             "General": {
                 "song_cost",
                 "skip_song_cost",
-                "multi_request_tips",
                 "allow_source_override_in_request_message",
                 "request_overlay_duration",
                 "request_history_size",
@@ -4553,6 +4561,7 @@ class SongRequestService:
 
         try:
             config.read(config_path)
+            config.remove_option('General', 'multi_request_tips')
         except Exception:
             pass
 

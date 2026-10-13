@@ -175,7 +175,7 @@ def main():
                     message = case['message']
                     if label == 'old' and len(message) < 3:
                         message = f'The song name might be "{message}".'
-                    songs = extractor.extract_songs(message, case['count'])
+                    songs = extractor.extract_songs(message, 1) if label == 'old' else extractor.extract_songs(message)
                     if label == 'old' and not songs:
                         songs = [legacy.SongRequest(song=message, artist='')]
                     row['extracted'] = [s.model_dump() for s in songs]

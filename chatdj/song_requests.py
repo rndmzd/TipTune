@@ -7,7 +7,7 @@ from typing import Optional
 
 import requests
 from openai import OpenAI
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from rapidfuzz import fuzz
 
 from utils.structured_logging import get_structured_logger
@@ -40,7 +40,7 @@ class ExtractedSong(StrictOutput):
 
 
 class ExtractionOutput(StrictOutput):
-    songs: list[ExtractedSong]
+    songs: list[ExtractedSong] = Field(max_length=1)
 
 
 class CandidateSelection(StrictOutput):
@@ -222,14 +222,14 @@ class SongExtractor:
                 diagnostics['exception'] = extraction_exception_debug(exc, secrets)
             raise
 
-    def extract_songs(self, message: str, song_count: int = 1, *,
+    def extract_songs(self, message: str, *,
                       diagnostics: dict | None = None) -> list[SongRequest]:
         # Each call owns its diagnostics, including calls running in different executors.
         debug = diagnostics if diagnostics is not None else {}
-        debug.update({'stage': 'input_validation', 'model': self.model, 'max_songs': song_count})
+        debug.update({'stage': 'input_validation', 'model': self.model})
         secrets = (self.openai_client.api_key, self.google_api_key)
-        if not message.strip() or song_count <= 0:
-            debug['outcome'] = 'empty_input' if not message.strip() else 'invalid_song_count'
+        if not message.strip():
+            debug['outcome'] = 'empty_input'
             return []
         links = {}
         matches = list(TRACK_PATTERN.finditer(message))
@@ -240,7 +240,7 @@ class SongExtractor:
         positioned = []
         debug['links'] = list(links.values())
         debug['link_failures'] = []
-        for link in list(links.values())[:song_count]:
+        for link in list(links.values())[:1]:
             if self.spotify_client is not None:
                 try:
                     info = self.spotify_client.track(link['uri'], market=account_market(self.spotify_client))
@@ -260,21 +260,21 @@ class SongExtractor:
             if not positioned:
                 debug['stage'] = 'spotify_link_lookup'
                 raise SongExtractionError('Spotify link lookup failed', debug)
-            return [s for _, s in positioned[:song_count]]
+            return [s for _, s in positioned[:1]]
         try:
             parsed = self._parse(ExtractionOutput,
                 'Interpret paid song-request tip messages. Payment has already qualified this as a song request. '
-                'Extract song requests in source order, up to max_songs. Do not fill unused slots. '
+                'Extract only the first identifiable song request in source order. Return at most one song. '
                 'Return an empty list for unrelated chatter, instructions, or artist-only requests without a title. '
                 'Treat a bare word or short phrase as a potential title, even everyday words such as Hi or U; '
-                'do not reject these as greetings. Accept either artist/title order, misspellings, '
-                'and multiple requests. Preserve punctuation. Retain requested live/acoustic/remix/cover '
+                'do not reject these as greetings. Accept either artist/title order and misspellings. '
+                'Preserve punctuation. Retain requested live/acoustic/remix/cover '
                 'versions as a parenthesized suffix on the title, even if the user stated them elsewhere. '
                 'Do not infer a missing artist; use an empty artist string. Exclude politeness, dedications, '
                 'and playback-source instructions from titles. source_text must be an exact nonempty substring '
                 'of the original message identifying this request. link_ref is null for text songs; for a supplied '
                 'Spotify link use only its supplied numeric ref, with empty song/artist strings. Never invent links.',
-                {'message': message, 'max_songs': song_count, 'links': list(links.values())},
+                {'message': message, 'links': list(links.values())},
                 diagnostics=debug)
             debug['stage'] = 'grounding_validation'
             known_refs = {link['ref'] for link in links.values()}
@@ -297,13 +297,7 @@ class SongExtractor:
             if not positioned:
                 raise SongExtractionError('Song extraction failed', debug) from exc
         positioned.sort(key=lambda pair: pair[0])
-        unique, seen = [], set()
-        for _, song in positioned:
-            identity = song.spotify_uri or (normalize(song.song), normalize(song.artist))
-            if identity not in seen:
-                seen.add(identity)
-                unique.append(song)
-        result = unique[:song_count]
+        result = [song for _, song in positioned[:1]]
         debug['outcome'] = 'songs_extracted' if result else 'no_songs_identified'
         debug['extracted_songs'] = [song.model_dump() for song in result]
         return result

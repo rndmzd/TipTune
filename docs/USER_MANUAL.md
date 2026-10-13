@@ -99,10 +99,9 @@ Queue state is persisted under the TipTune cache directory. Older persisted form
 - TipTune decides:
   - Is this a **song request**?
   - Is this a **skip request**?
-  - How many requests does it represent?
 - For song requests:
-  - TipTune extracts one or more songs from the tip message.
-  - Each extracted song is resolved to a Spotify track URI or a YouTube URL, depending on the active music source.
+  - TipTune extracts at most one song from the tip message.
+  - The extracted song is resolved to a Spotify track URI or a YouTube URL, depending on the active music source.
   - The resolved item is added to TipTune’s internal queue and played via the appropriate source.
 - TipTune can also:
   - Show overlays in OBS (requester, warnings, general, now playing).
@@ -222,42 +221,24 @@ On the final step the wizard writes `General.setup_complete=true`.
 
 TipTune treats each tip event (method `tip`) as a candidate for:
 
-- **Song request(s)**
+- **Song request**
 - **Skip current song**
 - **Ignore** (not a request)
 
 ### Song request vs skip request
 
-The decision is based on tip amount modulo your configured costs:
+The decision is based on the tip amount and your configured costs:
 
-- **Song request** if `tip_amount % General.song_cost == 0`
+- **Song request** if `tip_amount == General.song_cost`
 - **Skip request** if `tip_amount % General.skip_song_cost == 0`
 
 If a tip matches **both**, TipTune treats it as a **song request** (song requests take precedence).
 
-### Request count (multiple requests in one tip)
+### One song per tip
 
-For song requests, TipTune computes the number of requested songs.
-
-Behavior depends on `General.multi_request_tips`:
-
-- If `General.multi_request_tips=true` (default):
-  - `request_count = tip_amount // General.song_cost` (minimum 1)
-  - A tip that is a multiple of `song_cost` can request multiple songs.
-- If `General.multi_request_tips=false`:
-  - Only an exact `tip_amount == General.song_cost` triggers a song request.
-  - Multiples (like `2 * song_cost`) do not increase request count.
-
-That `request_count` determines how many songs TipTune attempts to extract from the tip message.
-
-Example:
-
-- If `song_cost=27` and `multi_request_tips=true`:
-  - A `27` token tip requests **1 song**.
-  - A `54` token tip requests **2 songs**.
-- If `song_cost=27` and `multi_request_tips=false`:
-  - A `27` token tip requests **1 song**.
-  - A `54` token tip requests **1 song**.
+Each qualifying tip requests at most the first identifiable song in its message.
+The amount must match `General.song_cost` exactly. With `song_cost=27`, a 27-token
+tip requests one song, and a 54-token tip does not trigger a song request.
 
 ### Tip message parsing rules
 
@@ -270,8 +251,8 @@ Extraction behavior:
 
 - If the message contains a **Spotify track URI** (`spotify:track:...`) or a **Spotify track link** (`https://open.spotify.com/track/...`) and Spotify is available, TipTune can use that directly.
 - If YouTube is the active source and the message contains a YouTube URL, TipTune can use that directly.
-- Otherwise TipTune uses the **OpenAI Responses API with strict Structured Outputs** to extract **up to** `request_count` songs in message order. It never fills unused slots with invented songs.
-- Mixed Spotify links and text are processed together. Equivalent links are deduplicated. Successful requests can continue when another lookup fails.
+- Otherwise TipTune uses the **OpenAI Responses API with strict Structured Outputs** to extract at most one song. It uses the first identifiable request in message order and does not invent missing songs.
+- Spotify links and text are considered together, returning at most one request. Equivalent links are deduplicated.
 - Spotify is searched first. Exact title-and-artist matches are accepted directly; otherwise the model chooses the best relevant match from actual Spotify candidates. Requested versions require supporting catalog metadata; studio recordings are preferred when no version is specified. Explicit artist requests are not replaced by unrelated cover or tribute artists. Very short titles must match the catalog title exactly. If no eligible track is found, the request fails instead of silently substituting a different title or recording.
 - If Spotify finds no plausible match and Google keys are configured, TipTune uses up to three **Google Custom Search** results as evidence for one further Spotify search. Google results cannot be queued directly.
 - Missing artists are filled from the selected Spotify track. Best-effort matching can still choose the wrong interpretation of an ambiguous title; including the artist or a track link is more precise.
@@ -432,7 +413,6 @@ Used to improve song metadata when the artist is missing.
 
 - `General.song_cost`
 - `General.skip_song_cost`
-- `General.multi_request_tips`
 - `General.allow_source_override_in_request_message`
 - `General.request_overlay_duration` (seconds)
 - `General.auto_check_updates` (UI toggle)
@@ -447,14 +427,6 @@ Logging notes:
 - `debug_log_to_file=false` keeps file logging at `INFO` level.
 - `debug_log_path` defaults to `<app_dir>/logs/tiptune-debug.log` when empty.
 - Relative paths are resolved from `<app_dir>` (the TipTune app/executable directory).
-
-`General.multi_request_tips` controls whether a single tip can request multiple songs when the tip amount is a multiple of `song_cost`.
-
-- When `true` (default):
-  - Example: if `song_cost=27`, then `54` tokens requests **2 songs**.
-- When `false`:
-  - Example: if `song_cost=27`, then only `27` tokens requests **1 song**.
-  - `54` tokens does **not** request 2 songs.
 
 `General.allow_source_override_in_request_message` controls whether tip messages can override the default music source.
 
@@ -646,7 +618,7 @@ See `config.ini.example` for the template.
 - `[Music]`
   - `source`
 - `[General]`
-  - `song_cost`, `skip_song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
+  - `song_cost`, `skip_song_cost`, `allow_source_override_in_request_message`, `request_overlay_duration`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `debug_log_to_file`, `debug_log_path`
 
 ---
 
