@@ -59,6 +59,79 @@ class PlaybackDeviceStartupTests(unittest.TestCase):
         ]}
         self.assertEqual(AutoDJ(self.client, playback_device_id='saved').playback_device, 'saved')
 
+    def test_embedded_player_is_default_over_saved_and_active_devices(self):
+        for name in ('Web Player (Microsoft Edge)', ' web PLAYER (MICROSOFT EDGE) '):
+            with self.subTest(name=name):
+                self.client.devices.return_value = {'devices': [
+                    {'id': 'saved', 'name': 'Desktop', 'is_active': True},
+                    {'id': 'chrome', 'name': 'Web Player (Chrome)'},
+                    {'id': 'embedded', 'name': name},
+                ]}
+                dj = AutoDJ(self.client, playback_device_id='saved')
+                self.assertEqual(dj.playback_device, 'embedded')
+                self.assertFalse(dj.playback_device_explicit)
+        self.client.transfer_playback.assert_not_called()
+
+    def test_embedded_player_becomes_default_when_it_appears_after_startup(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'speaker', 'name': 'Speaker', 'is_active': True},
+        ]}
+        dj = AutoDJ(self.client)
+        self.assertEqual(dj.playback_device, 'speaker')
+        self.client.devices.return_value['devices'].append(
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'}
+        )
+        self.assertTrue(dj._refresh_playback_device())
+        self.assertEqual(dj.playback_device, 'embedded')
+        self.client.transfer_playback.assert_not_called()
+
+    def test_unusable_embedded_players_do_not_override_saved_device(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'restricted', 'name': 'Web Player (Microsoft Edge)', 'is_restricted': True},
+            {'id': None, 'name': 'Web Player (Microsoft Edge)', 'is_active': True},
+            {'id': 'saved', 'name': 'Desktop'},
+        ]}
+        self.assertEqual(AutoDJ(self.client, playback_device_id='saved').playback_device, 'saved')
+
+    def test_manual_selection_is_preserved_over_embedded_default(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'speaker', 'name': 'Speaker', 'is_active': True},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        dj = AutoDJ(self.client)
+        self.assertEqual(dj.playback_device, 'embedded')
+        self.assertTrue(dj.set_playback_device('speaker'))
+        self.assertTrue(dj._refresh_playback_device())
+        self.assertEqual(dj.playback_device, 'speaker')
+        self.assertTrue(dj.playback_device_explicit)
+        self.client.transfer_playback.assert_called_once_with(device_id='speaker', force_play=False)
+
+    def test_failed_manual_selection_does_not_disable_embedded_default(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        dj = AutoDJ(self.client)
+        self.client.transfer_playback.side_effect = SpotifyException(404, -1, 'Device not found')
+        self.assertFalse(dj.set_playback_device('missing'))
+        self.assertFalse(dj.playback_device_explicit)
+        self.assertTrue(dj._refresh_playback_device())
+        self.assertEqual(dj.playback_device, 'embedded')
+
+    def test_missing_manual_device_falls_back_to_embedded_default(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'speaker', 'name': 'Speaker'},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        dj = AutoDJ(self.client)
+        self.assertTrue(dj.set_playback_device('speaker'))
+        self.client.devices.return_value = {'devices': [
+            {'id': 'desktop', 'name': 'Desktop', 'is_active': True},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        self.assertTrue(dj._refresh_playback_device())
+        self.assertEqual(dj.playback_device, 'embedded')
+        self.assertFalse(dj.playback_device_explicit)
+
     def test_restricted_and_missing_device_ids_are_skipped(self):
         self.client.devices.return_value = {'devices': [
             {'id': None, 'is_active': True},

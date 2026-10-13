@@ -22,6 +22,7 @@ class AutoDJ:
         self.spotify = spotify
         self.playback_device: Optional[str] = None
         self.playback_device_name: Optional[str] = None
+        self.playback_device_explicit = False
 
         # Spotify Web Player IDs change between sessions. Resolve the saved ID
         # against the current list without transferring playback during startup.
@@ -207,19 +208,28 @@ class AutoDJ:
         ]
         if not devices:
             return None
-        for device in devices:
-            if device['id'] == preferred_id:
-                return device
-        if preferred_name:
-            for device in devices:
-                if device.get('name') == preferred_name:
-                    return device
-        return next((d for d in devices if d.get('is_active')), devices[0])
+        preferred = next((d for d in devices if d['id'] == preferred_id), None)
+        if preferred is None and preferred_name:
+            preferred = next((d for d in devices if d.get('name') == preferred_name), None)
+        # Prefer the embedded Windows player during automatic selection, even
+        # if a saved or previously auto-selected device is still available.
+        # A successful manual selection takes precedence for this session.
+        if getattr(self, 'playback_device_explicit', False) and preferred:
+            return preferred
+        embedded = [
+            d for d in devices
+            if str(d.get('name', '')).strip().casefold() == 'web player (microsoft edge)'
+        ]
+        if embedded:
+            return next((d for d in embedded if d['id'] == preferred_id),
+                        next((d for d in embedded if d.get('is_active')), embedded[0]))
+        return preferred or next((d for d in devices if d.get('is_active')), devices[0])
 
     def _refresh_playback_device(self) -> bool:
         old_id = self.playback_device
+        old_name = getattr(self, 'playback_device_name', None)
         device = self._auto_select_playback_device(
-            old_id, getattr(self, 'playback_device_name', None)
+            old_id, old_name
         )
         if device is None:
             self.playback_device = None
@@ -229,6 +239,8 @@ class AutoDJ:
             )
             return False
         self.playback_device = device['id']
+        if old_id != self.playback_device and old_name != device.get('name'):
+            self.playback_device_explicit = False
         self.playback_device_name = device.get('name')
         if old_id != self.playback_device:
             logger.info(
@@ -244,6 +256,7 @@ class AutoDJ:
 
             self.spotify.transfer_playback(device_id=device_id, force_play=force_play)
             self.playback_device = device_id
+            self.playback_device_explicit = True
 
             try:
                 for d in self.get_available_devices():
