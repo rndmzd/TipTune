@@ -50,7 +50,7 @@ export function SpotifyPage() {
       <HeaderBar title="Spotify" showMiniPlayer={false} />
       <div className="spotifyToolbar">
         <p className="muted">Sign in with the same Spotify account connected to TipTune. Your login is saved on this computer.
-          {' '}On Windows, TipTune selects Web Player (Microsoft Edge) automatically when available to play song requests. Spotify may occasionally ask you to sign in again.</p>
+          {' '}On Windows, TipTune selects and activates Web Player (Microsoft Edge) automatically when available to play song requests. Spotify may occasionally ask you to sign in again.</p>
         {desktop ? <button type="button" onClick={() => {
           playerCommand('spotify_player_reload').then(() => setRetry((n) => n + 1)).catch((e) => setError(String(e)));
         }}>Reload player</button> : null}

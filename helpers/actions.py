@@ -101,9 +101,9 @@ class Actions:
                 logger.exception("actions.obs.init.error", message="Failed to initialize OBS integration", exc=exc)
                 self.obs_integration_enabled = False
 
-    async def extract_song_titles(self, message: str, song_count: int, *,
+    async def extract_song_titles(self, message: str, *,
                                   diagnostics: dict | None = None) -> List[SongRequest]:
-        """Extract song titles from a message using SongExtractor (running in executor)."""
+        """Extract at most one song from a message using SongExtractor in an executor."""
         if not self.chatdj_enabled:
             logger.warning("chatdj.disabled", message="ChatDJ not enabled")
             raise SongExtractionError("Song extraction is not configured", {
@@ -113,7 +113,7 @@ class Actions:
         loop = asyncio.get_running_loop()
         # Run blocking extraction in executor to avoid blocking the event loop
         from functools import partial
-        extract = partial(self.song_extractor.extract_songs, message, song_count, diagnostics=diagnostics)
+        extract = partial(self.song_extractor.extract_songs, message, diagnostics=diagnostics)
         return await loop.run_in_executor(None, extract)
 
     async def find_song_spotify(self, song_info: SongRequest) -> Optional[str]:

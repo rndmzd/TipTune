@@ -17,7 +17,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertGreaterEqual(len(cases), 25)
         self.assertEqual(len(cases), len({c['id'] for c in cases}))
         for case in cases:
-            self.assertLessEqual(len(case['expected']), case['count'])
+            self.assertLessEqual(len(case['expected']), 1)
             for expected in case['expected']:
                 self.assertTrue(expected['titles'])
                 self.assertTrue(expected['acceptable_tracks'])

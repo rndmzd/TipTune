@@ -153,8 +153,7 @@ function tooltip(section: string, key: string) {
     'Search.google_api_key': 'Google API key used for web search features. Leave blank to keep the currently saved key.',
     'Search.google_cx': 'Google Custom Search Engine (CSE) ID used for web search results.',
     'Music.source': 'Select which music source TipTune will use to fulfill song requests and searches.',
-    'General.song_cost': 'Default token cost to request a song.',
-    'General.multi_request_tips': 'When enabled, tips that are a multiple of song_cost can request multiple songs. When disabled, only an exact song_cost tip triggers a single request.',
+    'General.song_cost': 'Exact token amount required to request one song.',
     'General.allow_source_override_in_request_message': 'When enabled, users can include the word “spotify” or “youtube” in their request message to override the selected Music source for that request.',
     'General.skip_song_cost': 'Token cost to skip the currently playing song.',
     'General.request_overlay_duration': 'How long (in seconds) OBS overlays stay visible after they are shown.',
@@ -254,12 +253,15 @@ export function SettingsPage() {
     }
   }
 
-  async function refreshCurrentDevice() {
-    const data = await apiJson<QueueResp>('/api/queue');
-    const st = data.queue ?? {};
+  function showCurrentDevice(st: QueueState) {
     const devName = st.playback_device_name || '';
     const devId = st.playback_device_id || '';
     setCurrentDeviceText(devId ? `Current: ${devName ? `${devName} ` : ''}(${devId})` : 'Current: (none)');
+  }
+
+  async function refreshCurrentDevice() {
+    const data = await apiJson<QueueResp>('/api/queue');
+    showCurrentDevice(data.queue ?? {});
   }
 
   async function refreshDevices() {
@@ -277,6 +279,7 @@ export function SettingsPage() {
         const qst = await apiJson<QueueResp>('/api/queue');
         current = String(qst.queue?.playback_device_id || '');
         currentExplicit = qst.queue?.playback_device_explicit === true;
+        showCurrentDevice(qst.queue ?? {});
       } catch {}
       const usable = next.filter((d) => d.id?.trim() && !d.is_restricted);
       const embedded = usable.filter((d) => d.name?.trim().toLowerCase() === 'web player (microsoft edge)');
@@ -454,12 +457,6 @@ export function SettingsPage() {
     return !(s === 'false' || s === '0' || s === 'no');
   })();
 
-  const multiRequestTipsEnabled = (() => {
-    const raw = v('General', 'multi_request_tips');
-    const s = (raw || 'true').trim().toLowerCase();
-    return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
-  })();
-
   const allowSourceOverrideInRequestMessageEnabled = (() => {
     const raw = v('General', 'allow_source_override_in_request_message');
     const s = (raw || 'true').trim().toLowerCase();
@@ -553,7 +550,6 @@ export function SettingsPage() {
       },
       General: {
         song_cost: v('General', 'song_cost'),
-        multi_request_tips: multiRequestTipsEnabled ? 'true' : 'false',
         allow_source_override_in_request_message: allowSourceOverrideInRequestMessageEnabled ? 'true' : 'false',
         skip_song_cost: v('General', 'skip_song_cost'),
         request_overlay_duration: v('General', 'request_overlay_duration'),
@@ -679,7 +675,7 @@ export function SettingsPage() {
             </div>
             {devicesError ? <p role="alert">{devicesError}</p> : devicesLoaded && !devices.length && !devicesBusy ? <p className="muted" role="status">Spotify returned no devices. Check that the player uses the same account you authorized for TipTune, start playback, then refresh.</p> : null}
             {deviceApplyMsg ? <p role="status">{deviceApplyMsg}</p> : null}
-            <p className="muted">Web Player (Microsoft Edge) is selected automatically when available. Use Apply + Save to choose another device for this session.</p>
+            <p className="muted">Web Player (Microsoft Edge) is selected and activated automatically when available. Use Apply + Save to choose another device for this session.</p>
             <p className="muted">The Spotify player login and TipTune API authorization are separate. Connect Spotify below to allow TipTune to discover and control devices.</p>
           </div>
         </div>
@@ -751,24 +747,6 @@ export function SettingsPage() {
             value={v('General', 'song_cost')}
             onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), song_cost: e.target.value } }))}
           />
-          <label
-            title={tooltip('General', 'multi_request_tips')}
-            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
-          >
-            <input
-              type="checkbox"
-              checked={multiRequestTipsEnabled}
-              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
-              onChange={(e) =>
-                setCfg((c) => ({
-                  ...c,
-                  General: { ...(c.General || {}), multi_request_tips: e.target.checked ? 'true' : 'false' },
-                }))
-              }
-            />
-            <span style={{ whiteSpace: 'nowrap' }}>{humanizeKey('multi_request_tips')}</span>
-          </label>
-
           <label
             title={tooltip('General', 'allow_source_override_in_request_message')}
             style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}

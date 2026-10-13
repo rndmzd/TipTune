@@ -140,6 +140,183 @@ class PlaybackDeviceStartupTests(unittest.TestCase):
         ]}
         self.assertEqual(AutoDJ(self.client, playback_device_id='restricted').playback_device, 'usable')
 
+    def test_background_activation_transfers_to_default_without_forcing_play(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'desktop', 'name': 'Desktop', 'is_active': True},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        self.client.transfer_playback.return_value = None  # Spotify's successful 204 response.
+        dj = AutoDJ(self.client, playback_device_id='desktop')
+        dj.queued_tracks = ['pending-request']
+        self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(dj.playback_device, 'embedded')
+        self.assertFalse(dj.playback_device_explicit)
+        self.assertEqual(dj.queued_tracks, ['pending-request'])
+        self.client.transfer_playback.assert_called_once_with(device_id='embedded', force_play=False)
+        self.client.start_playback.assert_not_called()
+        self.client.pause_playback.assert_not_called()
+
+    def test_active_default_does_not_need_a_transfer(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)', 'is_active': True},
+        ]}
+        self.assertTrue(AutoDJ(self.client).ensure_playback_device_active())
+        self.client.transfer_playback.assert_not_called()
+
+    def test_delayed_transfer_confirmation_does_not_repeat_every_poll(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        dj = AutoDJ(self.client)
+        with patch('chatdj.chatdj.time.monotonic', side_effect=[100, 105, 130]):
+            self.assertTrue(dj.ensure_playback_device_active())
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(self.client.transfer_playback.call_count, 2)
+
+    def test_failed_activation_retains_queue_and_retries_after_cooldown(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        self.client.transfer_playback.side_effect = [Timeout('Temporarily offline'), None]
+        dj = AutoDJ(self.client)
+        dj.queued_tracks = ['pending-request']
+        with patch('chatdj.chatdj.time.monotonic', side_effect=[100, 105, 130]):
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(dj.playback_device, 'embedded')
+        self.assertEqual(dj.queued_tracks, ['pending-request'])
+        self.assertFalse(dj.queue_paused())
+        self.assertEqual(self.client.transfer_playback.call_count, 2)
+
+    def test_reconnected_device_id_does_not_wait_for_old_id_retry(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'old-web', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        self.client.transfer_playback.side_effect = [SpotifyException(404, -1, 'Device not found'), None]
+        dj = AutoDJ(self.client)
+        with patch('chatdj.chatdj.time.monotonic', side_effect=[100, 105]):
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.client.devices.return_value = {'devices': [
+                {'id': 'new-web', 'name': 'Web Player (Microsoft Edge)'},
+            ]}
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual([call.kwargs['device_id'] for call in self.client.transfer_playback.call_args_list],
+                         ['old-web', 'new-web'])
+
+    def test_background_activation_waits_for_player_to_appear(self):
+        self.client.devices.return_value = {'devices': []}
+        dj = AutoDJ(self.client)
+        self.assertFalse(dj.ensure_playback_device_active())
+        self.client.transfer_playback.assert_not_called()
+        self.client.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        self.assertTrue(dj.ensure_playback_device_active())
+        self.client.transfer_playback.assert_called_once_with(device_id='embedded', force_play=False)
+
+    def test_background_activation_respects_manual_selection(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'speaker', 'name': 'Speaker'},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)', 'is_active': True},
+        ]}
+        dj = AutoDJ(self.client)
+        self.assertTrue(dj.set_playback_device('speaker'))
+        self.client.transfer_playback.reset_mock()
+        self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(dj.playback_device, 'speaker')
+        self.assertTrue(dj.playback_device_explicit)
+        self.client.transfer_playback.assert_called_once_with(device_id='speaker', force_play=False)
+
+    def test_background_activation_skips_unusable_embedded_players(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'restricted', 'name': 'Web Player (Microsoft Edge)', 'is_restricted': True},
+            {'id': None, 'name': 'Web Player (Microsoft Edge)'},
+            {'id': 'speaker', 'name': 'Speaker', 'is_active': True},
+        ]}
+        dj = AutoDJ(self.client)
+        self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(dj.playback_device, 'speaker')
+        self.client.transfer_playback.assert_not_called()
+
+    def test_confirmed_activation_can_recover_from_another_device_switch(self):
+        embedded = {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'}
+        self.client.devices.return_value = {'devices': [embedded]}
+        dj = AutoDJ(self.client)
+        with patch('chatdj.chatdj.time.monotonic', side_effect=[100, 110]):
+            self.assertTrue(dj.ensure_playback_device_active())
+            embedded['is_active'] = True
+            self.assertTrue(dj.ensure_playback_device_active())
+            embedded['is_active'] = False
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(self.client.transfer_playback.call_count, 2)
+
+
+class SpotifyDeviceWatchdogTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        for name in ('clear_playback_context', '_restore_persisted_queue_state'):
+            p = patch.object(AutoDJ, name); p.start(); self.addCleanup(p.stop)
+        self.client = Mock()
+        self.client.devices.return_value = {'devices': [
+            {'id': 'desktop', 'name': 'Desktop', 'is_active': True},
+        ]}
+        self.dj = AutoDJ(self.client)
+        self.dj.check_queue_status = Mock(return_value=False)
+        self.service = SongRequestService.__new__(SongRequestService)
+        self.service.actions = SimpleNamespace(chatdj_enabled=True, auto_dj=self.dj)
+        self.service._active_source = Mock(return_value='spotify')
+        self.service._queue_lock = asyncio.Lock()
+        self.service._queue_items = []
+        self.service._queue_paused = True
+        self.service._queue_playback_paused = True
+        self.service._queue_now_playing = None
+        self.service._queue_started_ts = None
+        self.service._queue_starting = False
+        self.service._queue_start_next_if_needed = AsyncMock()
+        self.service._stop_event = Mock(is_set=Mock(side_effect=[False, False, True]), wait=AsyncMock())
+
+    async def test_watchdog_activates_late_player_with_empty_paused_queue(self):
+        self.client.devices.side_effect = [
+            {'devices': [{'id': 'desktop', 'name': 'Desktop', 'is_active': True}]},
+            {'devices': [
+                {'id': 'desktop', 'name': 'Desktop', 'is_active': True},
+                {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+            ]},
+        ]
+        await self.service._queue_watchdog()
+        self.assertEqual(self.dj.playback_device, 'embedded')
+        self.client.transfer_playback.assert_called_once_with(device_id='embedded', force_play=False)
+        self.assertEqual(self.service._queue_items, [])
+        self.assertTrue(self.service._queue_paused)
+        self.assertIsNone(self.service._queue_now_playing)
+        self.assertEqual(self.client.devices.call_count, 3)  # Startup, then both background polls.
+
+    async def test_watchdog_activates_available_player_without_settings(self):
+        self.client.devices.return_value = {'devices': [
+            {'id': 'desktop', 'name': 'Desktop', 'is_active': True},
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)'},
+        ]}
+        await self.service._queue_watchdog()
+        self.client.transfer_playback.assert_called_once_with(device_id='embedded', force_play=False)
+        self.assertFalse(self.dj.playback_device_explicit)
+
+    async def test_watchdog_defers_activation_during_youtube_or_track_start(self):
+        for source, now_item, starting in [
+            ('youtube', None, False),
+            ('spotify', {'source': 'youtube'}, False),
+            ('spotify', None, True),
+        ]:
+            with self.subTest(source=source, now_item=now_item, starting=starting):
+                self.service._active_source.return_value = source
+                self.service._queue_now_playing = now_item
+                self.service._queue_starting = starting
+                self.service._stop_event.is_set.side_effect = [False, True]
+                self.client.reset_mock()
+                await self.service._queue_watchdog()
+                self.client.devices.assert_not_called()
+                self.client.transfer_playback.assert_not_called()
+
 
 class SpotifyInitializationTests(unittest.TestCase):
     def setUp(self):

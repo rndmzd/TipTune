@@ -14,7 +14,6 @@ import { PlaybackProvider } from './components/PlaybackContext';
 
 type RequestConfig = {
   songCost: number | null;
-  multiRequestTips: boolean;
 };
 
 type TipToast = {
@@ -56,21 +55,15 @@ function get(obj: any, path: string[], fallback: any) {
   }
 }
 
-function parseBool(raw: unknown, fallback: boolean): boolean {
-  const s = String(raw ?? '').trim().toLowerCase();
-  if (!s) return fallback;
-  return !(s === 'false' || s === '0' || s === 'no' || s === 'off');
-}
-
 function parseSongCost(raw: unknown): number | null {
   const n = Number.parseInt(String(raw ?? ''), 10);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function isSongRequestTip(tokens: number | null, songCost: number | null, multiRequestTips: boolean): boolean {
+function isSongRequestTip(tokens: number | null, songCost: number | null): boolean {
   if (tokens == null || !Number.isFinite(tokens) || tokens <= 0) return false;
   if (songCost == null || !Number.isFinite(songCost) || songCost <= 0) return false;
-  return multiRequestTips ? tokens % songCost === 0 : tokens === songCost;
+  return tokens === songCost;
 }
 
 function GatedRoute(props: { element: JSX.Element }) {
@@ -121,12 +114,12 @@ export function App() {
   const didAutoCheckRef = useRef<boolean>(false);
   const toastIdRef = useRef<number>(0);
   const toastTimersRef = useRef<Map<number, number>>(new Map());
-  const requestConfigRef = useRef<RequestConfig>({ songCost: 27, multiRequestTips: true });
+  const requestConfigRef = useRef<RequestConfig>({ songCost: 27 });
 
   const isTauri = isTauriRuntime();
   const [backendState, setBackendState] = useState<'connecting' | 'ready' | 'failed'>(isTauri ? 'connecting' : 'ready');
   const [backendRetryNonce, setBackendRetryNonce] = useState<number>(0);
-  const [requestConfig, setRequestConfig] = useState<RequestConfig>({ songCost: 27, multiRequestTips: true });
+  const [requestConfig, setRequestConfig] = useState<RequestConfig>({ songCost: 27 });
   const [tipToasts, setTipToasts] = useState<TipToast[]>([]);
 
   useEffect(() => {
@@ -237,10 +230,9 @@ export function App() {
         const parsedCost = parseSongCost((general as any).song_cost);
         const nextConfig: RequestConfig = {
           songCost: parsedCost ?? 27,
-          multiRequestTips: parseBool((general as any).multi_request_tips, true),
         };
         setRequestConfig((prev) =>
-          prev.songCost === nextConfig.songCost && prev.multiRequestTips === nextConfig.multiRequestTips ? prev : nextConfig,
+          prev.songCost === nextConfig.songCost ? prev : nextConfig,
         );
       } catch {
       }
@@ -281,8 +273,8 @@ export function App() {
       const tokens =
         typeof tokensRaw === 'number' ? tokensRaw : Number.isFinite(Number(tokensRaw)) ? Number(tokensRaw) : null;
 
-      const { songCost, multiRequestTips } = requestConfigRef.current;
-      if (!isSongRequestTip(tokens, songCost, multiRequestTips)) return;
+      const { songCost } = requestConfigRef.current;
+      if (!isSongRequestTip(tokens, songCost)) return;
 
       const isAnon = get(ev, ['object', 'tip', 'isAnon'], false);
       const userFromUserObj = get(ev, ['object', 'user', 'username'], null);

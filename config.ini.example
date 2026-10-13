@@ -23,8 +23,8 @@ source = spotify
 
 [General]
 # General application settings
+# A tip must match this amount exactly to request one song.
 song_cost = 27
-multi_request_tips = true
 allow_source_override_in_request_message = true
 skip_song_cost = 51
 request_overlay_duration = 10

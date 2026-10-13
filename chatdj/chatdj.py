@@ -23,9 +23,13 @@ class AutoDJ:
         self.playback_device: Optional[str] = None
         self.playback_device_name: Optional[str] = None
         self.playback_device_explicit = False
+        self._device_lock = threading.RLock()
+        self._device_activation_retry_id: Optional[str] = None
+        self._device_activation_retry_at = 0.0
+        self._device_unavailable_logged = False
 
         # Spotify Web Player IDs change between sessions. Resolve the saved ID
-        # against the current list without transferring playback during startup.
+        # here; the service activates it in the background after startup.
         self.playback_device = playback_device_id
         self._refresh_playback_device()
 
@@ -225,7 +229,7 @@ class AutoDJ:
                         next((d for d in embedded if d.get('is_active')), embedded[0]))
         return preferred or next((d for d in devices if d.get('is_active')), devices[0])
 
-    def _refresh_playback_device(self) -> bool:
+    def _refresh_playback_device(self, activate: bool = False) -> bool:
         old_id = self.playback_device
         old_name = getattr(self, 'playback_device_name', None)
         device = self._auto_select_playback_device(
@@ -233,11 +237,16 @@ class AutoDJ:
         )
         if device is None:
             self.playback_device = None
-            logger.warning(
-                "spotify.device.unavailable",
-                message="No available Spotify playback device. Open Spotify, then select a device in Settings or resume the queue.",
-            )
+            self._device_activation_retry_id = None
+            self._device_activation_retry_at = 0.0
+            if not getattr(self, '_device_unavailable_logged', False):
+                logger.warning(
+                    "spotify.device.unavailable",
+                    message="No available Spotify playback device. Open Spotify; TipTune will activate the selected device when it becomes available.",
+                )
+                self._device_unavailable_logged = True
             return False
+        self._device_unavailable_logged = False
         self.playback_device = device['id']
         if old_id != self.playback_device and old_name != device.get('name'):
             self.playback_device_explicit = False
@@ -247,9 +256,44 @@ class AutoDJ:
                 "spotify.device.selected", message="Device auto-selected",
                 data={"name": self.playback_device_name, "id": self.playback_device, "auto": True},
             )
+        if not activate:
+            return True
+        if device.get('is_active'):
+            self._device_activation_retry_id = None
+            self._device_activation_retry_at = 0.0
+            return True
+
+        # Spotify can report the old active device briefly after a transfer.
+        # Bound retries for both delayed confirmation and failed transfers.
+        now = time.monotonic()
+        if (self._device_activation_retry_id == self.playback_device
+                and now < self._device_activation_retry_at):
+            return False
+        self._device_activation_retry_id = self.playback_device
+        self._device_activation_retry_at = now + 30.0
+        try:
+            self.spotify.transfer_playback(device_id=self.playback_device, force_play=False)
+        except Exception as exc:
+            logger.exception(
+                "spotify.device.activation.error", message="Failed to activate the selected Spotify device; will retry automatically", exc=exc,
+            )
+            return False
+        logger.info(
+            "spotify.device.activation.requested", message="Requested automatic activation of the selected Spotify device",
+            data={"name": self.playback_device_name, "id": self.playback_device},
+        )
         return True
 
+    def ensure_playback_device_active(self) -> bool:
+        """Select and activate the preferred device, preserving play/pause state."""
+        with self._device_lock:
+            return self._refresh_playback_device(activate=True)
+
     def set_playback_device(self, device_id: str, force_play: bool = False, silent: bool = False) -> bool:
+        with self._device_lock:
+            return self._set_playback_device(device_id, force_play, silent)
+
+    def _set_playback_device(self, device_id: str, force_play: bool, silent: bool) -> bool:
         try:
             if not device_id:
                 return False
@@ -527,6 +571,10 @@ class AutoDJ:
 
     def start_track(self, track_uri: str) -> bool:
         """Start a request and confirm the device actually began playing it."""
+        with self._device_lock:
+            return self._start_track(track_uri)
+
+    def _start_track(self, track_uri: str) -> bool:
         if not self._refresh_playback_device():
             raise ValueError("No available Spotify playback device. Open Spotify and resume the queue.")
         try:

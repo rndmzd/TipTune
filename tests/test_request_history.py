@@ -92,6 +92,32 @@ class RequestHistoryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse((self.root / 'config.ini').exists())
                 self.assertEqual(service._request_history_recent_max, 1000)
 
+    async def test_retired_request_setting_is_hidden_and_removed_on_save(self):
+        contents = '[General]\n# Keep other settings and comments\nsong_cost = 27\nMulti_Request_Tips: true\n'
+        self.config.read_string(contents)
+        (self.root / 'config.ini').write_text(contents, encoding='utf-8')
+        service = self.service()
+        async with TestClient(TestServer(self.app.WebUI(service)._app)) as client:
+            data = await (await client.get('/api/config')).json()
+            self.assertNotIn('multi_request_tips', data['config']['General'])
+            response = await client.post('/api/config', json={
+                'General': {'multi_request_tips': 'true', 'song_cost': '35'},
+            })
+            self.assertEqual(response.status, 200)
+            data = await (await client.get('/api/config')).json()
+            self.assertNotIn('multi_request_tips', data['config']['General'])
+            self.assertEqual(data['config']['General']['song_cost'], '35')
+        saved_text = (self.root / 'config.ini').read_text(encoding='utf-8')
+        self.assertNotIn('multi_request_tips', saved_text.lower())
+        self.assertIn('# Keep other settings and comments', saved_text)
+        self.assertFalse(self.config.has_option('General', 'multi_request_tips'))
+
+    async def test_retired_request_setting_is_not_accepted(self):
+        service = self.service()
+        self.assertEqual(await service.update_config_from_ui({'General': {'multi_request_tips': 'true'}}), (True, None))
+        self.assertFalse((self.root / 'config.ini').exists())
+        self.assertNotIn('multi_request_tips', service.get_config_for_ui()['General'])
+
     async def test_invalid_ini_value_uses_default(self):
         for value in ('0', '-1', 'abc', '1.5'):
             with self.subTest(value=value):

@@ -26,6 +26,7 @@ def make_dj():
     dj.spotify = Mock()
     dj.spotify.devices.return_value = {'devices': [{'id': 'desktop', 'name': 'Desktop'}]}
     dj.playback_device = 'desktop'
+    dj._device_lock = threading.RLock()
     dj.now_playing_track_uri = None
     dj._last_start_playback_ts = 0
     dj._queue_lock = threading.Lock()

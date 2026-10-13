@@ -121,7 +121,7 @@ TipTune uses these sections/keys (see `config.ini.example`):
 - `[Music]` (required)
   - `source`
 - `[General]` (required)
-  - `song_cost`, `multi_request_tips`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `request_history_size`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `show_history_debug`, `send_error_reports`, `debug_log_to_file`, `debug_log_path`
+  - `song_cost`, `allow_source_override_in_request_message`, `skip_song_cost`, `request_overlay_duration`, `request_history_size`, `setup_complete`, `auto_check_updates`, `show_debug_data`, `show_history_debug`, `send_error_reports`, `debug_log_to_file`, `debug_log_path`
 
 Request history retains the latest 1,000 entries by default. Change **Settings → General → Request history size** (or `General.request_history_size`) to any positive whole number. Changes apply when saved; lowering the size removes the oldest excess entries. History, exports, and Stats use the configured capacity.
 
@@ -133,23 +133,12 @@ Failed song extractions save diagnostics with the History record: the failure st
 
 Reports send in the background. Unsent reports expire after seven days; disabling reporting and saving deletes them. **Send test report** queues a synthetic report and displays its ID. Unexpected desktop-service exits and launcher failures are reported on the next successful launch if reporting remains enabled. See [Error reporting](docs/ERROR_REPORTING.md) for receiver configuration and validation.
 
-### Multi-song tips
+### Song request tips
 
-By default, TipTune allows **multiple song requests in a single tip** when the tip amount is a multiple of `General.song_cost`.
-
-This is controlled by:
-
-- `General.multi_request_tips=true|false`
-
-Behavior:
-
-- If `multi_request_tips=true`:
-  - A tip of `song_cost` requests 1 song.
-  - A tip of `2*song_cost` requests 2 songs.
-  - TipTune computes: `request_count = tip_amount // song_cost` (minimum 1).
-- If `multi_request_tips=false`:
-  - Only an **exact** `tip_amount == song_cost` triggers a single song request.
-  - Multiples (like `2*song_cost`) do **not** trigger song requests.
+A tip must match `General.song_cost` **exactly** to request one song. For example,
+with `song_cost=27`, a 27-token tip requests one song; a 54-token tip does not
+trigger a song request. Each qualifying tip uses at most the first identifiable
+song in its message.
 
 ---
 
@@ -190,7 +179,7 @@ Steps:
 
 1. In Settings:
 
-    - On Windows, TipTune automatically prefers **Web Player (Microsoft Edge)** when Spotify reports it as an available, unrestricted device, including when it appears after startup. This preference takes priority over a saved device during automatic selection.
+    - On Windows, TipTune automatically selects and activates **Web Player (Microsoft Edge)** when Spotify reports it as an available, unrestricted device, including when it appears after startup. This works with an empty or paused Spotify queue and preserves Spotify's current play/pause state. This preference takes priority over a saved device during automatic selection.
     - To use another device for the current session, choose it and click **Apply + Save** (writes `Spotify.playback_device_id`). The saved device remains the fallback when the embedded player is unavailable.
 
 Notes:

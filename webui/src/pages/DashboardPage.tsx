@@ -316,7 +316,7 @@ export function DashboardPage() {
       setActiveDeviceName(displayLabel);
 
       const hasActive = !!activeId;
-      if (hasActive && lastActiveDeviceIdRef.current && activeId !== lastActiveDeviceIdRef.current) {
+      if (hasActive && lastActiveDeviceIdRef.current && activeId !== lastActiveDeviceIdRef.current && activeId !== selectedId) {
         setActiveDeviceWarning(`Spotify switched the active device to ${activeName || 'another device'}.`);
       } else if (!hasActive && hadActiveDeviceRef.current) {
         setActiveDeviceWarning('No active Spotify device detected. Open Spotify on a device and start playback.');

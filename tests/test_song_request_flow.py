@@ -1,3 +1,4 @@
+import configparser
 import importlib
 import logging
 import os
@@ -29,27 +30,69 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         cls.runtime.cleanup()
 
     def setUp(self):
+        checks_config = configparser.ConfigParser()
+        checks_config.read_dict({'General': {'song_cost': '27', 'skip_song_cost': '51'}})
+        with patch('helpers.config', checks_config):
+            checks = self.app.Checks()
         self.actions = SimpleNamespace(
             extract_song_titles=AsyncMock(return_value=[SongRequest(song='Hello', artist='Adele')]),
             find_song_spotify=AsyncMock(return_value='spotify:track:'+'A'*22),
             available_in_market=AsyncMock(return_value=True),
             trigger_warning_overlay=AsyncMock(), trigger_song_requester_overlay=AsyncMock())
         self.service = SimpleNamespace(
-            checks=SimpleNamespace(is_song_request=Mock(return_value=True),
-                is_skip_song_request=Mock(return_value=False), get_request_count=Mock(return_value=2)),
+            checks=checks,
             actions=self.actions, _active_source=Mock(return_value='spotify'),
             _allow_source_override_in_request_message=Mock(return_value=False),
             _youtube_url_from_text=Mock(return_value=None),
             search_youtube_tracks=AsyncMock(return_value=[{'uri': 'https://youtu.be/abc'}]),
             publish_request_history_item=Mock(), add_track_to_queue=AsyncMock(return_value=True),
+            advance_queue=AsyncMock(return_value=True),
             _get_obs_overlay_duration_seconds=Mock(return_value=10))
 
-    async def handle(self, message='Hello by Adele'):
+    async def handle(self, message='Hello by Adele', tokens=27):
         await self.app.SongRequestService._handle_tip(self.service,
-            {'tip': {'tokens': 100, 'message': message}, 'user': {'username': 'Test'}})
+            {'tip': {'tokens': tokens, 'message': message}, 'user': {'username': 'Test'}})
 
     def history(self):
         return [call.args[0] for call in self.service.publish_request_history_item.call_args_list]
+
+    async def test_only_exact_song_cost_triggers_a_request(self):
+        for tokens in (0, -27, 26, 28, 54, 81, 100, 27.0, '27', True):
+            with self.subTest(tokens=tokens):
+                await self.handle(tokens=tokens)
+        self.actions.extract_song_titles.assert_not_called()
+        self.service.add_track_to_queue.assert_not_called()
+        self.assertEqual(self.history(), [])
+        await self.handle()
+        self.service.add_track_to_queue.assert_awaited_once()
+        self.assertEqual(self.history()[0]['request_count'], 1)
+
+    async def test_legacy_setting_cannot_enable_request_multiples(self):
+        for setting in ('true', 'false'):
+            with self.subTest(setting=setting):
+                legacy_config = configparser.ConfigParser()
+                legacy_config.read_dict({'General': {'song_cost': '13', 'multi_request_tips': setting}})
+                with patch('helpers.config', legacy_config):
+                    self.service.checks = self.app.Checks()
+                self.assertTrue(self.service.checks.is_song_request(13))
+                self.assertFalse(self.service.checks.is_song_request(13.0))
+                self.assertFalse(self.service.checks.is_song_request(True))
+                await self.handle(tokens=26)
+        self.actions.extract_song_titles.assert_not_called()
+        self.service.add_track_to_queue.assert_not_called()
+
+    async def test_skip_cost_multiples_still_skip(self):
+        for tokens in (51, 102):
+            with self.subTest(tokens=tokens):
+                await self.handle(tokens=tokens)
+        self.assertEqual(self.service.advance_queue.await_count, 2)
+        self.actions.extract_song_titles.assert_not_called()
+
+    async def test_exact_song_request_takes_precedence_over_skip(self):
+        self.service.checks.song_cost = 51
+        await self.handle(tokens=51)
+        self.service.add_track_to_queue.assert_awaited_once()
+        self.service.advance_queue.assert_not_called()
 
     async def test_no_song_does_not_search_original_message(self):
         self.actions.extract_song_titles.return_value = []
@@ -64,7 +107,7 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.history()[0]['error'], 'song extraction failed')
         debug = self.history()[0]['extraction_debug']
         self.assertEqual(debug['exception']['message'], 'timeout')
-        self.assertEqual(debug['request_count'], 2)
+        self.assertEqual(debug['request_count'], 1)
         self.assertEqual(debug['music_source'], 'spotify')
         self.assertEqual(debug['outcome'], 'extraction_failed')
         self.assertGreaterEqual(debug['elapsed_ms'], 0)
@@ -100,7 +143,7 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('[REDACTED]', saved)
 
     async def test_empty_output_retains_per_call_model_diagnostics(self):
-        async def extract(message, count, *, diagnostics):
+        async def extract(message, *, diagnostics):
             diagnostics.update({'stage': 'grounding_validation', 'response': {'output_parsed': {'songs': []}}})
             return []
         self.actions.extract_song_titles.side_effect = extract
@@ -125,16 +168,27 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_short_title_is_unmodified(self):
         await self.handle('U')
-        self.actions.extract_song_titles.assert_awaited_once_with('U', 2, diagnostics=ANY)
+        self.actions.extract_song_titles.assert_awaited_once_with('U', diagnostics=ANY)
 
-    async def test_partial_resolution_survives_exception(self):
+    async def test_only_first_song_is_queued_even_if_extractor_returns_more(self):
+        self.actions.extract_song_titles.return_value = [SongRequest(song='One', artist=''),
+                                                        SongRequest(song='Two', artist='')]
+        await self.handle('One; Two')
+        self.actions.find_song_spotify.assert_awaited_once_with(self.actions.extract_song_titles.return_value[0])
+        self.service.add_track_to_queue.assert_awaited_once()
+        self.assertEqual(len(self.history()), 1)
+        self.assertEqual(self.history()[0]['song'], 'One')
+        self.assertEqual(self.history()[0]['request_count'], 1)
+
+    async def test_failed_first_song_does_not_process_another_request(self):
         self.actions.extract_song_titles.return_value = [SongRequest(song='One', artist=''),
                                                         SongRequest(song='Two', artist='')]
         self.actions.find_song_spotify.side_effect = [SongResolutionError('failed'), 'spotify:track:'+'B'*22]
         await self.handle('One; Two')
-        self.assertEqual([h['status'] for h in self.history()], ['failed', 'added'])
+        self.assertEqual([h['status'] for h in self.history()], ['failed'])
         self.assertEqual(self.history()[0]['error'], 'spotify lookup failed')
-        self.service.add_track_to_queue.assert_awaited_once()
+        self.service.add_track_to_queue.assert_not_called()
+        self.actions.find_song_spotify.assert_awaited_once()
 
     async def test_queue_failure_is_not_reported_as_added(self):
         for failure in [False, RuntimeError('queue failed')]:

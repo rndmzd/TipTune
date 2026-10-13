@@ -1,6 +1,6 @@
 # Song request evaluation
 
-The parser and Spotify resolver can be evaluated without starting TipTune, queueing songs, or controlling playback. The synthetic corpus contains 30 cases covering artist/title order, typos, punctuation, short titles, multiple requests, count limits, chatter, embedded instructions, and recording versions. Mocked tests additionally cover direct/mixed links and service failures.
+The parser and Spotify resolver can be evaluated without starting TipTune, queueing songs, or controlling playback. The synthetic corpus contains 30 cases covering artist/title order, typos, punctuation, short titles, the one-song limit, chatter, embedded instructions, and recording versions. Mocked tests additionally cover direct/mixed links and service failures.
 
 Run the offline checks from the repository root:
 
