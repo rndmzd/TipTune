@@ -592,7 +592,7 @@ export function StatsPage() {
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <span className={active ? 'pill pillInfo' : 'pill pillNeutral'}>{u.user}</span>
-                          <div className="progressTrack" style={{ width: 140 }}>
+                          <div className="progressTrack" style={{ width: 140, marginLeft: 'auto', flexShrink: 0 }}>
                             <div className="progressFill" style={{ width: barW }} />
                           </div>
                         </div>

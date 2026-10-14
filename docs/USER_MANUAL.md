@@ -326,16 +326,23 @@ TipTune persists queue state to a JSON file under the TipTune cache directory (e
 
 Open: `/settings`
 
+Settings panels are stacked in one column. Use the menu on the left to jump to a
+panel; smaller windows use a **Settings section** selector. **Save changes** stays
+pinned at the top when you edit settings. Moving between panels preserves your
+unsaved changes.
+
 Settings are grouped into:
 
-- Playback Device
+- Playback (music source, source override, and Spotify playback device)
+- General (request history size and song/skip costs)
+- Logging (dashboard/history debug output, file logs, and error reporting)
 - Events API
 - OpenAI
 - Spotify
-- Music
-- OBS
 - Search
-- General
+- OBS
+- Stream information display (including OBS overlay duration)
+- OBS overlay status (when the OBS connection is enabled)
 - App Updates (desktop only)
 
 ### Secrets handling
@@ -413,10 +420,18 @@ Used to improve song metadata when the artist is missing.
 
 - `General.song_cost`
 - `General.skip_song_cost`
-- `General.allow_source_override_in_request_message`
-- `General.request_overlay_duration` (seconds)
-- `General.auto_check_updates` (UI toggle)
+- `General.request_history_size`
+
+The **Playback** panel places **Allow Source Override In Request Message** just
+below **Music source** (`General.allow_source_override_in_request_message`).
+**OBS overlay duration (seconds)** is in **Stream information display**
+(`General.request_overlay_duration`). **Automatically check for updates** remains
+in **App Updates** (`General.auto_check_updates`).
+
+### Logging
+
 - `General.show_debug_data` (UI toggle)
+- `General.show_history_debug` (off by default)
 - `General.send_error_reports` (off by default)
 - `General.debug_log_to_file`
 - `General.debug_log_path`

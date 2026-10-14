@@ -98,6 +98,7 @@ test('disconnect clears alerts, hides stale data, and reconnects', async ({ page
       status: {}, alerts: alerts ? [{ id: 'alert', kind: 'general', message: 'Temporary', expires_at: Date.now() / 1000 + 30 }] : [] };
     (window as any).overlayEvents.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify(state) }));
   }, { revision, alerts });
+  await page.waitForFunction(() => !!(window as any).overlayEvents);
   await emit(1, true);
   await expect(page.getByText('Temporary')).toBeVisible();
   await page.evaluate(() => (window as any).overlayEvents.onerror());
