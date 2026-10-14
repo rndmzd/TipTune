@@ -119,3 +119,18 @@ test('mobile panel inspection stays readable without changing broadcast scale', 
   const state = await (await request.get('/api/overlay/state')).json();
   expect(state.state.config.scale).toBe('100');
 });
+
+test('section navigation measures a newly opened save banner before scrolling', async ({ page, request }) => {
+  await request.post('/api/config', { data: { General: { request_overlay_duration: '10' } } });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/settings');
+  const sectionPicker = page.getByLabel('Settings section', { exact: true });
+  await sectionPicker.selectOption('settings-display');
+  await page.getByLabel('OBS overlay duration (seconds)', { exact: true }).fill('20');
+  await sectionPicker.selectOption('settings-logging');
+  await expect.poll(() => page.evaluate(() =>
+    document.querySelector('#settings-logging h2')!.getBoundingClientRect().top
+      - document.querySelector('.settingsNav')!.getBoundingClientRect().bottom
+  )).toBeGreaterThanOrEqual(0);
+  await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeVisible();
+});
