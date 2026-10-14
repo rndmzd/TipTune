@@ -115,12 +115,17 @@ export function OverlaySettings({ cfg, onChange, dirty = false, onActivated }: {
   const url = status.overlay_url || 'http://127.0.0.1:8765/overlay';
   const dimensions = status.viewport || { width: 1920, height: 1080 };
   return <div className="overlay-settings">
-    <h2>Stream information display</h2>
+    <h2 id="settings-display-heading">Stream information display</h2>
     <p className="muted">One transparent browser source for songs, the queue, and request notices. Sound uses your existing audio capture.</p>
     <label htmlFor="overlay-mode">Info display</label>
     <select id="overlay-mode" value={settings.mode} onChange={(e) => update('mode', e.target.value)}>
       <option value="browser">Browser display</option><option value="text">Legacy text sources</option><option value="off">Off</option>
     </select>
+    <label htmlFor="request-overlay-duration">OBS overlay duration (seconds)</label>
+    <input id="request-overlay-duration" type="text" inputMode="decimal"
+      value={cfg.General?.request_overlay_duration || ''} aria-describedby="request-overlay-duration-help"
+      onChange={(e) => onChange('General', 'request_overlay_duration', e.target.value)} />
+    <p id="request-overlay-duration-help" className="muted">How long request, warning, and notice overlays stay visible. Advertisement duration is set separately below.</p>
     <div className="overlay-controls">
       <div><label htmlFor="overlay-layout">Layout</label><select id="overlay-layout" value={settings.layout} onChange={(e) => update('layout', e.target.value)}><option value="full">Full</option><option value="compact">Compact</option></select></div>
       <div><label htmlFor="overlay-position">Position</label><select id="overlay-position" value={settings.position} onChange={(e) => update('position', e.target.value)}>{['bottom-left', 'bottom-right', 'top-left', 'top-right'].map((p) => <option key={p} value={p}>{p.replace('-', ' ')}</option>)}</select></div>

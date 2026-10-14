@@ -117,20 +117,68 @@
  .pillWarn { border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.10); }
  .pillError { border-color: rgba(239, 68, 68, 0.40); background: rgba(239, 68, 68, 0.10); }
 
- .settingsGrid {
-   max-width: 1120px;
-   margin: 0 auto;
+ .settingsPage {
+   --settings-header-height: 0px;
+   --settings-nav-height: 0px;
+ }
+
+ .settingsLayout {
    display: grid;
-   grid-template-columns: 1fr;
-   gap: 16px;
+   grid-template-columns: 208px minmax(0, 1fr);
+   gap: 24px;
    align-items: start;
  }
 
- @media (min-width: 980px) {
-   .settingsGrid { grid-template-columns: 1fr 1fr; }
+ .settingsGrid {
+   display: grid;
+   grid-template-columns: minmax(0, 1fr);
+   gap: 24px;
+   min-width: 0;
  }
 
- .settingsSpanFull { grid-column: 1 / -1; }
+ .settingsNav {
+   position: sticky;
+   top: calc(var(--settings-header-height) + 16px);
+   max-height: calc(100dvh - var(--settings-header-height) - 32px);
+   overflow-y: auto;
+   scrollbar-width: thin;
+   scrollbar-color: var(--accent) var(--surface-2);
+ }
+
+ .settingsSectionLinks { list-style: none; margin: 0; padding: 0 4px; display: grid; gap: 4px; }
+ .settingsSectionLinks a {
+   display: flex;
+   align-items: center;
+   min-height: 44px;
+   padding: 10px 12px;
+   border: 1px solid transparent;
+   border-radius: 12px;
+   color: var(--muted);
+   font-size: 14px;
+   overflow-wrap: anywhere;
+ }
+ .settingsSectionLinks a:hover { color: var(--text); background: var(--surface); text-decoration: none; }
+ .settingsSectionLinks a[aria-current="location"] { color: var(--text); background: var(--accent-weak); border-color: var(--accent); font-weight: 650; }
+ .settingsSectionPicker { display: none; }
+ .settingsSection { min-width: 0; scroll-margin-top: calc(var(--settings-header-height) + var(--settings-nav-height) + 16px); }
+ .settingsSection h2 { font-size: 18px; }
+ .settingsSection p { max-width: 76ch; }
+ .settingsCheckbox { display: flex; gap: 8px; align-items: center; margin-top: 16px; font-size: 13px; }
+ .settingsCheckbox input { width: 16px; height: 16px; padding: 0; margin: 0; flex: 0 0 auto; }
+ .settingsFieldRow { display: flex; gap: 8px; align-items: center; }
+ .settingsFieldRow input { flex: 1; min-width: 0; }
+ .settingsFieldRow button { flex-shrink: 0; }
+
+ @media (max-width: 760px) {
+   .settingsLayout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+   .settingsNav { top: var(--settings-header-height); z-index: 50; max-height: none; overflow: visible; padding: 12px 0; background: var(--bg); border-bottom: 1px solid var(--border); }
+   .settingsSectionLinks { display: none; }
+   .settingsSectionPicker { display: block; }
+   .settingsSectionPicker label { margin-top: 0; }
+   .settingsHeader .headerBar { flex-wrap: wrap; }
+   .settingsHeader .headerTitleWrap { flex-basis: 100%; }
+   .settingsHeader .headerNav { justify-content: flex-start; }
+ }
 
  .settingsHeader {
    position: sticky;

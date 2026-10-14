@@ -4,6 +4,7 @@ import { apiJson } from '../api';
 import type { Device, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { OverlaySettings } from '../components/OverlaySettings';
+import { SettingsLayout } from '../components/SettingsLayout';
 import { refreshReportingConsent, setReportingConsent, type ReportingStatus } from '../errorReporting';
 
 declare const __APP_VERSION__: string;
@@ -590,9 +591,23 @@ export function SettingsPage() {
     }
   }
 
+  const settingsSections = useMemo(() => [
+    { id: 'settings-playback', label: 'Playback' },
+    { id: 'settings-general', label: 'General' },
+    { id: 'settings-logging', label: 'Logging' },
+    { id: 'settings-events', label: 'Events API' },
+    { id: 'settings-openai', label: 'OpenAI' },
+    { id: 'settings-spotify', label: 'Spotify' },
+    { id: 'settings-search', label: 'Search' },
+    { id: 'settings-obs', label: 'OBS' },
+    { id: 'settings-display', label: 'Stream information display' },
+    ...(obsEnabled ? [{ id: 'settings-obs-status', label: 'OBS overlay status' }] : []),
+    { id: 'settings-updates', label: 'App Updates' },
+  ], [obsEnabled]);
+
   return (
-    <>
-      <div className="settingsHeader">
+    <SettingsLayout sections={settingsSections} header={
+      <>
         {isDirty || status ? (
           <div className="saveBanner">
             <div className="saveBannerInner">
@@ -615,16 +630,16 @@ export function SettingsPage() {
           </div>
         ) : null}
         <HeaderBar title="Settings" />
-      </div>
-
-      <div className="settingsGrid">
-        <div className="card">
-          <h2>Playback</h2>
+      </>
+    }>
+        <section id="settings-playback" className="card settingsSection" aria-labelledby="settings-playback-heading" tabIndex={-1}>
+          <h2 id="settings-playback-heading">Playback</h2>
           <div className="highlightField">
-            <label title={tooltip('Music', 'source')} style={{ marginTop: 0 }}>
+            <label htmlFor="music-source" title={tooltip('Music', 'source')} style={{ marginTop: 0 }}>
               Music source
             </label>
             <select
+              id="music-source"
               title={tooltip('Music', 'source')}
               value={v('Music', 'source') || 'spotify'}
               onChange={(e) => setCfg((c) => ({ ...c, Music: { ...(c.Music || {}), source: e.target.value } }))}
@@ -632,6 +647,22 @@ export function SettingsPage() {
               <option value="spotify">Spotify</option>
               <option value="youtube">YouTube</option>
             </select>
+            <label className="settingsCheckbox" title={tooltip('General', 'allow_source_override_in_request_message')}>
+              <input
+                type="checkbox"
+                checked={allowSourceOverrideInRequestMessageEnabled}
+                onChange={(e) =>
+                  setCfg((c) => ({
+                    ...c,
+                    General: {
+                      ...(c.General || {}),
+                      allow_source_override_in_request_message: e.target.checked ? 'true' : 'false',
+                    },
+                  }))
+                }
+              />
+              <span>{humanizeKey('allow_source_override_in_request_message')}</span>
+            </label>
           </div>
 
           <div style={{ marginTop: 18 }}>
@@ -678,10 +709,10 @@ export function SettingsPage() {
             <p className="muted">Web Player (Microsoft Edge) is selected and activated automatically when available. Use Apply + Save to choose another device for this session.</p>
             <p className="muted">The Spotify player login and TipTune API authorization are separate. Connect Spotify below to allow TipTune to discover and control devices.</p>
           </div>
-        </div>
+        </section>
 
-        <div className="card">
-          <h2>General</h2>
+        <section id="settings-general" className="card settingsSection" aria-labelledby="settings-general-heading" tabIndex={-1}>
+          <h2 id="settings-general-heading">General</h2>
 
           <label htmlFor="request-history-size" title={tooltip('General', 'request_history_size')}>Request history size</label>
           <input
@@ -697,7 +728,71 @@ export function SettingsPage() {
             Maximum saved request entries (default: 1,000). Lowering this removes the oldest entries when you save.
           </p>
 
-          <label className="historyDebugSetting" title={tooltip('General', 'show_history_debug')}>
+          <label htmlFor="song-cost" title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>
+          <input
+            id="song-cost"
+            type="text"
+            title={tooltip('General', 'song_cost')}
+            value={v('General', 'song_cost')}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), song_cost: e.target.value } }))}
+          />
+          <label htmlFor="skip-song-cost" title={tooltip('General', 'skip_song_cost')}>{humanizeKey('skip_song_cost')}</label>
+          <input
+            id="skip-song-cost"
+            type="text"
+            title={tooltip('General', 'skip_song_cost')}
+            value={v('General', 'skip_song_cost')}
+            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), skip_song_cost: e.target.value } }))}
+          />
+        </section>
+
+        <section id="settings-logging" className="card settingsSection" aria-labelledby="settings-logging-heading" tabIndex={-1}>
+          <h2 id="settings-logging-heading">Logging</h2>
+          <label className="settingsCheckbox" title={tooltip('General', 'show_debug_data')}>
+            <input
+              type="checkbox"
+              checked={showDebugDataEnabled}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), show_debug_data: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span>Show debug data in dashboard</span>
+          </label>
+
+          <label className="settingsCheckbox" title={tooltip('General', 'debug_log_to_file')}>
+            <input
+              type="checkbox"
+              checked={debugLogToFileEnabled}
+              onChange={(e) =>
+                setCfg((c) => ({
+                  ...c,
+                  General: { ...(c.General || {}), debug_log_to_file: e.target.checked ? 'true' : 'false' },
+                }))
+              }
+            />
+            <span>Write debug logs to file</span>
+          </label>
+
+          <label htmlFor="debug-log-path" title={tooltip('General', 'debug_log_path')}>{humanizeKey('debug_log_path')}</label>
+          <div className="settingsFieldRow">
+            <input
+              id="debug-log-path"
+              type="text"
+              title={tooltip('General', 'debug_log_path')}
+              value={v('General', 'debug_log_path')}
+              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: e.target.value } }))}
+            />
+            {isTauriRuntime() ? (
+              <button type="button" onClick={() => browseDebugLogPath().catch(() => {})}>
+                Browse…
+              </button>
+            ) : null}
+          </div>
+
+          <label className="settingsCheckbox" title={tooltip('General', 'show_history_debug')}>
             <input
               type="checkbox"
               checked={showHistoryDebugEnabled}
@@ -715,7 +810,7 @@ export function SettingsPage() {
             Show extraction errors, model input and responses, and timing on failed requests. Diagnostics are saved even when hidden.
           </p>
 
-          <label className="historyDebugSetting" title={tooltip('General', 'send_error_reports')}>
+          <label className="settingsCheckbox" title={tooltip('General', 'send_error_reports')}>
             <input
               type="checkbox"
               checked={sendErrorReportsEnabled}
@@ -739,104 +834,10 @@ export function SettingsPage() {
             onClick={sendTestReport}>{reportingBusy ? 'Queuing test…' : 'Send test report'}</button>
           {reportingMessage && <p role="status">{reportingMessage}</p>}
           {reportingStatus?.error && <p role="status">{reportingStatus.error}</p>}
+        </section>
 
-          <label title={tooltip('General', 'song_cost')}>{humanizeKey('song_cost')}</label>
-          <input
-            type="text"
-            title={tooltip('General', 'song_cost')}
-            value={v('General', 'song_cost')}
-            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), song_cost: e.target.value } }))}
-          />
-          <label
-            title={tooltip('General', 'allow_source_override_in_request_message')}
-            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
-          >
-            <input
-              type="checkbox"
-              checked={allowSourceOverrideInRequestMessageEnabled}
-              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
-              onChange={(e) =>
-                setCfg((c) => ({
-                  ...c,
-                  General: {
-                    ...(c.General || {}),
-                    allow_source_override_in_request_message: e.target.checked ? 'true' : 'false',
-                  },
-                }))
-              }
-            />
-            <span style={{ whiteSpace: 'nowrap' }}>{humanizeKey('allow_source_override_in_request_message')}</span>
-          </label>
-          <label title={tooltip('General', 'skip_song_cost')}>{humanizeKey('skip_song_cost')}</label>
-          <input
-            type="text"
-            title={tooltip('General', 'skip_song_cost')}
-            value={v('General', 'skip_song_cost')}
-            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), skip_song_cost: e.target.value } }))}
-          />
-          <label title={tooltip('General', 'request_overlay_duration')}>OBS overlay duration</label>
-          <input
-            type="text"
-            title={tooltip('General', 'request_overlay_duration')}
-            value={v('General', 'request_overlay_duration')}
-            onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), request_overlay_duration: e.target.value } }))}
-          />
-
-          <label
-            title={tooltip('General', 'show_debug_data')}
-            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
-          >
-            <input
-              type="checkbox"
-              checked={showDebugDataEnabled}
-              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
-              onChange={(e) =>
-                setCfg((c) => ({
-                  ...c,
-                  General: { ...(c.General || {}), show_debug_data: e.target.checked ? 'true' : 'false' },
-                }))
-              }
-            />
-            <span style={{ whiteSpace: 'nowrap' }}>Show debug data in dashboard</span>
-          </label>
-
-          <label
-            title={tooltip('General', 'debug_log_to_file')}
-            style={{ display: 'flex', justifyContent: 'flex-start', width: 'fit-content', gap: 6, alignItems: 'center', marginTop: 12 }}
-          >
-            <input
-              type="checkbox"
-              checked={debugLogToFileEnabled}
-              style={{ width: 16, height: 16, padding: 0, margin: 0, flex: '0 0 auto' }}
-              onChange={(e) =>
-                setCfg((c) => ({
-                  ...c,
-                  General: { ...(c.General || {}), debug_log_to_file: e.target.checked ? 'true' : 'false' },
-                }))
-              }
-            />
-            <span style={{ whiteSpace: 'nowrap' }}>Write debug logs to file</span>
-          </label>
-
-          <label title={tooltip('General', 'debug_log_path')}>{humanizeKey('debug_log_path')}</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="text"
-              title={tooltip('General', 'debug_log_path')}
-              value={v('General', 'debug_log_path')}
-              onChange={(e) => setCfg((c) => ({ ...c, General: { ...(c.General || {}), debug_log_path: e.target.value } }))}
-              style={{ flex: 1 }}
-            />
-            {isTauriRuntime() ? (
-              <button type="button" onClick={() => browseDebugLogPath().catch(() => {})}>
-                Browse…
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="card">
-          <h2>Events API</h2>
+        <section id="settings-events" className="card settingsSection" aria-labelledby="settings-events-heading" tabIndex={-1}>
+          <h2 id="settings-events-heading">Events API</h2>
           <label title={tooltip('Events API', 'url')}>URL (secret)</label>
           <input
             type="password"
@@ -852,10 +853,10 @@ export function SettingsPage() {
             value={v('Events API', 'max_requests_per_minute')}
             onChange={(e) => setCfg((c) => ({ ...c, 'Events API': { ...(c['Events API'] || {}), max_requests_per_minute: e.target.value } }))}
           />
-        </div>
+        </section>
 
-        <div className="card">
-          <h2>OpenAI</h2>
+        <section id="settings-openai" className="card settingsSection" aria-labelledby="settings-openai-heading" tabIndex={-1}>
+          <h2 id="settings-openai-heading">OpenAI</h2>
           <label title={tooltip('OpenAI', 'api_key')}>API key (secret)</label>
           <input
             type="password"
@@ -871,10 +872,10 @@ export function SettingsPage() {
             value={v('OpenAI', 'model')}
             onChange={(e) => setCfg((c) => ({ ...c, OpenAI: { ...(c.OpenAI || {}), model: e.target.value } }))}
           />
-        </div>
+        </section>
 
-        <div className="card">
-          <h2>Spotify</h2>
+        <section id="settings-spotify" className="card settingsSection" aria-labelledby="settings-spotify-heading" tabIndex={-1}>
+          <h2 id="settings-spotify-heading">Spotify</h2>
           <p role="status">{spotifyStatus?.client_ready && spotifyStatus?.authorized ? 'Spotify API connected.' : spotifyStatus?.in_progress ? 'Waiting for Spotify authorization…' : 'Spotify API is not connected.'}</p>
           {spotifyStatus?.error ? <p role="alert">{spotifyStatus.error}</p> : null}
           <div className="actions">
@@ -899,10 +900,10 @@ export function SettingsPage() {
             value={v('Spotify', 'redirect_url')}
             onChange={(e) => setCfg((c) => ({ ...c, Spotify: { ...(c.Spotify || {}), redirect_url: e.target.value } }))}
           />
-        </div>
+        </section>
 
-        <div className="card">
-          <h2>Search</h2>
+        <section id="settings-search" className="card settingsSection" aria-labelledby="settings-search-heading" tabIndex={-1}>
+          <h2 id="settings-search-heading">Search</h2>
           <label title={tooltip('Search', 'google_api_key')}>{humanizeKey('google_api_key')} (secret)</label>
           <input
             type="password"
@@ -918,10 +919,10 @@ export function SettingsPage() {
             value={v('Search', 'google_cx')}
             onChange={(e) => setCfg((c) => ({ ...c, Search: { ...(c.Search || {}), google_cx: e.target.value } }))}
           />
-        </div>
+        </section>
 
-        <div className="card">
-          <h2>OBS</h2>
+        <section id="settings-obs" className="card settingsSection" aria-labelledby="settings-obs-heading" tabIndex={-1}>
+          <h2 id="settings-obs-heading">OBS</h2>
           <label title={tooltip('OBS', 'enabled')}>OBS connection (automatic setup)</label>
           <select
             title={tooltip('OBS', 'enabled')}
@@ -953,16 +954,16 @@ export function SettingsPage() {
             value={secrets.obsPassword}
             onChange={(e) => setSecrets((s) => ({ ...s, obsPassword: e.target.value }))}
           />
-        </div>
+        </section>
 
-        <div className="card settingsSpanFull overlay-settings-card">
+        <section id="settings-display" className="card settingsSection overlay-settings-card" aria-labelledby="settings-display-heading" tabIndex={-1}>
           <OverlaySettings cfg={cfg} dirty={isDirty} onActivated={() => loadConfig().catch(() => {})}
             onChange={(section, key, value) => setCfg((c) => ({ ...c, [section]: { ...(c[section] || {}), [key]: value } }))} />
-        </div>
+        </section>
 
         {obsEnabled ? (
-          <div className="card settingsSpanFull">
-            <h2>
+          <section id="settings-obs-status" className="card settingsSection" aria-labelledby="settings-obs-status-heading" tabIndex={-1}>
+            <h2 id="settings-obs-status-heading">
               OBS overlay status{' '}
               <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>{obsStatus?.connected ? 'connected' : 'not connected'}</span>
             </h2>
@@ -1370,11 +1371,11 @@ export function SettingsPage() {
               Note: test overlay duration follows your configured OBS overlay duration setting.
             </div>
 </>) : null}
-          </div>
+          </section>
         ) : null}
 
-        <div className="card">
-          <h2>App Updates</h2>
+        <section id="settings-updates" className="card settingsSection" aria-labelledby="settings-updates-heading" tabIndex={-1}>
+          <h2 id="settings-updates-heading">App Updates</h2>
           <div className="muted" style={{ marginTop: -6 }}>
             Check for updates via GitHub releases.
           </div>
@@ -1395,7 +1396,7 @@ export function SettingsPage() {
                 }))
               }
             />
-            <span style={{ whiteSpace: 'nowrap' }}>Automatically check for updates</span>
+            <span>Automatically check for updates</span>
           </label>
 
           {updateObj ? (
@@ -1510,8 +1511,7 @@ export function SettingsPage() {
 
             <span className="muted">{updateMsg}</span>
           </div>
-        </div>
-      </div>
-    </>
+        </section>
+    </SettingsLayout>
   );
 }
