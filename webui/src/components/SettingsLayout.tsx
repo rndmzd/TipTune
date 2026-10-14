@@ -60,6 +60,12 @@ export function SettingsLayout({ header, sections, children }: {
   function focusSection(id: string) {
     const section = document.getElementById(id);
     if (!section) return;
+    // The save banner can resize before the observer's next animation frame.
+    const headerHeight = headerRef.current?.getBoundingClientRect().height || 0;
+    const navHeight = window.matchMedia('(max-width: 760px)').matches
+      ? navRef.current?.getBoundingClientRect().height || 0 : 0;
+    pageRef.current?.style.setProperty('--settings-header-height', `${headerHeight}px`);
+    pageRef.current?.style.setProperty('--settings-nav-height', `${navHeight}px`);
     section.scrollIntoView({ block: 'start' });
     section.focus({ preventScroll: true });
     setActiveSection(id);
