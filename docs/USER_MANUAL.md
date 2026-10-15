@@ -73,7 +73,7 @@ Tip messages can override the default music source by including the word `spotif
 
 ### TipTune audio capture for OBS
 
-TipTune can now create an Application Audio Capture input in OBS targeting `TipTune.exe`. This is used to route YouTube playback audio into OBS. See [OBS integration](#obs-integration).
+TipTune can route YouTube and embedded Spotify through one VB-CABLE source in OBS. See [Audio capture inputs (Windows)](#audio-capture-inputs-windows) for installation and listening setup.
 
 ### Dashboard playback controls
 
@@ -116,7 +116,7 @@ Queue state is persisted under the TipTune cache directory. Older persisted form
 - Download the latest build from GitHub Releases.
 - Launch TipTune.
 
-TipTune starts the service automatically and opens the Spotify page. Sign in to the player and use **Setup Wizard** in the top navigation to configure TipTune on first launch.
+TipTune starts the service automatically. A new installation opens the **Setup Wizard**; configured installations open the Dashboard. Sign in to the embedded player from the **Spotify** tab after connecting your Spotify API account, or choose **Set up later** to start with YouTube.
 
 ### From source (developers/power users)
 
@@ -342,7 +342,7 @@ Settings are grouped into:
 - Search
 - OBS
 - Stream information display (including OBS overlay duration)
-- OBS overlay status (when the OBS connection is enabled)
+- OBS audio sources (when the OBS connection is enabled)
 - App Updates (desktop only)
 
 ### Secrets handling
@@ -396,16 +396,7 @@ Redirect URL rules:
 - `OBS.host`, `OBS.port`, `OBS.password` configure obs-websocket.
 - `OBS.scene_name` controls which scene TipTune targets when creating/validating required text sources.
 
-When enabled, Settings provides:
-
-- **OBS overlay status**
-  - Connected/not connected
-  - Current scene and main scene
-  - Required text source presence
-- **Create missing text sources**
-- **Create Spotify audio capture** (Windows, Application Audio Capture for `Spotify.exe`)
-- **Create TipTune audio capture** (Windows, Application Audio Capture for `TipTune.exe` — routes YouTube playback audio into OBS)
-- **Test overlays**
+When enabled, Settings provides the OBS connection, **Add to OBS** scene/browser-source setup, **Stream information display** previews and send buttons, and **OBS audio sources**. Configured sections collapse and retain their status labels. If OBS is closed, the page waits for OBS instead of reporting downstream sources as missing.
 
 ### Search (Google Custom Search)
 
@@ -498,14 +489,7 @@ connection enables automatic setup; manual browser display works without it.
 
 ### Browser display
 
-Open **Stream information display** in Settings or the Setup Wizard. Fresh
-installations use **Browser display**. Save connection details and appearance
-changes, select an OBS scene, then use **Add browser overlay**. Existing users
-can use **Switch to browser overlay**: creation is verified before changing
-modes, and the four old text items are hidden in the selected scene while their
-inputs are retained. Source-name conflicts are reported instead of overwriting
-unrelated sources. Adding again reuses the input and preserves existing scene
-item transforms. Add the same existing input to other scenes as needed.
+In Settings or the Setup Wizard, enable **Show stream information display**. Save the OBS connection, choose a scene and source name in **Add to OBS**, save, then select **Add browser overlay**. Source-name conflicts are reported instead of overwriting unrelated sources. Existing text items in the selected scene are hidden when the browser display is activated; their inputs are retained. Adding again reuses the browser input and preserves its scene-item transforms.
 
 For manual setup, copy the displayed URL (normally
 `http://127.0.0.1:8765/overlay`) into an OBS Browser Source. Match the OBS base
@@ -537,12 +521,7 @@ restores current state without replaying expired messages. Alert durations use
 `General.request_overlay_duration` by default; at most three alerts are visible
 at once, with a bounded queue for bursts.
 
-Appearance is stored in `[Overlay]` in `config.ini`. Configurations without
-`Overlay.mode` retain text mode when OBS was enabled or Off otherwise. To switch
-back, select **Legacy text sources** and save; the existing input names remain
-available. Other scenes are retained during migration, so hide old text items
-there when reusing the browser input. Audio continues through the existing
-Spotify and TipTune audio-capture sources.
+Appearance is stored in `[Overlay]` in `config.ini`. The display checkbox controls browser display. Existing legacy text inputs are retained for manual cleanup in OBS; the wizard and Settings use browser display. Other scenes are retained, so hide old text items there when reusing the browser input.
 
 ### Prereqs
 
@@ -550,40 +529,22 @@ Spotify and TipTune audio-capture sources.
 - Enable obs-websocket in OBS.
   - Commonly: **Tools → WebSocket Server Settings**
 
-### Legacy text sources
-
-TipTune expects text sources with these names:
-
-- `SongRequester`
-- `WarningOverlay`
-- `GeneralOverlay`
-- `NowPlayingOverlay`
-
-You can create them manually, but the easiest path is:
-
-- Settings → **Create missing text sources**
-
-After creation:
-
-- Go to OBS and set size/position of each text source.
-
 ### Audio capture inputs (Windows)
 
-TipTune can also create Application Audio Capture inputs in OBS:
+One **TipTune Audio** source captures YouTube and the embedded Spotify player through a dedicated **VB-CABLE** in the Windows desktop app.
 
-- **Spotify Audio** — captures `Spotify.exe` audio for Spotify playback.
-- **TipTune Audio** — captures `TipTune.exe` audio for YouTube playback (routes the in-app YouTube audio player into OBS).
+1. Install [VB-CABLE from VB-Audio](https://vb-audio.com/Cable/): extract the download, run the installer as administrator, then restart Windows.
+2. Keep Windows' default output on your usual speakers or headphones. In **OBS → Settings → Audio**, select your listening device as the monitoring device. Dedicate CABLE Input to TipTune. Exclude the monitoring device from Desktop Audio or Audio Output Capture sources to avoid capturing TipTune twice.
+3. In the Setup Wizard's OBS sources step or Settings → **OBS audio sources**, enable **Capture TipTune audio in OBS**. Save, then select **Set up audio capture**. The wizard has **Save OBS setup** so you can save without leaving the step.
+4. Play a YouTube or Spotify request and check the **TipTune Audio** meter in OBS. If the meter moves but you hear nothing, check OBS's monitoring device, source mute, and volume.
 
-Use the corresponding buttons in Settings:
-
-- **Create Spotify audio capture**
-- **Create TipTune audio capture**
+TipTune selects **CABLE Input** for its embedded players and captures **CABLE Output** in OBS, with source monitoring enabled. When OBS is closed or the capture is unavailable, TipTune uses its normal output. Spotify API authorization and the embedded player's login are separate; sign in to both with the same account. A new user can choose **Set up later** for Spotify and the Events API and start with manual YouTube playback.
 
 ### Testing
 
 In Settings:
 
-- Use **Test overlays** to confirm each overlay appears.
+- Use the preview buttons to check drafts locally, then **Send request/warning/notice to OBS** to check the actual overlay.
 
 Overlay duration is controlled by:
 

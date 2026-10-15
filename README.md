@@ -37,7 +37,7 @@ The Setup Wizard walks you through:
 - Events API (optional)
 - OpenAI (optional but recommended for AI-assisted parsing)
 - Google Custom Search (optional)
-- OBS connection + creating required text sources (optional)
+- OBS connection, browser overlay, and embedded audio setup (optional)
 - General settings (song/skip costs, overlay duration)
 
 If you need to rerun setup:
@@ -115,7 +115,7 @@ TipTune uses these sections/keys (see `config.ini.example`):
 - `[Search]` (optional)
   - `google_api_key`, `google_cx`
 - `[OBS]` (optional)
-  - `enabled`, `host`, `port`, `password`, `scene_name`
+  - `enabled`, `host`, `port`, `password`, `scene_name`, `use_virtual_cable`
 - `[Web]` (optional)
   - `host`, `port`
 - `[Music]` (required)
@@ -219,15 +219,14 @@ Steps:
     - `OBS.enabled=true`
     - `OBS.host`, `OBS.port` (often `4455`), `OBS.password`
 
-1. Open **Stream information display** in Setup Wizard or Settings. Choose a scene and source name, save settings, then click **Add browser overlay** (or **Switch to browser overlay** for existing text setups).
+1. In Setup Wizard or Settings, enable **Show stream information display**. Choose a scene and source name in **Add to OBS**, save, then click **Add browser overlay**.
 1. Use the **Full** or **Compact** preset and adjust position, scale, colors, visible panels, and motion. Preview buttons affect only the preview; **Send … to OBS** buttons appear on the actual source. Saved appearance changes apply live. Use **Inspect panels** to read the preview at a comfortable size on smaller screens.
 1. Optional: under **Advertisements**, enable **Show song request advertisements**, choose the interval and duration in seconds, then save. Ads show the current song/skip token prices and explain how to include the song title and artist in a tip message. **Preview advertisement** uses your draft prices without changing the broadcast. Ads default to off; when enabled, they default to every 300 seconds for 15 seconds. The interval can be 60–86400 seconds and the duration 5–30 seconds. The first ad waits one interval; intervals are measured between ad starts. Ads share the overlay’s layout, colors, opacity, and Motion setting and respect reduced motion.
-1. Optional: use **Create Spotify audio capture** (Windows) to set up an Application Audio Capture input for `Spotify.exe`.
-1. Optional: use **Create TipTune audio capture** (Windows) to set up an Application Audio Capture input for `TipTune.exe` (for YouTube playback audio sync in OBS).
+1. Optional, in the Windows desktop app: dedicate an installed **VB-CABLE** to TipTune. Under **OBS audio sources**, enable **Capture TipTune audio in OBS**, save, then choose **Set up audio capture**. One **TipTune Audio** source captures both YouTube and embedded Spotify from **CABLE Output (VB-Audio Virtual Cable)**, with monitoring enabled so you can hear playback through OBS. TipTune returns to normal speaker output while OBS is closed or the source is unavailable. Other apps and the Windows default output keep their existing routing.
 
 `scenes.yaml` defines scene metadata used by the project.
 
-For manual setup, select **Browser display**, save, then add a Browser Source in
+For manual setup, enable **Show stream information display**, save, then add a Browser Source in
 OBS with the URL shown in Settings (normally `http://127.0.0.1:8765/overlay`). Set
 its width and height to your OBS base canvas and use 30 FPS. Leave **Shutdown
 source when not visible** and **Refresh browser when scene becomes active** off.
@@ -235,12 +234,9 @@ Manual setup does not require an OBS WebSocket connection. Start TipTune first;
 if OBS loaded the page before TipTune started, refresh the source. When enabled,
 the OBS connection attempts a source refresh after backend startup.
 
-Fresh installations use Browser display. Existing configurations without
-`[Overlay].mode` retain legacy text display when OBS was enabled, or Off when it
-was disabled. **Switch to browser overlay** verifies the browser input first,
-then hides legacy text items in the selected scene and retains their inputs.
-Select **Legacy text sources** and save to switch back. Other scenes are retained;
-hide any old text items there when reusing the browser input across scenes.
+The wizard and Settings use browser display. Existing legacy text inputs are retained, and activating the browser source hides the old items in the selected scene. Other scenes are retained; hide old text items there when reusing the browser input.
+
+For first-time Windows audio setup, follow the shared **VB-CABLE installation and listening setup** guide in the audio panel, or the [quick start](docs/QUICK_START.md#embedded-audio-on-windows). Install VB-CABLE separately and restart Windows. Keep Windows' default output on your usual listening device, and select that device for OBS monitoring. The wizard offers **Save OBS setup** before creating sources. Spotify and the Events API can be set up later for users starting with manual YouTube playback.
 
 The page reads cached display state through `/api/overlay/state` and
 `/api/overlay/events`; it never controls playback or reads raw tip messages.

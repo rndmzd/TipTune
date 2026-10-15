@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 
+from utils.audio_capture import desktop_audio_executable
 from utils.process_lifecycle import ParentProcess, join_desktop_job
 
 try:
@@ -625,6 +626,7 @@ class WebUI:
             web.post('/api/queue/move', self._api_queue_move),
             web.post('/api/queue/delete', self._api_queue_delete),
             web.get('/api/obs/status', self._api_obs_status),
+            web.get('/api/audio/output', self._api_audio_output),
             web.post('/api/obs/scenes', self._api_obs_scenes),
             web.post('/api/obs/ensure_sources', self._api_obs_ensure_sources),
             web.post('/api/obs/ensure_spotify_audio_capture', self._api_obs_ensure_spotify_audio_capture),
@@ -1117,6 +1119,10 @@ class WebUI:
         except Exception as exc:
             logger.exception("webui.api.obs_status.error", exc=exc, message="Failed to get OBS status")
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def _api_audio_output(self, _request: web.Request) -> web.Response:
+        data = await self._service.get_audio_output()
+        return web.json_response({'ok': True, **data}, headers={'Cache-Control': 'no-store'})
 
     async def _api_obs_scenes(self, request: web.Request) -> web.Response:
         try:
@@ -2188,13 +2194,19 @@ class SongRequestService:
                 overlay_info['viewport'] = {'width': video['baseWidth'], 'height': video['baseHeight']}
 
         spotify_audio_capture = None
-        tiptune_audio_capture = None
+        host_exe = desktop_audio_executable()
+        tiptune_audio_capture = {'target_exe': host_exe, 'configured': False, 'present': False,
+                                 'state': 'needs_desktop', 'message': 'Open the TipTune desktop app, or capture the browser playing audio manually in OBS.'}
         try:
             spotify_audio_capture = await obs.get_spotify_audio_capture_status(scene_key='main', exe_name='Spotify.exe', scene_name=scene_name or None)
         except Exception:
             spotify_audio_capture = None
         try:
-            tiptune_audio_capture = await obs.get_app_audio_capture_status(scene_key='main', exe_name='TipTune.exe', scene_name=scene_name or None)
+            if config.getboolean('OBS', 'use_virtual_cable', fallback=False):
+                if host_exe:
+                    tiptune_audio_capture = await obs.get_cable_audio_capture_status(scene_name)
+            elif host_exe:
+                tiptune_audio_capture = await obs.get_app_audio_capture_status(scene_key='main', exe_name=host_exe, scene_name=scene_name or None)
         except Exception:
             tiptune_audio_capture = None
 
@@ -2255,7 +2267,34 @@ class SongRequestService:
             return None
 
         scene_name = config.get("OBS", "scene_name", fallback="").strip() if config.has_section("OBS") else ""
-        return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name='TipTune.exe', preferred_input_name='TipTune Audio', scene_name=scene_name or None)
+        host_exe = desktop_audio_executable()
+        if not host_exe:
+            return {'configured': False, 'state': 'needs_desktop', 'errors': ['Open the TipTune desktop app before setting up its audio capture.']}
+        if config.getboolean('OBS', 'use_virtual_cable', fallback=False):
+            return await obs.ensure_cable_audio_capture(scene_name)
+        return await obs.ensure_spotify_audio_capture(scene_key='main', exe_name=host_exe, preferred_input_name='TipTune Audio', scene_name=scene_name or None)
+
+    async def get_audio_output(self) -> Dict[str, Any]:
+        requested = config.getboolean('OBS', 'use_virtual_cable', fallback=False)
+        result = {'requested': requested, 'enabled': False}
+        if not requested or not config.getboolean('OBS', 'enabled', fallback=False) or not desktop_audio_executable():
+            return result
+
+        async def check_capture():
+            await self._refresh_obs_integration_from_config()
+            obs = getattr(self.actions, 'obs', None)
+            if obs is None or not getattr(self.actions, 'obs_integration_enabled', False):
+                return False
+            status = await obs.get_cable_audio_capture_status(config.get('OBS', 'scene_name', fallback='').strip())
+            return bool(status and status.get('configured'))
+
+        try:
+            result['enabled'] = await asyncio.wait_for(check_capture(), timeout=3)
+        except Exception:
+            # OBS being closed, muted or unavailable must not leave playback
+            # stranded on a cable with nobody monitoring it.
+            pass
+        return result
 
     async def list_obs_scenes(self, host: Optional[str] = None, port: Optional[int] = None, password: Any = None) -> Optional[list[str]]:
         desired_enabled = config.getboolean("OBS", "enabled", fallback=True) if config.has_section("OBS") else False
@@ -4510,7 +4549,7 @@ class SongRequestService:
                 "debug_log_to_file",
                 "debug_log_path",
             },
-            "OBS": {"enabled", "host", "port", "password", "scene_name"},
+            "OBS": {"enabled", "host", "port", "password", "scene_name", "use_virtual_cable"},
             "Web": {"host", "port"},
         }
 
@@ -4532,6 +4571,11 @@ class SongRequestService:
                     continue
 
                 value_str = str(value)
+                if section == 'OBS' and key == 'use_virtual_cable':
+                    enabled = configparser.ConfigParser.BOOLEAN_STATES.get(value_str.strip().lower())
+                    if enabled is None:
+                        return (False, 'Capture TipTune audio in OBS must be true or false.')
+                    value_str = 'true' if enabled else 'false'
                 if section == 'General' and key in ('show_history_debug', 'send_error_reports'):
                     enabled = configparser.ConfigParser.BOOLEAN_STATES.get(value_str.strip().lower())
                     if enabled is None:

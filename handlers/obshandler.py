@@ -11,6 +11,9 @@ from utils.structured_logging import get_structured_logger
 logger = get_structured_logger('tiptune.handlers.obshandler')
 
 REQUIRED_TEXT_SOURCES = ['SongRequester', 'WarningOverlay', 'GeneralOverlay', 'NowPlayingOverlay']
+CABLE_DEVICE = 'CABLE Output (VB-Audio Virtual Cable)'
+CABLE_PLACEHOLDER = 'tiptune-vb-cable-unconfigured'
+CABLE_SOURCE_NAMES = ['TipTune Audio', 'TipTune Audio 2', 'TipTune Audio 3', 'TipTune Audio Capture']
 
 DEFAULT_TEXT_SETTINGS_GDIPLUS: Dict[str, Any] = {
     'align': 'left',
@@ -28,22 +31,14 @@ DEFAULT_TEXT_SETTINGS_GDIPLUS: Dict[str, Any] = {
     'text': '',
 }
 
-def _deep_contains_text(obj: Any, needle_lower: str) -> bool:
-    if obj is None:
-        return False
-    if isinstance(obj, str):
-        return needle_lower in obj.lower()
-    if isinstance(obj, dict):
-        for v in obj.values():
-            if _deep_contains_text(v, needle_lower):
-                return True
-        return False
-    if isinstance(obj, (list, tuple)):
-        for v in obj:
-            if _deep_contains_text(v, needle_lower):
-                return True
-        return False
-    return False
+def _audio_window_executable(value: Any) -> Optional[str]:
+    # OBS stores window selectors as escaped-title:window-class:executable.
+    # A title or unrelated property mentioning an EXE is not a capture target.
+    if not isinstance(value, str):
+        return None
+    parts = value.rsplit(':', 2)
+    return parts[2].casefold() if len(parts) == 3 and parts[2] else None
+
 
 def _first_string(*vals: Any) -> Optional[str]:
     for v in vals:
@@ -628,192 +623,249 @@ class OBSHandler:
             'inputName': name, 'propertyName': 'refreshnocache'})
         return ok
 
-    async def _get_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        main_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
+    async def _get_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None,
+                                        preferred_input_name: str = '') -> Optional[Dict[str, Any]]:
+        scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
+        inputs = await self._get_inputs()
+        if inputs is None or not exe_name:
+            return None
+        owned_names = {preferred_input_name, f'{preferred_input_name} 2', f'{preferred_input_name} 3', f'{preferred_input_name} Capture'} if preferred_input_name else set()
+        candidates = []
+        for item in inputs:
+            name = item.get('inputName')
+            if not isinstance(name, str) or item.get('inputKind') != 'wasapi_process_output_capture':
+                continue
+            ok, response, _, _ = await self._send_request_with_status('GetInputSettings', {'inputName': name})
+            if not ok:
+                return None  # A failed inspection is not evidence that a capture is missing.
+            settings = (response or {}).get('inputSettings') or {}
+            selected_exe = _audio_window_executable(settings.get('window'))
+            matches = selected_exe == exe_name.casefold()
+            # Reuse our empty placeholders and repair the old Python-sidecar
+            # target. A named source capturing another app may be intentional.
+            repairable = name in owned_names and (not selected_exe or (
+                preferred_input_name == 'TipTune Audio' and selected_exe == 'tiptune.exe'))
+            if not matches and not repairable:
+                continue
+            item_id = None
+            if scene:
+                ok, item_response, code, _ = await self._send_request_with_status('GetSceneItemId', {
+                    'sceneName': scene, 'sourceName': name}, max_retries=0)
+                if not ok and code != 600:  # ResourceNotFound is the only confirmed missing item.
+                    return None
+                if ok:
+                    item_id = (item_response or {}).get('sceneItemId')
+                    if not isinstance(item_id, int):
+                        return None
+            candidates.append((int(matches) * 2 + int(item_id is not None), name, settings, item_id, matches))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        result = {'target_exe': exe_name, 'input_name': None, 'input_kind': None,
+                  'input_exists': False, 'in_main_scene': False, 'target_matches': False,
+                  'configured': False, 'present': False, 'state': 'needs_setup'}
+        if not candidates:
+            return result
+        _, name, settings, item_id, matches = candidates[0]
+        try:
+            matches = matches and int(settings.get('priority', 0)) == 2
+        except (TypeError, ValueError):
+            matches = False
+        result.update(input_name=name, input_kind='wasapi_process_output_capture', input_exists=True,
+                      in_main_scene=item_id is not None, target_matches=matches,
+                      selected_exe=_audio_window_executable(settings.get('window')))
+        if not matches or item_id is None:
+            return result
+        enabled_ok, enabled, _, _ = await self._send_request_with_status('GetSceneItemEnabled', {'sceneName': scene, 'sceneItemId': item_id})
+        mute_ok, mute, _, _ = await self._send_request_with_status('GetInputMute', {'inputName': name})
+        if not enabled_ok or not mute_ok or not isinstance((enabled or {}).get('sceneItemEnabled'), bool) or not isinstance((mute or {}).get('inputMuted'), bool):
+            result['state'] = 'unavailable'
+            return result
+        result.update(scene_item_enabled=enabled['sceneItemEnabled'], muted=mute['inputMuted'])
+        result['state'] = 'disabled' if not enabled['sceneItemEnabled'] else 'muted' if mute['inputMuted'] else 'configured'
+        result['configured'] = result['present'] = result['state'] == 'configured'
+        return result
+
+    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._get_audio_capture_status(scene_key, exe_name, scene_name, 'Spotify Audio')
+
+    async def get_app_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        return await self._get_audio_capture_status(scene_key, exe_name, scene_name, 'TipTune Audio')
+
+    async def get_cable_audio_capture_status(self, scene_name: str) -> Optional[Dict[str, Any]]:
         inputs = await self._get_inputs()
         if inputs is None:
             return None
-
-        needle = str(exe_name or '').strip().lower()
-        if not needle:
-            return None
-
-        matched_name: Optional[str] = None
-        matched_kind: Optional[str] = None
-
+        result = {'input_name': None, 'input_exists': False, 'in_main_scene': False,
+                  'target_matches': False, 'configured': False, 'present': False, 'state': 'needs_setup'}
+        candidates = []
+        devices = None
         for item in inputs:
             name = item.get('inputName')
-            kind = item.get('inputKind')
-            if not isinstance(name, str) or not name.strip():
+            if not name or item.get('inputKind') != 'wasapi_input_capture':
                 continue
+            if devices is None:
+                ok, properties, _, _ = await self._send_request_with_status('GetInputPropertiesListPropertyItems', {
+                    'inputName': name, 'propertyName': 'device_id'}, max_retries=0)
+                if not ok:
+                    return None
+                devices = [device for device in (properties or {}).get('propertyItems', [])
+                           if device.get('itemName') == CABLE_DEVICE and device.get('itemValue') not in ('', 'default', None)]
+            ok, response, _, _ = await self._send_request_with_status('GetInputSettings', {'inputName': name}, max_retries=0)
+            if not ok:
+                return None
+            selected = ((response or {}).get('inputSettings') or {}).get('device_id')
+            device = next((device for device in devices if device.get('itemValue') == selected), None)
+            placeholder = name in CABLE_SOURCE_NAMES and selected == CABLE_PLACEHOLDER
+            if not device and not placeholder:
+                continue  # Never repurpose another microphone or virtual bus.
+            item_id = None
+            if scene_name:
+                ok, response, code, _ = await self._send_request_with_status('GetSceneItemId', {
+                    'sceneName': scene_name, 'sourceName': name}, max_retries=0)
+                if not ok and code != 600:
+                    return None
+                if ok:
+                    item_id = (response or {}).get('sceneItemId')
+                    if not isinstance(item_id, int):
+                        return None
+            matches = bool(device and device.get('itemEnabled', True))
+            candidates.append((int(matches) * 2 + int(item_id is not None), name, item_id, matches, placeholder))
+        if not candidates:
+            return result
+        _, name, item_id, matches, placeholder = max(candidates, key=lambda item: item[0])
+        result.update(input_name=name, input_exists=True, input_kind='wasapi_input_capture',
+                      in_main_scene=item_id is not None, target_matches=matches, placeholder=placeholder)
+        if not matches or item_id is None:
+            if not any(device.get('itemEnabled', True) for device in devices or []):
+                result['state'] = 'device_missing'
+            return result
+        enabled_ok, enabled, _, _ = await self._send_request_with_status('GetSceneItemEnabled', {
+            'sceneName': scene_name, 'sceneItemId': item_id}, max_retries=0)
+        mute_ok, mute, _, _ = await self._send_request_with_status('GetInputMute', {'inputName': name}, max_retries=0)
+        monitor_ok, monitor, _, _ = await self._send_request_with_status('GetInputAudioMonitorType', {'inputName': name}, max_retries=0)
+        if not enabled_ok or not mute_ok or not monitor_ok or not isinstance((enabled or {}).get('sceneItemEnabled'), bool) or not isinstance((mute or {}).get('inputMuted'), bool):
+            result['state'] = 'unavailable'
+            return result
+        monitoring = (monitor or {}).get('monitorType') == 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'
+        result.update(scene_item_enabled=enabled['sceneItemEnabled'], muted=mute['inputMuted'], monitoring=monitoring)
+        result['state'] = 'disabled' if not enabled['sceneItemEnabled'] else 'muted' if mute['inputMuted'] else 'needs_monitoring' if not monitoring else 'configured'
+        result['configured'] = result['present'] = result['state'] == 'configured'
+        return result
 
-            should_check = True
-            if isinstance(kind, str) and kind.strip():
-                k = kind.lower()
-                should_check = ('audio' in k) or ('wasapi' in k) or ('application' in k)
-            if not should_check:
-                continue
-
-            settings_resp = await self.send_request('GetInputSettings', {'inputName': name})
-            if not settings_resp:
-                continue
-            settings = settings_resp.get('inputSettings')
-            if _deep_contains_text(settings, needle):
-                matched_name = name
-                matched_kind = settings_resp.get('inputKind') if isinstance(settings_resp.get('inputKind'), str) else (kind if isinstance(kind, str) else None)
-                break
-
-        input_exists = bool(matched_name)
-        in_main_scene = False
-        if main_scene and matched_name:
-            in_main_scene = (await self._get_scene_item_id_by_scene_name(main_scene, matched_name)) is not None
-
-        return {
-            'target_exe': exe_name,
-            'input_name': matched_name,
-            'input_kind': matched_kind,
-            'input_exists': bool(input_exists),
-            'in_main_scene': bool(in_main_scene),
-            'present': bool(input_exists and in_main_scene),
-        }
-
-    async def get_spotify_audio_capture_status(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        return await self._get_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=scene_name)
-
-    async def get_app_audio_capture_status(self, scene_key: str = 'main', exe_name: str = '', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        return await self._get_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=scene_name)
-
-    async def ensure_spotify_audio_capture(self,
-                                          scene_key: str = 'main',
-                                          exe_name: str = 'Spotify.exe',
-                                          preferred_input_name: str = 'Spotify Audio',
-                                          scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        resolved_scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
-        if not resolved_scene:
-            resolved_scene = await self.get_current_scene()
-        if not resolved_scene:
-            return None
-        status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=resolved_scene)
+    async def ensure_cable_audio_capture(self, scene_name: str) -> Optional[Dict[str, Any]]:
+        if not scene_name:
+            return {'configured': False, 'errors': ['Choose an OBS scene and save it before setting up audio.']}
+        status = await self.get_cable_audio_capture_status(scene_name)
         if status is None:
             return None
+        name = status['input_name']
+        result = {'scene': scene_name, 'input_name': name, 'created': False, 'added_to_scene': False,
+                  'configured': False, 'errors': []}
 
-        input_name = status.get('input_name') if isinstance(status.get('input_name'), str) else None
+        async def request(kind, data):
+            ok, response, code, error = await self._send_request_with_status(kind, data, max_retries=0)
+            if not ok:
+                raise RuntimeError(error or f'{kind} failed ({code})')
+            return response or {}
 
-        created = False
-        configured = False
-        added_to_scene = False
-        errors: list[str] = []
-
-        if not input_name:
-            # Create a new Application Audio Capture (WASAPI process output capture)
-            base = preferred_input_name or 'Spotify Audio'
-            candidate_names = [base, f'{base} 2', f'{base} 3', 'Spotify Audio Capture']
-            created_name: Optional[str] = None
-
-            for cand in candidate_names:
-                ok, _, code, comment = await self._send_request_with_status('CreateInput', {
-                    'sceneName': resolved_scene,
-                    'inputName': cand,
-                    'inputKind': 'wasapi_process_output_capture',
-                    'inputSettings': {
-                        'priority': 2,
-                        'window': '',
-                    },
-                    'sceneItemEnabled': True,
-                }, max_retries=0)
-                if ok:
-                    created_name = cand
-                    created = True
-                    break
-                if code is not None or comment:
-                    errors.append(f'CreateInput {cand}: {code if code is not None else ""} {comment or ""}'.strip())
-                else:
-                    errors.append(f'CreateInput {cand}: failed')
-
-            if not created_name:
-                return {
-                    'scene': resolved_scene,
-                    'target_exe': exe_name,
-                    'input_name': None,
-                    'created': False,
-                    'configured': False,
-                    'added_to_scene': False,
-                    'errors': errors,
-                }
-
-            input_name = created_name
-            status = await self.get_spotify_audio_capture_status(scene_key=scene_key, exe_name=exe_name, scene_name=resolved_scene) or status
-
-        # Ensure it's in the scene
-        scene_item_id = await self._get_scene_item_id_by_scene_name(resolved_scene, input_name)
-        if scene_item_id is None:
-            resp = await self.send_request('CreateSceneItem', {
-                'sceneName': resolved_scene,
-                'sourceName': input_name,
-            })
-            if resp and 'sceneItemId' in resp:
-                added_to_scene = True
-            else:
-                errors.append('add_to_scene_failed')
-
-        # Configure the window selector if we can find a Spotify.exe entry.
         try:
-            props = await self.send_request('GetInputPropertiesListPropertyItems', {
-                'inputName': input_name,
-                'propertyName': 'window',
-            })
-
-            selected_window: Optional[str] = None
-            items = None
-            if isinstance(props, dict):
-                items = props.get('propertyItems')
-            if isinstance(items, list):
-                needle = str(exe_name or '').lower()
-                for it in items:
-                    if not isinstance(it, dict):
-                        continue
-                    item_name = _first_string(it.get('itemName'), it.get('itemValue'))
-                    item_value = _first_string(it.get('itemValue'), it.get('itemName'))
-                    if item_name and needle in item_name.lower():
-                        selected_window = item_value or item_name
-                        break
-                    if item_value and needle in item_value.lower():
-                        selected_window = item_value
-                        break
-
-            if selected_window:
-                await self.send_request('SetInputSettings', {
-                    'inputName': input_name,
-                    'inputSettings': {
-                        'priority': 2,
-                        'window': selected_window,
-                    }
-                })
-                configured = True
+            if not name:
+                inputs = await self._get_inputs()
+                if inputs is None:
+                    return None
+                used = {item.get('inputName') for item in inputs}
+                name = next((candidate for candidate in CABLE_SOURCE_NAMES if candidate not in used), None)
+                if not name:
+                    raise RuntimeError('Choose a free TipTune Audio source name in OBS.')
+                # An explicit invalid device and hidden scene item avoid capturing
+                # the default microphone while discovering the installed cable ID.
+                await request('CreateInput', {'sceneName': scene_name, 'inputName': name,
+                    'inputKind': 'wasapi_input_capture', 'inputSettings': {'device_id': CABLE_PLACEHOLDER},
+                    'sceneItemEnabled': False})
+                result.update(input_name=name, created=True)
+            if not status['target_matches']:
+                properties = await request('GetInputPropertiesListPropertyItems', {'inputName': name, 'propertyName': 'device_id'})
+                device_id = next((item.get('itemValue') for item in properties.get('propertyItems', [])
+                    if item.get('itemName') == CABLE_DEVICE and item.get('itemEnabled', True)
+                    and item.get('itemValue') not in ('', 'default', None)), None)
+                if not device_id:
+                    raise RuntimeError('Enable CABLE Output (VB-Audio Virtual Cable) in Windows sound settings, then try again.')
+                await request('SetInputSettings', {'inputName': name, 'inputSettings': {'device_id': device_id}, 'overlay': True})
+            await request('SetInputAudioMonitorType', {'inputName': name, 'monitorType': 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT'})
+            if not result['created'] and not status['in_main_scene']:
+                await request('CreateSceneItem', {'sceneName': scene_name, 'sourceName': name, 'sceneItemEnabled': True})
+                result['added_to_scene'] = True
+            if result['created'] or status.get('placeholder'):
+                item = await request('GetSceneItemId', {'sceneName': scene_name, 'sourceName': name})
+                await request('SetSceneItemEnabled', {'sceneName': scene_name, 'sceneItemId': item['sceneItemId'], 'sceneItemEnabled': True})
+            verified = await self.get_cable_audio_capture_status(scene_name)
+            if verified is None or verified['input_name'] != name:
+                raise RuntimeError('Could not verify audio capture. Refresh status and try again.')
+            result.update(verified)
+            if verified['state'] not in ('configured', 'muted', 'disabled'):
+                raise RuntimeError('OBS did not retain the requested audio settings. Refresh status and try again.')
         except Exception as exc:
-            errors.append(str(exc))
+            result['errors'].append(str(exc))
+        return result
 
-        in_main_scene = (await self._get_scene_item_id_by_scene_name(resolved_scene, input_name)) is not None
-        # Determine if settings actually target Spotify.exe (optional, best-effort)
-        targets_exe = False
-        try:
-            settings_resp = await self.send_request('GetInputSettings', {'inputName': input_name})
-            if settings_resp and _deep_contains_text(settings_resp.get('inputSettings'), str(exe_name or '').lower()):
-                targets_exe = True
-        except Exception:
-            targets_exe = False
+    async def ensure_spotify_audio_capture(self, scene_key: str = 'main', exe_name: str = 'Spotify.exe',
+                                          preferred_input_name: str = 'Spotify Audio', scene_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        scene = self._resolve_scene_name(scene_name=scene_name, scene_key=scene_key)
+        if not scene or not exe_name:
+            return None
+        status = await self._get_audio_capture_status(scene_key, exe_name, scene, preferred_input_name)
+        if status is None:
+            return None
+        name = status.get('input_name')
+        result = {'scene': scene, 'target_exe': exe_name, 'input_name': name, 'created': False,
+                  'configured': False, 'added_to_scene': False, 'targets_exe': False, 'errors': []}
 
-        return {
-            'scene': resolved_scene,
-            'target_exe': exe_name,
-            'input_name': input_name,
-            'created': bool(created),
-            'configured': bool(configured),
-            'added_to_scene': bool(added_to_scene),
-            'in_main_scene': bool(in_main_scene),
-            'targets_exe': bool(targets_exe),
-            'errors': errors,
-        }
+        async def request(kind, data):
+            ok, response, code, error = await self._send_request_with_status(kind, data, max_retries=0)
+            if not ok:
+                result['errors'].append(error or f'{kind} failed ({code})')
+            return ok, response or {}
+
+        if not name:
+            inputs = await self._get_inputs()
+            if inputs is None:
+                return None
+            used = {item.get('inputName') for item in inputs}
+            name = next((candidate for candidate in [preferred_input_name, f'{preferred_input_name} 2', f'{preferred_input_name} 3', f'{preferred_input_name} Capture'] if candidate not in used), None)
+            if not name:
+                result['errors'].append('Choose a free capture source name in OBS.')
+                return result
+            ok, _ = await request('CreateInput', {'sceneName': scene, 'inputName': name,
+                'inputKind': 'wasapi_process_output_capture', 'inputSettings': {'priority': 2, 'window': ''}, 'sceneItemEnabled': True})
+            if not ok:
+                return result
+            result.update(input_name=name, created=True)
+        if not status.get('target_matches'):
+            ok, properties = await request('GetInputPropertiesListPropertyItems', {'inputName': name, 'propertyName': 'window'})
+            if not ok:
+                return result
+            window = next((item.get('itemValue') for item in properties.get('propertyItems', [])
+                if isinstance(item, dict) and item.get('itemEnabled', True)
+                and _audio_window_executable(item.get('itemValue')) == exe_name.casefold()), None)
+            if not window:
+                result['errors'].append('Open the playback app window, then try setting up capture again.')
+                return result
+            ok, _ = await request('SetInputSettings', {'inputName': name, 'inputSettings': {'priority': 2, 'window': window}, 'overlay': True})
+            if not ok:
+                return result
+        if not result['created'] and not status.get('in_main_scene'):
+            ok, _ = await request('CreateSceneItem', {'sceneName': scene, 'sourceName': name})
+            if not ok:
+                return result
+            result['added_to_scene'] = True
+        verified = await self._get_audio_capture_status(scene_key, exe_name, scene, preferred_input_name)
+        if verified is None:
+            result['errors'].append('Could not verify the capture settings. Refresh status and try again.')
+            return result
+        result.update(configured=verified['configured'], targets_exe=verified['target_matches'],
+                      in_main_scene=verified['in_main_scene'], state=verified['state'])
+        if verified['state'] == 'needs_setup':
+            result['errors'].append('OBS did not retain the requested capture target. Check its input settings.')
+        return result
 
     async def _create_text_input(self, scene_name: str, input_name: str) -> tuple[bool, Optional[str]]:
         if not scene_name or not input_name:

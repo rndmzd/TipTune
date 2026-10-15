@@ -163,19 +163,24 @@ Notes:
 
 ## 8) (Optional) OBS overlays
 
-In Settings:
+In the Setup Wizard or Settings:
 
-- Set `OBS.enabled=true`
-- Set `OBS.host`, `OBS.port`, `OBS.password`
-- Open **Stream information display**, select an OBS scene, and save settings.
-- Click **Add browser overlay**, or **Switch to browser overlay** for an existing text setup.
-- Choose Full or Compact, adjust the appearance, then save. Preview buttons affect only the preview.
-- Alternatively, choose Browser display and save, then add a Browser Source manually using the URL shown in Settings (normally `http://127.0.0.1:8765/overlay`). Use your OBS base canvas dimensions and 30 FPS; leave shutdown and scene-activation refresh off. Manual setup works with the OBS connection disabled.
-- (Windows) optionally click **Create Spotify audio capture**
-- (Windows) optionally click **Create TipTune audio capture** (for YouTube playback audio sync in OBS)
-- Use **Send request/warning/notice to OBS** to test the actual source.
-- Start TipTune first. If OBS opened the source before TipTune started, refresh its browser page.
-- Existing text inputs remain available. Select Legacy text sources and save to switch back.
+- Enable the OBS connection and enter its WebSocket host, port, and password.
+- Enable **Show stream information display**. Choose a scene and source name in **Add to OBS**, save, then select **Add browser overlay**.
+- Choose Full or Compact, adjust the appearance, and save. Preview buttons affect only the preview; send buttons affect the actual overlay.
+- For manual browser-source setup, use the URL and canvas dimensions shown in **Add to OBS**. Keep shutdown and scene-activation refresh off.
+- Start TipTune first; refresh the browser source if OBS opened it before TipTune started.
+
+### Embedded audio on Windows
+
+One **TipTune Audio** source captures YouTube and the embedded Spotify player through a dedicated **VB-CABLE** in the Windows desktop app.
+
+1. Install [VB-CABLE from VB-Audio](https://vb-audio.com/Cable/): extract the download, run the installer as administrator, then restart Windows.
+2. Keep Windows' default output on your usual speakers or headphones. In **OBS → Settings → Audio**, select your listening device as the monitoring device. Dedicate CABLE Input to TipTune. Exclude the monitoring device from Desktop Audio or Audio Output Capture sources to avoid capturing TipTune twice.
+3. In the Setup Wizard's OBS sources step or Settings → **OBS audio sources**, enable **Capture TipTune audio in OBS**. Save, then select **Set up audio capture**. The wizard has **Save OBS setup** so you can save without leaving the step.
+4. Play a YouTube or Spotify request and check the **TipTune Audio** meter in OBS. If the meter moves but you hear nothing, check OBS's monitoring device, source mute, and volume.
+
+TipTune selects **CABLE Input** for its embedded players and captures **CABLE Output** in OBS, with source monitoring enabled. When OBS is closed or the capture is unavailable, TipTune uses its normal output. Spotify API authorization and the embedded player's login are separate; sign in to both with the same account. A new user can choose **Set up later** for Spotify and the Events API and start with manual YouTube playback.
 
 ---
 

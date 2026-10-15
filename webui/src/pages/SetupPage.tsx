@@ -4,6 +4,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiJson } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
 import { OverlaySettings } from '../components/OverlaySettings';
+import { ObsSetup } from '../components/ObsSetup';
+import { ObsAudioSettings } from '../components/ObsAudioSettings';
+import type { ObsStatus as ObsStatusResp } from '../types';
 
 type ConfigResp = { ok: true; config: Record<string, Record<string, string>> };
 type SpotifyAuthStatusResp = {
@@ -18,76 +21,6 @@ type SpotifyAuthStatusResp = {
 };
 
 type SpotifyAuthStartResp = { ok: true; auth_url: string };
-
-type ObsSourceStatus = {
-  name: string;
-  input_exists: boolean;
-  in_main_scene: boolean;
-  present: boolean;
-};
-
-type ObsAudioCaptureStatus = {
-  target_exe?: string;
-  input_name?: string | null;
-  input_kind?: string | null;
-  input_exists?: boolean;
-  in_main_scene?: boolean;
-  present?: boolean;
-} | null;
-
-type ObsStatusResp = {
-  ok: true;
-  enabled: boolean;
-  connected?: boolean;
-  status?: {
-    current_scene?: string | null;
-    main_scene?: string | null;
-    sources?: ObsSourceStatus[];
-  };
-  spotify_audio_capture?: ObsAudioCaptureStatus;
-  tiptune_audio_capture?: ObsAudioCaptureStatus;
-};
-
-type ObsEnsureResp = {
-  ok: true;
-  result: {
-    scene?: string;
-    created?: string[];
-    added_to_scene?: string[];
-    already_present?: string[];
-    errors?: Record<string, string>;
-  };
-};
-
-type ObsEnsureSpotifyAudioResp = {
-  ok: true;
-  result: {
-    scene?: string;
-    target_exe?: string;
-    input_name?: string | null;
-    created?: boolean;
-    configured?: boolean;
-    added_to_scene?: boolean;
-    in_main_scene?: boolean;
-    targets_exe?: boolean;
-    errors?: string[];
-  };
-};
-
-type ObsEnsureTiptuneAudioResp = {
-  ok: true;
-  result: {
-    scene?: string;
-    target_exe?: string;
-    input_name?: string | null;
-    created?: boolean;
-    configured?: boolean;
-    added_to_scene?: boolean;
-    in_main_scene?: boolean;
-    targets_exe?: boolean;
-    errors?: string[];
-  };
-};
 
 type ObsScenesResp = {
   ok: boolean;
@@ -112,13 +45,6 @@ function asBool(v: unknown): boolean {
   if (typeof v === 'boolean') return v;
   const s = String(v ?? '').trim().toLowerCase();
   return s === '1' || s === 'true' || s === 'yes' || s === 'on';
-}
-
-function formatObsErrors(errs: Record<string, string> | undefined): string {
-  if (!errs) return '';
-  const entries = Object.entries(errs);
-  if (!entries.length) return '';
-  return entries.map(([k, v]) => `${k}: ${v}`).join('\n');
 }
 
 function humanizeKey(raw: string) {
@@ -215,7 +141,11 @@ function withDefaults(inputCfg: Record<string, Record<string, string>>): Record<
   };
 }
 
-export function SetupPage() {
+function obsSignature(cfg: Record<string, Record<string, string>>) {
+  return JSON.stringify([cfg.OBS?.scene_name || '', asBool(cfg.OBS?.use_virtual_cable), cfg.Overlay || {}, cfg.General?.request_overlay_duration || '10']);
+}
+
+export function SetupPage({ audioOutputError = '', audioOutputActive }: { audioOutputError?: string; audioOutputActive?: boolean | null }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const rerun = searchParams.get('rerun') === '1' || searchParams.get('rerun') === 'true';
@@ -240,10 +170,8 @@ export function SetupPage() {
 
   const [obsStatus, setObsStatus] = useState<ObsStatusResp | null>(null);
   const [obsMsg, setObsMsg] = useState('');
-  const [obsEnsureMsg, setObsEnsureMsg] = useState('');
-  const [obsSpotifyEnsureMsg, setObsSpotifyEnsureMsg] = useState('');
-  const [obsTiptuneEnsureMsg, setObsTiptuneEnsureMsg] = useState('');
-  const [obsBusy, setObsBusy] = useState(false);
+  const [obsSaveBusy, setObsSaveBusy] = useState(false);
+  const [obsBaseline, setObsBaseline] = useState('');
 
   const [obsScenes, setObsScenes] = useState<string[]>([]);
   const [obsScenesMsg, setObsScenesMsg] = useState('');
@@ -267,7 +195,9 @@ export function SetupPage() {
 
   async function loadConfig() {
     const data = await apiJson<ConfigResp>('/api/config');
-    setCfg(withDefaults(data.config || {}));
+    const loaded = withDefaults(data.config || {});
+    setCfg(loaded);
+    setObsBaseline(obsSignature(loaded));
   }
 
   async function loadSetupStatus() {
@@ -367,6 +297,18 @@ export function SetupPage() {
     });
   }
 
+  async function saveObsSetup() {
+    setObsSaveBusy(true); setStatus('Saving…');
+    try {
+      await savePartial({ Overlay: cfg.Overlay || {}, General: { request_overlay_duration: v('General', 'request_overlay_duration') }, OBS: {
+        scene_name: v('OBS', 'scene_name'), use_virtual_cable: asBool(v('OBS', 'use_virtual_cable')) ? 'true' : 'false',
+      } });
+      await loadConfig();
+      await loadObsStatus();
+      setStatus('Saved.');
+    } finally { setObsSaveBusy(false); }
+  }
+
   async function onNext() {
     setStatus('Saving...');
     setSpMsg('');
@@ -431,14 +373,7 @@ export function SetupPage() {
           await loadObsScenes().catch(() => {});
         }
       } else if (step === 'obs_sources') {
-        await savePartial({
-          Overlay: cfg.Overlay || {},
-          OBS: {
-            scene_name: v('OBS', 'scene_name'),
-          },
-        });
-        await loadConfig();
-        setStatus('');
+        await saveObsSetup();
       } else if (step === 'general') {
         await savePartial({
           Music: {
@@ -501,12 +436,16 @@ export function SetupPage() {
   const currentStep = steps[stepIdx]?.key;
 
   useEffect(() => {
-    if (currentStep !== 'obs_sources') {
-      setObsEnsureMsg('');
-      return;
-    }
+    if (currentStep !== 'obs_sources') return;
     if (!obsEnabled) return;
-    loadObsStatus().catch(() => {});
+    let stopped = false;
+    let timer: number | undefined;
+    async function poll() {
+      await loadObsStatus();
+      if (!stopped) timer = window.setTimeout(poll, 5000);
+    }
+    poll();
+    return () => { stopped = true; if (timer) window.clearTimeout(timer); };
   }, [currentStep, obsEnabled]);
 
   useEffect(() => {
@@ -545,13 +484,7 @@ export function SetupPage() {
   const obsOk = !obsEnabled || (obsHost !== '' && obsPort !== '');
   const obsSourcesOk = !obsEnabled || obsSceneName !== '';
 
-  const requiredSources = (obsStatus?.status?.sources || []) as ObsSourceStatus[];
-  const missingSources = requiredSources.filter((s) => !s.present);
-  const hasMissingSources = obsEnabled && !!obsStatus?.enabled && (missingSources.length > 0);
-  const spotifyAudio = obsStatus?.spotify_audio_capture || null;
-  const tiptuneAudio = obsStatus?.tiptune_audio_capture || null;
-  const showCreateSpotifyAudio = obsEnabled && !!obsStatus?.enabled && (spotifyAudio ? !spotifyAudio.present : true);
-  const showCreateTiptuneAudio = obsEnabled && !!obsStatus?.enabled && (tiptuneAudio ? !tiptuneAudio.present : true);
+  const obsSetupDirty = !!obsBaseline && obsSignature(cfg) !== obsBaseline;
 
   const generalOk =
     norm(v('General', 'song_cost')) !== '' && norm(v('General', 'skip_song_cost')) !== '' && norm(v('General', 'request_overlay_duration')) !== '';
@@ -593,13 +526,25 @@ export function SetupPage() {
           <button type="button" onClick={onBack} disabled={stepIdx === 0}>
             Back
           </button>
-          <button type="button" onClick={() => onNext().catch(() => {})} disabled={!canNext}>
+          <button type="button" onClick={() => onNext().catch(() => {})} disabled={!canNext || obsSaveBusy}>
             {nextLabel}
           </button>
           {currentStep === 'openai' && !openaiOk ? (
             <button type="button" onClick={onSkipOpenAI}>
               Skip
             </button>
+          ) : null}
+          {(currentStep === 'spotify' && !spotifyOk || currentStep === 'events' && !eventsOk) ? (
+            <button type="button" onClick={async () => {
+              try {
+                if (currentStep === 'spotify') {
+                  await savePartial({ Music: { source: 'youtube' } });
+                  await loadConfig();
+                }
+                setStatus('You can connect this later in Settings.');
+                setStepIdx((i) => i + 1);
+              } catch (error: any) { setStatus(`Error: ${error?.message || error}`); }
+            }}>Set up later</button>
           ) : null}
           <button type="button" onClick={() => navigate('/settings?dashboard=1')}>
             Open Full Settings
@@ -662,6 +607,7 @@ export function SetupPage() {
           <div className="muted" style={{ marginTop: 8 }}>
             You can proceed after entering Client ID + redirect URL. Connecting Spotify is recommended but not required to click Next.
           </div>
+          <p className="muted">After connecting the API, open the Spotify tab and sign in to its embedded player with the same account. You can set up Spotify later and start with YouTube.</p>
         </div>
       ) : null}
 
@@ -704,329 +650,38 @@ export function SetupPage() {
       ) : null}
 
       {currentStep === 'obs_sources' ? (
-        <div className="card" style={{ marginTop: 16 }}>
-          <OverlaySettings cfg={cfg} onChange={(section, key, value) =>
-            setCfg((c) => ({ ...c, [section]: { ...(c[section] || {}), [key]: value } }))} />
-{cfg.Overlay?.mode === 'text' ? (<>
-          <h2>
-            OBS sources setup{' '}
-            <span className={obsStatus?.connected ? 'pill pillSuccess' : 'pill pillError'}>
-              {obsStatus?.connected ? 'connected' : 'not connected'}
-            </span>
-          </h2>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 8, alignItems: 'baseline' }}>
-            <div className="muted">Current scene</div>
-            <div>
-              <code>{obsStatus?.status?.current_scene || '(unknown)'}</code>
-            </div>
-            <div className="muted">Main scene</div>
-            <div>
-              <code>{obsStatus?.status?.main_scene || '(unknown)'}</code>
-            </div>
-          </div>
-
-          <label style={{ marginTop: 12 }}>Overlay scene</label>
-          <select
-            value={obsSceneName}
-            onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), scene_name: e.target.value } }))}
-            disabled={!obsEnabled}
-          >
-            <option value="">(select a scene)</option>
-            {(obsScenes || []).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <div className="muted">Pick the scene where TipTune overlays (text sources) should be created/managed.</div>
-
-          <div className="actions" style={{ marginTop: 10 }}>
-            <button type="button" onClick={() => loadObsScenes().catch(() => {})} disabled={!obsEnabled}>
-              Refresh scenes
+        <div className="wizard-obs-setup">
+          <div className="actions">
+            <button type="button" disabled={obsSaveBusy || !obsSetupDirty} onClick={() => saveObsSetup().catch((error) => setStatus(`Error: ${error?.message || error}`))}>
+              {obsSaveBusy ? 'Saving…' : 'Save OBS setup'}
             </button>
+            {obsSetupDirty ? <span className="muted">Save before adding sources to OBS.</span> : null}
           </div>
-          {obsScenesMsg ? <div className="muted">{obsScenesMsg}</div> : null}
-
-          <label style={{ marginTop: 12 }}>Required text sources</label>
-          <div className="tableWrap" style={{ marginTop: 8 }}>
-            <table className="dataTable">
-              <thead>
-                <tr>
-                  <th>Source</th>
-                  <th style={{ width: 110 }}>Present</th>
-                  <th style={{ width: 120 }}>Input</th>
-                  <th style={{ width: 150 }}>In main scene</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(requiredSources || []).map((s) => (
-                  <tr key={s.name}>
-                    <td>
-                      <code style={{ whiteSpace: 'nowrap' }}>{s.name}</code>
-                    </td>
-                    <td>
-                      <span className={s.present ? 'pill pillSuccess' : 'pill pillError'}>{s.present ? 'present' : 'missing'}</span>
-                    </td>
-                    <td>
-                      <span className={s.input_exists ? 'pill pillSuccess' : 'pill pillError'}>{s.input_exists ? 'yes' : 'no'}</span>
-                    </td>
-                    <td>
-                      <span className={s.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>{s.in_main_scene ? 'yes' : 'no'}</span>
-                    </td>
-                  </tr>
-                ))}
-                {!(requiredSources || []).length ? (
-                  <tr>
-                    <td colSpan={4} className="muted">
-                      (no data)
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+          <ObsSetup cfg={cfg} status={obsStatus} statusError={obsMsg} dirty={obsSetupDirty || obsSaveBusy} pending={obsSetupDirty}
+            onRefreshStatus={loadObsStatus}
+            onChange={(section, key, value) => setCfg((c) => ({ ...c, [section]: { ...(c[section] || {}), [key]: value } }))}
+            sceneControls={obsEnabled ? <>
+              {obsStatus?.connected ? <dl className="overlay-scene-status">
+                <dt>Current scene</dt><dd>{obsStatus.status?.current_scene || '(unknown)'}</dd>
+                <dt>Main scene</dt><dd>{obsStatus.status?.main_scene || '(unknown)'}</dd>
+              </dl> : null}
+              <label htmlFor="wizard-overlay-scene">Overlay scene</label>
+              <select id="wizard-overlay-scene" value={obsSceneName} disabled={!obsStatus?.connected}
+                onChange={(e) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), scene_name: e.target.value } }))}>
+                <option value="">(select a scene)</option>
+                {Array.from(new Set([obsSceneName, ...obsScenes].filter(Boolean))).map((scene) => <option key={scene} value={scene}>{scene}</option>)}
+              </select>
+              <div className="actions"><button type="button" disabled={!obsStatus?.connected} onClick={() => loadObsScenes()}>Refresh scenes</button></div>
+              {obsStatus?.connected && obsScenesMsg ? <p className="muted" role="status">{obsScenesMsg}</p> : null}
+            </> : null} />
+          {obsEnabled ? <ObsAudioSettings status={obsStatus} error={obsMsg} audioOutputError={audioOutputError} outputActive={audioOutputActive}
+            enabled={asBool(v('OBS', 'use_virtual_cable'))} pending={obsSetupDirty} onboarding
+            dirty={obsSetupDirty || obsSaveBusy} onSave={saveObsSetup} onRefresh={loadObsStatus}
+            onEnabledChange={(enabled) => setCfg((c) => ({ ...c, OBS: { ...(c.OBS || {}), use_virtual_cable: enabled ? 'true' : 'false' } }))} /> : null}
+          <div className="card">
+            <OverlaySettings cfg={cfg} status={obsStatus} dirty={obsSetupDirty}
+              onChange={(section, key, value) => setCfg((c) => ({ ...c, [section]: { ...(c[section] || {}), [key]: value } }))} />
           </div>
-
-</>) : null}
-{obsEnabled ? (<>
-          <label style={{ marginTop: 14 }}>TipTune audio capture</label>
-          <div className="tableWrap" style={{ marginTop: 8 }}>
-            <table className="dataTable">
-              <thead>
-                <tr>
-                  <th>Item</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>
-                    <code>Application Audio Capture</code>
-                  </td>
-                  <td>
-                    <span className={tiptuneAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{tiptuneAudio?.present ? 'present' : 'missing'}</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="muted">Target exe</td>
-                  <td>{tiptuneAudio?.target_exe || 'TipTune.exe'}</td>
-                </tr>
-                <tr>
-                  <td className="muted">Input exists</td>
-                  <td>
-                    <span className={tiptuneAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
-                      {tiptuneAudio?.input_exists ? 'yes' : 'no'}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="muted">In main scene</td>
-                  <td>
-                    <span className={tiptuneAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
-                      {tiptuneAudio?.in_main_scene ? 'yes' : 'no'}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="muted">Matched input</td>
-                  <td>
-                    {tiptuneAudio?.input_name ? <code>{tiptuneAudio.input_name}</code> : <span className="muted">(none)</span>}
-                    {tiptuneAudio?.input_kind ? (
-                      <>
-                        {' '}<span className="muted">(</span>
-                        <code>{tiptuneAudio.input_kind}</code>
-                        <span className="muted">)</span>
-                      </>
-                    ) : null}
-                  </td>
-                </tr>
-                {!tiptuneAudio ? (
-                  <tr>
-                    <td colSpan={2} className="muted">
-                      (no data)
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-          {tiptuneAudio?.present ? null : (
-            <div className="muted" style={{ marginTop: 8 }}>
-              Create an Application Audio Capture input in OBS targeting TipTune.exe to sync YouTube playback audio.
-            </div>
-          )}
-          {showCreateTiptuneAudio ? (
-            <div className="actions" style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                disabled={obsBusy}
-                onClick={async () => {
-                  setObsBusy(true);
-                  setObsTiptuneEnsureMsg('Creating TipTune audio capture...');
-                  try {
-                    const resp = await apiJson<ObsEnsureTiptuneAudioResp>('/api/obs/ensure_tiptune_audio_capture', { method: 'POST' });
-                    const r = resp.result || ({} as any);
-                    const errs = Array.isArray(r.errors) ? r.errors : [];
-                    const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
-                    setObsTiptuneEnsureMsg(
-                      `TipTune audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
-                        (r.input_name ? `\nInput: ${r.input_name}` : '') +
-                        (typeof r.targets_exe === 'boolean' ? `\nTargets TipTune.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
-                        errBlock
-                    );
-                  } catch (e: any) {
-                    setObsTiptuneEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
-                  } finally {
-                    setObsBusy(false);
-                    await loadObsStatus().catch(() => {});
-                  }
-                }}
-              >
-                Create TipTune audio capture
-              </button>
-            </div>
-          ) : null}
-          {obsTiptuneEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsTiptuneEnsureMsg}</div> : null}
-
-          <label style={{ marginTop: 14 }}>Spotify audio capture</label>
-          <div className="tableWrap" style={{ marginTop: 8 }}>
-            <table className="dataTable">
-              <thead>
-                <tr>
-                  <th>Item</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>
-                    <code>Application Audio Capture</code>
-                  </td>
-                  <td>
-                    <span className={spotifyAudio?.present ? 'pill pillSuccess' : 'pill pillError'}>{spotifyAudio?.present ? 'present' : 'missing'}</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="muted">Target exe</td>
-                  <td>{spotifyAudio?.target_exe || 'Spotify.exe'}</td>
-                </tr>
-                <tr>
-                  <td className="muted">Input exists</td>
-                  <td>
-                    <span className={spotifyAudio?.input_exists ? 'pill pillSuccess' : 'pill pillError'}>
-                      {spotifyAudio?.input_exists ? 'yes' : 'no'}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="muted">In main scene</td>
-                  <td>
-                    <span className={spotifyAudio?.in_main_scene ? 'pill pillSuccess' : 'pill pillError'}>
-                      {spotifyAudio?.in_main_scene ? 'yes' : 'no'}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="muted">Matched input</td>
-                  <td>
-                    {spotifyAudio?.input_name ? <code>{spotifyAudio.input_name}</code> : <span className="muted">(none)</span>}
-                    {spotifyAudio?.input_kind ? (
-                      <>
-                        {' '}<span className="muted">(</span>
-                        <code>{spotifyAudio.input_kind}</code>
-                        <span className="muted">)</span>
-                      </>
-                    ) : null}
-                  </td>
-                </tr>
-                {!spotifyAudio ? (
-                  <tr>
-                    <td colSpan={2} className="muted">
-                      (no data)
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-          {showCreateSpotifyAudio ? (
-            <div className="actions" style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                disabled={obsBusy}
-                onClick={async () => {
-                  setObsBusy(true);
-                  setObsSpotifyEnsureMsg('Creating Spotify audio capture...');
-                  try {
-                    const resp = await apiJson<ObsEnsureSpotifyAudioResp>('/api/obs/ensure_spotify_audio_capture', { method: 'POST' });
-                    const r = resp.result || ({} as any);
-                    const errs = Array.isArray(r.errors) ? r.errors : [];
-                    const errBlock = errs.length ? `\n\nErrors:\n${errs.join('\n')}` : '';
-                    setObsSpotifyEnsureMsg(
-                      `Spotify audio capture ensured. Created: ${r.created ? 'yes' : 'no'}, configured: ${r.configured ? 'yes' : 'no'}, added to scene: ${r.added_to_scene ? 'yes' : 'no'}.` +
-                        (r.input_name ? `\nInput: ${r.input_name}` : '') +
-                        (typeof r.targets_exe === 'boolean' ? `\nTargets Spotify.exe: ${r.targets_exe ? 'yes' : 'no'}` : '') +
-                        errBlock
-                    );
-                  } catch (e: any) {
-                    setObsSpotifyEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
-                  } finally {
-                    setObsBusy(false);
-                    await loadObsStatus().catch(() => {});
-                  }
-                }}
-              >
-                Create Spotify audio capture
-              </button>
-            </div>
-          ) : null}
-          {obsSpotifyEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsSpotifyEnsureMsg}</div> : null}
-
-          <div className="actions" style={{ marginTop: 12 }}>
-            <button type="button" onClick={() => loadObsStatus().catch(() => {})} disabled={obsBusy}>
-              Refresh OBS status
-            </button>
-
-            {cfg.Overlay?.mode === 'text' && hasMissingSources ? (
-              <button
-                type="button"
-                disabled={obsBusy}
-                onClick={async () => {
-                  setObsBusy(true);
-                  setObsEnsureMsg('Creating OBS text sources...');
-                  try {
-                    const resp = await apiJson<ObsEnsureResp>('/api/obs/ensure_sources', { method: 'POST' });
-                    const created = (resp.result?.created || []).length;
-                    const added = (resp.result?.added_to_scene || []).length;
-                    const errs = resp.result?.errors || {};
-                    const errCount = Object.keys(errs).length;
-                    const errText = formatObsErrors(errs);
-                    const errBlock = errText ? `\n\nErrors:\n${errText}` : '';
-                    setObsEnsureMsg(
-                      `Created/ensured sources. Created: ${created}, added to scene: ${added}, errors: ${errCount}.${errBlock}\n\nNow go to OBS and set the size + position of each text source.`
-                    );
-                  } catch (e: any) {
-                    setObsEnsureMsg(`Error: ${e?.message ? e.message : String(e)}`);
-                  } finally {
-                    setObsBusy(false);
-                    await loadObsStatus().catch(() => {});
-                  }
-                }}
-              >
-                Create missing text sources
-              </button>
-            ) : null}
-          </div>
-
-          {obsMsg ? <div className="muted">{obsMsg}</div> : null}
-          {obsEnsureMsg ? <div className="muted" style={{ whiteSpace: 'pre-wrap' }}>{obsEnsureMsg}</div> : null}
-
-          </>) : null}
-          {obsEnabled && !obsStatus?.connected ? (
-            <div className="muted" style={{ marginTop: 10 }}>
-              TipTune couldn’t connect to OBS. Make sure OBS is running, obs-websocket is enabled, and your host/port/password are correct.
-            </div>
-          ) : null}
         </div>
       ) : null}
 

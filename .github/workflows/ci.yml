@@ -59,6 +59,9 @@ jobs:
       - name: Python regression tests
         run: python -m unittest discover -s tests -v
 
+      - name: Embedded player and audio routing regression tests
+        run: node --test tests/audio-output.test.mjs tests/spotify-player.test.mjs
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |

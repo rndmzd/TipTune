@@ -38,3 +38,21 @@ export type Device = {
   is_active?: boolean;
   is_restricted?: boolean;
 };
+
+export type ObsStatus = {
+  ok: true; enabled: boolean; connected?: boolean;
+  overlay_url?: string; display_mode?: string; display_clients?: number;
+  viewport?: { width: number; height: number };
+  status?: { current_scene?: string | null; main_scene?: string | null };
+  browser_source?: { name?: string; configured?: boolean; input_exists?: boolean; in_scene?: boolean; error?: string | null } | null;
+  spotify_audio_capture?: ObsAudioCapture | null;
+  tiptune_audio_capture?: ObsAudioCapture | null;
+};
+
+export type ObsAudioCapture = {
+  target_exe?: string | null; input_name?: string | null; input_kind?: string | null;
+  input_exists?: boolean; in_main_scene?: boolean; present?: boolean; configured?: boolean;
+  target_matches?: boolean; muted?: boolean; scene_item_enabled?: boolean;
+  state?: 'configured' | 'needs_setup' | 'muted' | 'disabled' | 'unavailable' | 'needs_desktop' | 'needs_monitoring' | 'device_missing';
+  message?: string;
+};

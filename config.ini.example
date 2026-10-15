@@ -43,6 +43,10 @@ host = 127.0.0.1
 port = 4455
 password =
 
+# Windows desktop: route embedded YouTube/Spotify through a dedicated VB-CABLE
+# and capture CABLE Output in OBS. Set up its source from Settings after saving.
+use_virtual_cable = false
+
 [Web]
 host = 127.0.0.1
 port = 8765

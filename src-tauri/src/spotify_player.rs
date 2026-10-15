@@ -6,6 +6,7 @@ use tauri::{
 
 const PLAYER: &str = "spotify-player";
 const PLAYER_URL: &str = "https://open.spotify.com/";
+const PARKED_POSITION: LogicalPosition<f64> = LogicalPosition::new(-10000.0, 0.0);
 static POPUP_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub fn create(app: &AppHandle) -> Result<Webview, String> {
@@ -25,6 +26,14 @@ pub fn create(app: &AppHandle) -> Result<Webview, String> {
             WebviewBuilder::new(PLAYER, WebviewUrl::External(PLAYER_URL.parse().unwrap()))
                 // Cookies and local storage survive process exits and application updates.
                 .data_directory(profile)
+                .initialization_script(crate::audio_output::SCRIPT)
+                .on_page_load(|view, payload| {
+                    if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                        crate::audio_output::restore(view.clone());
+                    }
+                })
+                .focused(false)
+                .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
                 .on_navigation(|url| url.scheme() == "https" || url.as_str() == "about:blank")
                 .on_new_window(move |url, features| {
                     if url.scheme() != "https" && url.as_str() != "about:blank" {
@@ -51,11 +60,13 @@ pub fn create(app: &AppHandle) -> Result<Webview, String> {
                         }
                     }
                 }),
-            LogicalPosition::new(-10000.0, 0.0),
+            PARKED_POSITION,
             LogicalSize::new(1000.0, 650.0),
         )
         .map_err(|e| e.to_string())?;
-    player.hide().map_err(|e| e.to_string())?;
+    // Keep the document visible to the browser while its native surface is
+    // outside the window. Hiding it can defer Spotify's playback initialization.
+    player.show().map_err(|e| e.to_string())?;
     Ok(player)
 }
 
@@ -68,6 +79,12 @@ fn require_main(caller: &Webview) -> Result<(), String> {
 }
 
 // Async commands avoid WebView2 deadlocks when creating a child view on Windows.
+#[tauri::command]
+pub async fn spotify_player_initialize(app: AppHandle, webview: Webview) -> Result<(), String> {
+    require_main(&webview)?;
+    create(&app).map(|_| ())
+}
+
 #[tauri::command]
 pub async fn spotify_player_show(
     app: AppHandle,
@@ -100,7 +117,12 @@ pub async fn spotify_player_show(
 pub async fn spotify_player_hide(app: AppHandle, webview: Webview) -> Result<(), String> {
     require_main(&webview)?;
     if let Some(player) = app.get_webview(PLAYER) {
-        player.hide().map_err(|e| e.to_string())?;
+        player
+            .set_position(PARKED_POSITION)
+            .map_err(|e| e.to_string())?;
+        player.show().map_err(|e| e.to_string())?;
+        // The parked child must not retain keyboard input from the Spotify page.
+        webview.set_focus().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

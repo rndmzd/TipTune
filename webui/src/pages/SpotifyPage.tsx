@@ -1,14 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { HeaderBar } from '../components/HeaderBar';
-
-// Serialize route cleanup, layout and reload calls, including React StrictMode remounts.
-let pending: Promise<unknown> = Promise.resolve();
-function playerCommand(command: string, args?: Record<string, unknown>) {
-  const next = pending.catch(() => {}).then(() => invoke(command, args));
-  pending = next;
-  return next;
-}
+import { playerCommand } from '../spotifyPlayer';
 
 export function SpotifyPage() {
   const host = useRef<HTMLDivElement>(null);

@@ -11,6 +11,8 @@ import { StatsPage } from './pages/StatsPage';
 import { SpotifyPage } from './pages/SpotifyPage';
 import { apiJson, sseUrl } from './api';
 import { PlaybackProvider } from './components/PlaybackContext';
+import { playerCommand } from './spotifyPlayer';
+import { useAudioOutput } from './useAudioOutput';
 
 type RequestConfig = {
   songCost: number | null;
@@ -124,6 +126,14 @@ export function App() {
 
   useEffect(() => {
     if (!isTauri) return;
+    // Requests can start from the Dashboard or arrive before Spotify is opened.
+    playerCommand('spotify_player_initialize').catch((error) => {
+      console.error('Unable to initialize the Spotify player:', error);
+    });
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return;
 
     let cancelled = false;
     const run = async () => {
@@ -213,6 +223,7 @@ export function App() {
   }, [isTauri, backendState]);
 
   const backendReady = !isTauri || backendState === 'ready';
+  const audioOutput = useAudioOutput(isTauri, backendReady);
 
   useEffect(() => {
     requestConfigRef.current = requestConfig;
@@ -322,15 +333,15 @@ export function App() {
     };
   }, [backendReady]);
 
-  if (isTauri && backendState !== 'ready') {
+  if (isTauri && (backendState !== 'ready' || !audioOutput.ready)) {
     return (
       <div style={{ minHeight: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="card" style={{ maxWidth: 520, width: '100%' }}>
           <h2>TipTune</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
-            {backendState === 'connecting' ? <div className="spinner" aria-hidden="true" /> : null}
+            {backendState !== 'failed' ? <div className="spinner" aria-hidden="true" /> : null}
             <div className="muted">
-              {backendState === 'connecting'
+              {backendState !== 'failed'
                 ? 'Starting up…'
                 : 'Unable to connect to the TipTune backend. Make sure TipTune is allowed through your firewall, then try again.'}
             </div>
@@ -352,11 +363,11 @@ export function App() {
       <Routes>
         <Route path="/spotify" element={<SpotifyPage />} />
         <Route path="/" element={<GatedRoute element={<DashboardPage />} />} />
-        <Route path="/settings" element={<GatedRoute element={<SettingsPage />} />} />
+        <Route path="/settings" element={<GatedRoute element={<SettingsPage audioOutputError={audioOutput.error} audioOutputActive={isTauri ? audioOutput.enabled : undefined} />} />} />
         <Route path="/events" element={<GatedRoute element={<EventsPage />} />} />
         <Route path="/history" element={<GatedRoute element={<HistoryPage />} />} />
         <Route path="/stats" element={<GatedRoute element={<StatsPage />} />} />
-        <Route path="/setup" element={<SetupPage />} />
+        <Route path="/setup" element={<SetupPage audioOutputError={audioOutput.error} audioOutputActive={isTauri ? audioOutput.enabled : undefined} />} />
         <Route path="/help" element={<HelpPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

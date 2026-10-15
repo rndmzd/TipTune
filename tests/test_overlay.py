@@ -407,11 +407,90 @@ class OverlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['configured'])
         self.assertEqual(self.service.overlay.config['mode'], 'text')
 
+    async def test_tiptune_capture_uses_runtime_desktop_host_and_saved_scene(self):
+        self.cfg['OBS'].update(enabled='true', scene_name='LIVE')
+        self.service._refresh_obs_integration_from_config = AsyncMock()
+        self.service.actions.obs_integration_enabled = True
+        ensure = AsyncMock(return_value={'configured': True})
+        self.service.actions.obs = SimpleNamespace(ensure_spotify_audio_capture=ensure)
+        with patch.object(self.app, 'desktop_audio_executable', return_value='desktop-host.exe'):
+            self.assertTrue((await self.service.ensure_obs_tiptune_audio_capture())['configured'])
+        ensure.assert_awaited_once_with(scene_key='main', exe_name='desktop-host.exe',
+                                       preferred_input_name='TipTune Audio', scene_name='LIVE')
+
+    async def test_standalone_backend_explains_desktop_requirement_without_creating_capture(self):
+        self.cfg['OBS']['enabled'] = 'true'
+        self.service._refresh_obs_integration_from_config = AsyncMock()
+        self.service.actions.obs_integration_enabled = True
+        ensure = AsyncMock()
+        self.service.actions.obs = SimpleNamespace(ensure_spotify_audio_capture=ensure)
+        with patch.object(self.app, 'desktop_audio_executable', return_value=None):
+            result = await self.service.ensure_obs_tiptune_audio_capture()
+        self.assertEqual(result['state'], 'needs_desktop')
+        self.assertFalse(result['configured'])
+        ensure.assert_not_awaited()
+
     async def test_actual_runtime_port_is_used(self):
         webui = self.app.WebUI(self.service, port=0)
         await webui.start(); self.addAsyncCleanup(webui.stop)
         self.assertNotIn(':0/', webui.overlay_url)
         self.assertTrue(webui.overlay_url.endswith('/overlay'))
+
+    async def test_cable_config_is_validated_persisted_and_returned_to_settings(self):
+        ok, error = await self.service.update_config_from_ui({'OBS': {'use_virtual_cable': 'invalid'}})
+        self.assertFalse(ok)
+        self.assertIn('must be true or false', error)
+        self.assertFalse((self.root / 'config.ini').exists())
+        ok, error = await self.service.update_config_from_ui({'OBS': {'use_virtual_cable': 'on'}})
+        self.assertTrue(ok, error)
+        restored = configparser.ConfigParser()
+        restored.read(self.root / 'config.ini')
+        self.assertTrue(restored.getboolean('OBS', 'use_virtual_cable'))
+        self.assertEqual(self.service.get_config_for_ui()['OBS']['use_virtual_cable'], 'true')
+
+    async def test_saved_cable_setting_selects_device_capture_instead_of_process_capture(self):
+        self.cfg['OBS'].update(enabled='true', use_virtual_cable='true', scene_name='LIVE')
+        self.service._refresh_obs_integration_from_config = AsyncMock()
+        self.service.actions.obs_integration_enabled = True
+        ensure = AsyncMock(return_value={'configured': True})
+        process = AsyncMock()
+        self.service.actions.obs = SimpleNamespace(ensure_cable_audio_capture=ensure, ensure_spotify_audio_capture=process)
+        with patch.object(self.app, 'desktop_audio_executable', return_value='desktop-host.exe'):
+            self.assertTrue((await self.service.ensure_obs_tiptune_audio_capture())['configured'])
+        ensure.assert_awaited_once_with('LIVE')
+        process.assert_not_awaited()
+
+    async def test_output_route_uses_normal_speakers_until_obs_capture_is_ready(self):
+        self.cfg['OBS'].update(enabled='true', use_virtual_cable='true', scene_name='LIVE')
+        self.service._refresh_obs_integration_from_config = AsyncMock()
+        self.service.actions.obs_integration_enabled = True
+        status = AsyncMock()
+        self.service.actions.obs = SimpleNamespace(get_cable_audio_capture_status=status)
+        with patch.object(self.app, 'desktop_audio_executable', return_value='desktop-host.exe'):
+            for capture in [None, {'state': 'muted', 'configured': False}, {'configured': False}, {'configured': True}]:
+                status.return_value = capture
+                result = await self.service.get_audio_output()
+                self.assertTrue(result['requested'])
+                self.assertEqual(result['enabled'], bool(capture and capture.get('configured')))
+            status.side_effect = asyncio.TimeoutError
+            self.assertFalse((await self.service.get_audio_output())['enabled'])
+            self.cfg['OBS']['enabled'] = 'false'
+            status.reset_mock()
+            self.assertFalse((await self.service.get_audio_output())['enabled'])
+            status.assert_not_awaited()
+            self.cfg['OBS']['enabled'] = 'true'
+        with patch.object(self.app, 'desktop_audio_executable', return_value=None):
+            self.assertFalse((await self.service.get_audio_output())['enabled'])
+            status.assert_not_awaited()
+
+    async def test_audio_output_endpoint_is_read_only_and_not_cached(self):
+        self.service.get_audio_output = AsyncMock(return_value={'requested': True, 'enabled': False})
+        webui = self.app.WebUI(self.service)
+        async with TestClient(TestServer(webui._app)) as client:
+            response = await client.get('/api/audio/output')
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertEqual(await response.json(), {'ok': True, 'requested': True, 'enabled': False})
 
     async def test_busy_http_port_aborts_before_request_processing_starts(self):
         occupied = self.app.WebUI(self.service, port=0)

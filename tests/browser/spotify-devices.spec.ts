@@ -79,6 +79,8 @@ test('Settings reconnect uses saved credentials, polls completion, and refreshes
   complete = true;
   await expect(page.getByLabel('Available devices')).toHaveValue('web');
   await expect(page.getByRole('button', { name: 'Reconnect Spotify', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Spotify', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button', { name: 'Spotify', exact: true }).click();
   await page.getByLabel('Client ID', { exact: true }).fill('changed-client');
   await expect(page.getByRole('button', { name: 'Reconnect Spotify', exact: true })).toBeDisabled();
   await expect(page.getByText('Save changes before connecting Spotify.')).toBeVisible();
