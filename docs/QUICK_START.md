@@ -176,7 +176,7 @@ In the Setup Wizard or Settings:
 One **TipTune Audio** source captures YouTube and the embedded Spotify player through a dedicated **VB-CABLE** in the Windows desktop app.
 
 1. Install [VB-CABLE from VB-Audio](https://vb-audio.com/Cable/): extract the download, run the installer as administrator, then restart Windows.
-2. Keep Windows' default output on your usual speakers or headphones. In **OBS → Settings → Audio**, select your listening device as the monitoring device. Dedicate CABLE Input to TipTune.
+2. Keep Windows' default output on your usual speakers or headphones. In **OBS → Settings → Audio**, select your listening device as the monitoring device. Dedicate CABLE Input to TipTune. Exclude the monitoring device from Desktop Audio or Audio Output Capture sources to avoid capturing TipTune twice.
 3. In the Setup Wizard's OBS sources step or Settings → **OBS audio sources**, enable **Capture TipTune audio in OBS**. Save, then select **Set up audio capture**. The wizard has **Save OBS setup** so you can save without leaving the step.
 4. Play a YouTube or Spotify request and check the **TipTune Audio** meter in OBS. If the meter moves but you hear nothing, check OBS's monitoring device, source mute, and volume.
 

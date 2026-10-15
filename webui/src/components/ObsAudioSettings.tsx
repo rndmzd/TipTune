@@ -79,7 +79,7 @@ export function ObsAudioSettings({ status, error, audioOutputError = '', outputA
           catch { setFeedback({ text: 'Open https://vb-audio.com/Cable/ in your browser to download VB-CABLE.', error: true }); }
         }}>VB-CABLE from VB-Audio</a>. Extract the download, run its Windows installer as administrator, and restart Windows. Dedicate this cable to TipTune.</li>
         <li>Keep Windows’ default output set to your usual speakers or headphones.</li>
-        <li>In OBS → Settings → Audio, choose your speakers or headphones as the monitoring device. Keep CABLE Input dedicated to TipTune. TipTune’s setup button enables monitoring on its audio source.</li>
+        <li>In OBS → Settings → Audio, choose your speakers or headphones as the monitoring device. Keep CABLE Input dedicated to TipTune. TipTune’s setup button enables monitoring on its audio source. Exclude your monitoring device from Desktop Audio or Audio Output Capture sources to avoid capturing TipTune twice.</li>
         <li>Enable Capture TipTune audio in OBS, save, then select Set up audio capture. Play a request and check the TipTune Audio meter in OBS.</li>
       </ol>
       <p className="muted">If the meter moves but you hear nothing, check the OBS monitoring device, source mute, and volume. Reconnect your listening device and select it again if needed.</p>
