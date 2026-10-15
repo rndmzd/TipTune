@@ -3,6 +3,15 @@
 .overlay-settings h2 { font-size: 18px; margin-bottom: 10px; }
 .overlay-settings h3 { margin: 22px 0 10px; font-size: 16px; }
 .overlay-settings p { max-width: 76ch; }
+.overlay-scene-status { display: grid; grid-template-columns: 140px minmax(0,1fr); gap: 8px; align-items: baseline; margin: 0 0 14px; }
+.overlay-scene-status dt { color: var(--muted); }
+.overlay-scene-status dd { margin: 0; overflow-wrap: anywhere; }
+.obs-audio-content p { margin: 8px 0; overflow-wrap: anywhere; }
+.obs-audio-guide { margin: 12px 0; max-width: 76ch; font-size: 13px; }
+.obs-audio-guide summary { cursor: pointer; }
+.obs-audio-guide ol { padding-left: 22px; }
+.obs-audio-guide li { margin: 10px 0; line-height: 1.5; }
+.wizard-obs-setup { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
 .overlay-controls { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 0 18px; }
 .overlay-controls input[type="color"] { height: 40px; padding: 4px 6px; }
 .overlay-toggles { display: flex; flex-wrap: wrap; gap: 18px; margin: 16px 0; }

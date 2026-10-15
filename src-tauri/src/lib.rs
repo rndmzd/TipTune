@@ -17,6 +17,9 @@ mod windows_job;
 mod startup;
 
 #[cfg(not(mobile))]
+mod audio_output;
+
+#[cfg(not(mobile))]
 mod error_reporting;
 
 #[cfg(not(mobile))]
@@ -73,9 +76,11 @@ pub fn run() {
     }));
     #[cfg(not(mobile))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        spotify_player::spotify_player_initialize,
         spotify_player::spotify_player_show,
         spotify_player::spotify_player_hide,
         spotify_player::spotify_player_reload,
+        audio_output::audio_output_configure,
     ]);
     let app = builder
         .plugin(tauri_plugin_dialog::init())

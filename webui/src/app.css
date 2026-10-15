@@ -163,6 +163,16 @@
  .settingsSection { min-width: 0; scroll-margin-top: calc(var(--settings-header-height) + var(--settings-nav-height) + 16px); }
  .settingsSection h2 { font-size: 18px; }
  .settingsSection p { max-width: 76ch; }
+.settingsDisclosureHeader { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+.settingsDisclosureHeader h2 { margin: 0; }
+.settingsDisclosureToggle { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; }
+.settingsDisclosureToggle:hover { background: none; color: var(--text); }
+.settingsDisclosureToggle svg { flex-shrink: 0; }
+.settingsDisclosureToggle svg.expanded { transform: rotate(90deg); }
+.settingsDisclosureActions { display: flex; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+.settingsDisclosureBody { margin-top: 16px; }
+.settingsDisclosureBody[hidden] { display: none; }
+.settingsDisclosureFeedback { margin: 12px 0 0; }
  .settingsCheckbox { display: flex; gap: 8px; align-items: center; margin-top: 16px; font-size: 13px; }
  .settingsCheckbox input { width: 16px; height: 16px; padding: 0; margin: 0; flex: 0 0 auto; }
  .settingsFieldRow { display: flex; gap: 8px; align-items: center; }
