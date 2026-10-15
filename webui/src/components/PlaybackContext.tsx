@@ -535,37 +535,31 @@ export function MiniPlayer() {
   const fallback = typeof nowPlaying.uri === 'string' && nowPlaying.uri.trim() !== '' ? nowPlaying.uri.trim() : 'Now playing';
 
   return (
-    <div className="headerMiniPlayer">
+    <div className="headerMiniPlayer" role="region" aria-label="Now playing">
       <div className="headerMiniControls">
         <button
           type="button"
           className="miniControlBtn miniControlBtnBare"
-          title="Play"
-          aria-label="Play"
-          onClick={() => resumePlayback()}
-          disabled={!paused}
+          title={paused ? 'Play' : 'Pause'}
+          aria-label={paused ? 'Play' : 'Pause'}
+          onClick={() => paused ? resumePlayback() : pausePlayback()}
         >
-          ▶
-        </button>
-        <button
-          type="button"
-          className="miniControlBtn miniControlBtnBare"
-          title="Pause"
-          aria-label="Pause"
-          onClick={() => pausePlayback()}
-          disabled={paused}
-        >
-          ⏸
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d={paused ? 'M7 4v16l13-8z' : 'M6 4h4v16H6zm8 0h4v16h-4z'} />
+          </svg>
         </button>
       </div>
       <div className="headerMiniInfo">
-        <div className="headerMiniTitle">{name || fallback}</div>
-        {subtitle ? <div className="headerMiniSubtitle">{subtitle}</div> : null}
+        <div className="headerMiniTitle" title={name || fallback}>{name || fallback}</div>
+        {subtitle ? <div className="headerMiniSubtitle" title={subtitle}>{subtitle}</div> : null}
       </div>
       <div className="headerMiniProgress">
+        <span className="headerMiniTime">{fmtTime(posClampedMs)}</span>
         <input
           className="progressRange"
           type="range"
+          aria-label="Playback position"
+          aria-valuetext={`${fmtTime(posClampedMs)} of ${fmtTime(durationMs)}`}
           min={0}
           max={durationMs || 0}
           value={posClampedMs || 0}
@@ -575,10 +569,7 @@ export function MiniPlayer() {
           }}
           disabled={!durationMs || !canSeek}
         />
-        <div className="headerMiniTime">
-          <span>{fmtTime(posClampedMs)}</span>
-          <span>{fmtTime(durationMs)}</span>
-        </div>
+        <span className="headerMiniTime">{fmtTime(durationMs)}</span>
       </div>
     </div>
   );

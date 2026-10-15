@@ -48,7 +48,6 @@ export function HeaderBar(props: {
     <div className="headerBar">
       <div className="headerTitleWrap">
         <h1 className="headerTitle">{props.title}</h1>
-        {showMiniPlayer ? <MiniPlayer /> : null}
       </div>
       <div className="headerNav">
         <Link className={`navBtn${isActivePath('/spotify') ? ' navBtnActive' : ''}`} to="/spotify">
@@ -82,6 +81,7 @@ export function HeaderBar(props: {
         </Link>
         {props.right}
       </div>
+      {showMiniPlayer ? <MiniPlayer /> : null}
     </div>
   );
 }
