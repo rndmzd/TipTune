@@ -85,6 +85,11 @@ try {
     Assert ($overlay.build.beforeBundleCommand -ceq '') 'Release must not rebuild the signed sidecar.'
     Assert ([IO.Path]::IsPathRooted($overlay.bundle.windows.signCommand.args[4])) 'Uninstaller signer path must be absolute.'
     Assert ($overlay.bundle.windows.signCommand.args[-1] -ceq '%1') 'Tauri must pass the actual patched file to sign.'
+    function global:gh { $global:LASTEXITCODE = 1; 'gh: Not Found (HTTP 404)' }
+    & (Join-Path $root 'scripts/prepare-windows-signing.ps1')
+    Assert ($LASTEXITCODE -eq 0) 'Expected 404 must return success to the Actions pwsh wrapper.'
+    function global:gh { $global:LASTEXITCODE = 1; 'gh: server error (HTTP 500)' }
+    Expect-Failure { & (Join-Path $root 'scripts/prepare-windows-signing.ps1') } 'Unable to check'
     $env:GITHUB_REF_NAME = 'v9.9.9'
     Expect-Failure { & (Join-Path $root 'scripts/prepare-windows-signing.ps1') } 'require the tag'
 
@@ -115,3 +120,6 @@ fs.appendFileSync(process.env.GITHUB_OUTPUT, 'artifact-id=12345\n');
         Remove-Item -LiteralPath $resolvedScratch -Recurse -Force
     }
 }
+# Negative child-process tests intentionally set LASTEXITCODE. The Actions pwsh
+# wrapper propagates it even after the assertion catches the expected failure.
+exit 0

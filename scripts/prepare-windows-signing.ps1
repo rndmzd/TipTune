@@ -29,3 +29,5 @@ $signCommand = @{
     ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $tools 'windows.conf.json') -Encoding utf8
 "TIPTUNE_SIGNING_REPORT=$env:RUNNER_TEMP/tiptune-windows-signatures.jsonl" >> $env:GITHUB_ENV
 Write-Host "Windows signing configured for TipTune $version. Each SignPath request may require approval in the SignPath portal."
+# The expected `gh api` 404 for a new tag must not fail the runner's pwsh wrapper.
+exit 0
