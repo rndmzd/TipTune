@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_submodules, is_module_or_submodule
 
@@ -20,6 +21,12 @@ hiddenimports += collect_submodules('sentry_sdk', filter=lambda name: not name.s
 
 
 ROOT = os.path.abspath(SPECPATH)
+
+if sys.platform == 'win32':
+    from scripts.windows_version_info import make_version_info
+    windows_version = make_version_info(ROOT)
+else:
+    windows_version = None
 
 SIDECAR_CONSOLE = os.environ.get('TIPTUNE_SIDECAR_CONSOLE', '').strip() == '1'
 
@@ -83,6 +90,7 @@ exe = EXE(
     a.datas,
     [],
     name='TipTune',
+    version=windows_version,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

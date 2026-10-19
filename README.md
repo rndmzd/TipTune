@@ -396,9 +396,20 @@ Options:
 - `--no-commit`
 - `--no-tag`
 
+### Code signing policy
+
+See [Code signing policy](docs/CODE_SIGNING.md) for the free SignPath Foundation
+application, maintainer approval, Windows signing coverage, and account setup.
+Tag releases require production Windows signing; missing configuration stops the
+release rather than uploading unsigned installers.
+
 ### Required GitHub Secrets
 
-The release workflow is configured to use Tauri updater signing secrets:
+The release workflow uses both Windows code signing and Tauri updater signing:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- `SIGNPATH_API_TOKEN`
+
+The policy also lists the required SignPath repository variables. Keep the
+existing Tauri updater key pair so users of earlier versions can receive updates.

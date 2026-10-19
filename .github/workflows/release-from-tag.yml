@@ -7,6 +7,11 @@ on:
 
 permissions:
   contents: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   FFMPEG_VERSION: "7.1.1"
@@ -14,15 +19,44 @@ env:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Require production Windows signing and matching versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: ./scripts/prepare-windows-signing.ps1
+
+      - name: Fetch pinned artifact upload client
+        uses: actions/checkout@v4
+        with:
+          repository: actions/upload-artifact
+          ref: ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          path: .signing-tools/upload-artifact
+          persist-credentials: false
+
+      - name: Fetch pinned SignPath client
+        uses: actions/checkout@v4
+        with:
+          repository: SignPath/github-action-submit-signing-request
+          ref: f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+          path: .signing-tools/signpath
+          persist-credentials: false
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install frontend deps
@@ -52,20 +86,44 @@ jobs:
         shell: bash
 
       - name: Build + Release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TIPTUNE_WINDOWS_SIGNING: '1'
 
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
 
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "TipTune ${{ github.ref_name }}"
-          releaseBody: "See assets for downloads."
+          releaseBody: |
+            See assets for downloads.
+
+            [Code signing policy](https://github.com/rndmzd/TipTune/blob/${{ github.ref_name }}/docs/CODE_SIGNING.md).
           releaseDraft: true
           prerelease: false
-          args: -- --locked
+          args: --config .signing-tools/windows.conf.json -- --locked
+
+      - name: Verify signatures inside both installer formats
+        env:
+          WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
+        run: ./scripts/verify-windows-release.ps1
+
+      - name: Keep Windows signing evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signing-report
+          path: ${{ runner.temp }}/tiptune-windows-signatures.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload private source maps for the final build
         env:
