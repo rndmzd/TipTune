@@ -17,7 +17,9 @@ For an individual developer, Public Trust signing is currently available in the
 United States and Canada. Use the same legal name and address on your personal
 Azure billing account and identity documents. Review **Certificate subject
 preview** before submitting identity validation: the public certificate contains
-validated identity information. It cannot use an arbitrary TipTune publisher name.
+your validated name, city, state/province, and country. Microsoft's individual
+workflow excludes your email and street address from the certificate. It cannot
+use an arbitrary TipTune publisher name.
 
 1. Open [Azure account signup](https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account?icid=payg)
    and choose **Pay as you go**. Artifact Signing does not support free, trial,
@@ -66,21 +68,26 @@ See Microsoft's [setup quickstart](https://learn.microsoft.com/en-us/azure/artif
    `TipTune GitHub signing` for **Accounts in this organizational directory only**.
    Leave redirect URI empty. Record its **Application (client) ID** and
    **Directory (tenant) ID**. Do not create a client secret or add API permissions.
+   If the portal adds the default Microsoft Graph `User.Read` permission, remove
+   that configured permission; this signing app does not need it or admin consent.
 3. On that app, open **Certificates & secrets > Federated credentials > Add
-   credential** and select **GitHub Actions deploying Azure resources**. Enter:
+   credential**. For TipTune's current GitHub subject configuration, select
+   **Other issuer** and **Explicit subject identifier**, then enter:
 
    | Field | Value |
    | --- | --- |
-   | Organization | `rndmzd` |
-   | Repository | `TipTune` |
-   | Entity type | **Environment** |
-   | Environment | `windows-signing` |
+   | Issuer | `https://token.actions.githubusercontent.com` |
+   | Value (subject) | `repo:rndmzd/TipTune:environment:windows-signing` |
    | Name | `tiptune-windows-releases` |
    | Audience | `api://AzureADTokenExchange` |
 
-   The generated subject must be exactly
-   `repo:rndmzd/TipTune:environment:windows-signing` and issuer
-   `https://token.actions.githubusercontent.com`. The same configuration is
+   The subject must match the repository's actual OIDC configuration. Check it
+   with `gh api repos/rndmzd/TipTune/actions/oidc/customization/sub`: TipTune currently
+   returns `use_default: true`, `use_immutable_subject: false`, and
+   `sub_claim_prefix: repo:rndmzd/TipTune`. The portal's GitHub scenario may propose
+   a newer immutable-ID subject that does not match this repository's setting.
+   If that setting changes, update Azure's exact subject to match. The same
+   federation configuration is
    available as [azure-federation.json](../.github/signing/azure-federation.json)
    for an administrator using the Azure CLI.
 4. Assign **Artifact Signing Certificate Profile Signer** to the new app's
