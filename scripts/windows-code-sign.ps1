@@ -44,8 +44,7 @@ Invoke-TipTuneSigningAction (Join-Path $root '.signing-tools/upload-artifact/dis
     'overwrite' = 'false'
     'include-hidden-files' = 'false'
 } $uploadOutput
-$artifactId = [regex]::Match((Get-Content -LiteralPath $uploadOutput -Raw), '(?m)^artifact-id=(\d+)\s*$').Groups[1].Value
-if (-not $artifactId) { throw 'The unsigned artifact upload did not return an artifact ID.' }
+$artifactId = Get-TipTuneUploadedArtifactId $uploadOutput
 Invoke-TipTuneSigningAction (Join-Path $root '.signing-tools/signpath/index.js') @{
     'connector-url' = 'https://pipelineconnector.connectors.signpath.io/GitHubActions/GitHubCom'
     'api-token' = $env:SIGNPATH_API_TOKEN

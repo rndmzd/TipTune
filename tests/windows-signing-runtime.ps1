@@ -19,7 +19,5 @@ Invoke-TipTuneSigningAction (Join-Path $root '.signing-tools/upload-artifact/dis
     'overwrite' = 'false'
     'include-hidden-files' = 'false'
 } $output
-if ((Get-Content -LiteralPath $output -Raw) -notmatch '(?m)^artifact-id=\d+') {
-    throw 'Nested upload did not return a GitHub artifact ID.'
-}
+Get-TipTuneUploadedArtifactId $output | Out-Null
 Write-Host 'Verified the nested artifact upload in the real GitHub Actions runtime.'

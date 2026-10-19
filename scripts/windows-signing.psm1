@@ -93,7 +93,8 @@ function Test-TipTuneUpstreamFile {
     if ($full.StartsWith($mediaRoot, [StringComparison]::OrdinalIgnoreCase) -and
         $leaf -in @('ffmpeg.exe', 'ffprobe.exe', 'yt-dlp.exe', 'deno.exe')) { return $true }
     # Tauri copies these upstream NSIS plugins before invoking the signing hook.
-    return $full -match '/x86-unicode/(additional/)?(NSISdl|StartMenu|System|nsDialogs|nsis_tauri_utils)\.dll$'
+    if ($full -match '/x86-unicode/(additional/)?(NSISdl|StartMenu|System|nsDialogs|nsis_tauri_utils)\.dll$') { return $true }
+    return $full -match '/wix/(x64|x86|arm64)/wix/(WixUIExtension|WixUtilExtension)\.dll$'
 }
 
 function Invoke-TipTuneSigningAction {
@@ -104,6 +105,8 @@ function Invoke-TipTuneSigningAction {
     $overrides = @{ GITHUB_OUTPUT = $OutputFile }
     foreach ($key in $Inputs.Keys) { $overrides['INPUT_' + $key.ToUpperInvariant()] = [string]$Inputs[$key] }
     try {
+        # @actions/core file commands require an existing output file.
+        '' | Set-Content -LiteralPath $OutputFile -Encoding utf8
         foreach ($key in $overrides.Keys) {
             $saved[$key] = [Environment]::GetEnvironmentVariable($key)
             [Environment]::SetEnvironmentVariable($key, $overrides[$key])
@@ -115,6 +118,16 @@ function Invoke-TipTuneSigningAction {
     }
 }
 
+function Get-TipTuneUploadedArtifactId {
+    param([Parameter(Mandatory)][string]$OutputFile)
+    $content = Get-Content -LiteralPath $OutputFile -Raw
+    # @actions/core emits the multiline file-command form, even for numeric IDs.
+    $pattern = '(?m)^artifact-id(?:=(?<id>\d+)[ \t]*\r?$|<<(?<delimiter>[^\r\n]+)\r?\n(?<id>\d+)\r?\n\k<delimiter>[ \t]*\r?$)'
+    $id = [regex]::Match($content, $pattern).Groups['id'].Value
+    if (-not $id) { throw 'The unsigned artifact upload did not return a numeric artifact ID.' }
+    return $id
+}
+
 Export-ModuleMember -Function Get-TipTuneReleaseVersion, Assert-TipTuneFileMetadata,
     Assert-TipTuneAuthenticode, Assert-TipTuneSigningConfiguration, Invoke-TipTuneSigningAction,
-    Test-TipTuneUpstreamFile
+    Test-TipTuneUpstreamFile, Get-TipTuneUploadedArtifactId

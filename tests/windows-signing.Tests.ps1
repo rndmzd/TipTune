@@ -47,6 +47,9 @@ try {
     }
     Assert (Test-TipTuneUpstreamFile (Join-Path $scratch 'x86-unicode/additional/nsis_tauri_utils.dll') $root) 'NSIS upstream plugin must not be re-signed.'
     Assert (-not (Test-TipTuneUpstreamFile (Join-Path $scratch 'x86-unicode/unexpected.dll') $root)) 'Unexpected plugin must not be silently excluded.'
+    Assert (Test-TipTuneUpstreamFile (Join-Path $scratch 'wix/x64/wix/WixUIExtension.dll') $root) 'Upstream WiX UI extension must not be re-signed.'
+    Assert (Test-TipTuneUpstreamFile (Join-Path $scratch 'wix/x64/wix/WixUtilExtension.dll') $root) 'Upstream WiX utility extension must not be re-signed.'
+    Assert (-not (Test-TipTuneUpstreamFile (Join-Path $scratch 'wix/x64/wix/unexpected.dll') $root)) 'Unexpected WiX code must not be silently excluded.'
 
     # Exercise trusted signature, wrong identity, and missing timestamp decisions
     # without adding a self-signed certificate to the host's trust store.
@@ -97,13 +100,18 @@ try {
     @'
 const fs = require('node:fs');
 if (process.env['INPUT_API-TOKEN'] !== 'fixture-only') process.exit(2);
-fs.appendFileSync(process.env.GITHUB_OUTPUT, 'artifact-id=12345\n');
+if (!fs.existsSync(process.env.GITHUB_OUTPUT)) process.exit(3);
+fs.appendFileSync(process.env.GITHUB_OUTPUT, 'artifact-id<<ghadelimiter_fixture\n12345\nghadelimiter_fixture\n');
 '@ | Set-Content -LiteralPath $fakeAction
     [Environment]::SetEnvironmentVariable('INPUT_API-TOKEN', 'prior-value')
     $env:GITHUB_OUTPUT = 'prior-output'
     $output = Join-Path $scratch 'output.txt'
     Invoke-TipTuneSigningAction $fakeAction @{ 'api-token' = 'fixture-only' } $output
-    Assert ((Get-Content -LiteralPath $output -Raw) -match 'artifact-id=12345') 'Action output was not isolated and captured.'
+    Assert ((Get-TipTuneUploadedArtifactId $output) -ceq '12345') 'Multiline Actions artifact ID was not parsed.'
+    'artifact-id=45678' | Set-Content -LiteralPath $output
+    Assert ((Get-TipTuneUploadedArtifactId $output) -ceq '45678') 'Single-line Actions artifact ID was not parsed.'
+    'artifact-id=invalid' | Set-Content -LiteralPath $output
+    Expect-Failure { Get-TipTuneUploadedArtifactId $output } 'numeric artifact ID'
     Assert ([Environment]::GetEnvironmentVariable('INPUT_API-TOKEN') -ceq 'prior-value') 'Action token leaked into subsequent calls.'
     Assert ($env:GITHUB_OUTPUT -ceq 'prior-output') 'Action output path was not restored.'
     Expect-Failure { Invoke-TipTuneSigningAction $fakeAction @{ 'api-token' = 'wrong-fixture' } $output } 'Signing action failed'

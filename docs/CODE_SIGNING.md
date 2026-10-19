@@ -89,7 +89,7 @@ has been signed. Normal CI and local builds remain available without SignPath.
 ## Signing coverage and third-party components
 
 SignPath Foundation only permits signing this project's artifacts. Bundled
-FFmpeg, FFprobe, yt-dlp, Deno, and the standard NSIS plugins retain their upstream
+FFmpeg, FFprobe, yt-dlp, Deno, and the standard NSIS/WiX plugins retain their upstream
 bytes and signatures. The hook explicitly excludes those known upstream paths
 and records their hashes and signature status; it refuses other unexpected files.
 They must not be relabeled or re-signed as TipTune. Microsoft/WebView2 components
