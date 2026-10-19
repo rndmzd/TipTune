@@ -79,11 +79,20 @@ function Assert-TipTuneAuthenticode {
 }
 
 function Assert-TipTuneSigningConfiguration {
-    $required = @('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG',
-        'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG',
+    $required = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_ARTIFACT_SIGNING_ENDPOINT',
+        'AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME', 'AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME',
         'WINDOWS_SIGNING_CERT_SUBJECT', 'TAURI_SIGNING_PRIVATE_KEY')
     $missing = @($required | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
     if ($missing.Count) { throw "Windows release signing is not configured. Missing: $($missing -join ', '). See docs/CODE_SIGNING.md." }
+    foreach ($name in @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID')) {
+        $id = [guid]::Empty
+        if (-not [guid]::TryParse([Environment]::GetEnvironmentVariable($name), [ref]$id) -or $id -eq [guid]::Empty) {
+            throw "$name must be a nonempty Azure GUID."
+        }
+    }
+    if ($env:AZURE_ARTIFACT_SIGNING_ENDPOINT -cnotmatch '^https://[a-z0-9]+\.codesigning\.azure\.net/?$') {
+        throw 'The Azure signing endpoint must be an HTTPS codesigning.azure.net regional endpoint.'
+    }
 }
 
 function Test-TipTuneUpstreamFile {
@@ -98,37 +107,66 @@ function Test-TipTuneUpstreamFile {
     return $full -match '/wix/(x64|x86|arm64)/wix/(WixUIExtension|WixUtilExtension)\.dll$'
 }
 
-function Invoke-TipTuneSigningAction {
-    param([string]$EntryPoint, [hashtable]$Inputs, [string]$OutputFile)
-    # Run the pinned, bundled official JavaScript actions inside tauri-action's
-    # inherited Actions runtime. Do not export its runtime token to GITHUB_ENV.
-    $saved = @{}
-    $overrides = @{ GITHUB_OUTPUT = $OutputFile }
-    foreach ($key in $Inputs.Keys) { $overrides['INPUT_' + $key.ToUpperInvariant()] = [string]$Inputs[$key] }
+function Get-TipTuneSigningToolPaths {
+    param([Parameter(Mandatory)][string]$Root)
+    $packages = Get-Content -LiteralPath (Join-Path $Root 'scripts/windows-signing-tools.json') -Raw | ConvertFrom-Json
+    $paths = @{}
+    foreach ($package in $packages) {
+        $paths[$package.tool] = Join-Path $Root ".signing-tools/native/$($package.id).$($package.version)/$($package.path)"
+    }
+    return $paths
+}
+
+function Invoke-TipTuneAzureSigning {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Root)
+    Assert-TipTuneSigningConfiguration
+    foreach ($name in @('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'RUNNER_TEMP')) {
+        if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing GitHub OIDC setting: $name. The release job needs id-token: write." }
+    }
+    $requestUri = [uri]$env:ACTIONS_ID_TOKEN_REQUEST_URL
+    if ($requestUri.Scheme -cne 'https' -or $requestUri.Host -notlike '*.actions.githubusercontent.com' -or
+        -not $requestUri.IsDefaultPort -or $requestUri.UserInfo) {
+        throw 'Refusing to send the GitHub OIDC request credential to an unexpected endpoint.'
+    }
+    $paths = Get-TipTuneSigningToolPaths $Root
+    foreach ($tool in $paths.Values) {
+        if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw 'Run scripts/setup-windows-signing-tools.ps1 before signing.' }
+    }
+    $requestRoot = Join-Path $env:RUNNER_TEMP ('tiptune-azure-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $requestRoot | Out-Null
+    $tokenPath = Join-Path $requestRoot 'oidc-token'
+    $metadataPath = Join-Path $requestRoot 'metadata.json'
+    $savedTokenPath = $env:AZURE_FEDERATED_TOKEN_FILE
+    $savedAuthority = $env:AZURE_AUTHORITY_HOST
     try {
-        # @actions/core file commands require an existing output file.
-        '' | Set-Content -LiteralPath $OutputFile -Encoding utf8
-        foreach ($key in $overrides.Keys) {
-            $saved[$key] = [Environment]::GetEnvironmentVariable($key)
-            [Environment]::SetEnvironmentVariable($key, $overrides[$key])
-        }
-        & node $EntryPoint
-        if ($LASTEXITCODE -ne 0) { throw "Signing action failed: $(Split-Path $EntryPoint -Leaf)." }
+        # Obtain a fresh assertion for every callback, including after a long Rust
+        # build. The Azure client exchanges it through WorkloadIdentityCredential.
+        $separator = if ($requestUri.Query) { '&' } else { '?' }
+        $audience = [uri]::EscapeDataString('api://AzureADTokenExchange')
+        $response = Invoke-RestMethod -Uri ($requestUri.AbsoluteUri + $separator + 'audience=' + $audience) -Method Get `
+            -Headers @{ Authorization = "bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } -MaximumRedirection 0 -TimeoutSec 30
+        if ($response.value -isnot [string] -or [string]::IsNullOrWhiteSpace($response.value)) { throw 'GitHub returned no OIDC assertion.' }
+        [IO.File]::WriteAllText($tokenPath, $response.value)
+        $env:AZURE_FEDERATED_TOKEN_FILE = $tokenPath
+        $env:AZURE_AUTHORITY_HOST = 'https://login.microsoftonline.com/'
+        @{
+            Endpoint = $env:AZURE_ARTIFACT_SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME
+            CertificateProfileName = $env:AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME
+            ExcludeCredentials = @('EnvironmentCredential', 'ManagedIdentityCredential', 'SharedTokenCacheCredential',
+                'VisualStudioCredential', 'VisualStudioCodeCredential', 'AzureCliCredential', 'AzurePowerShellCredential',
+                'AzureDeveloperCliCredential', 'InteractiveBrowserCredential')
+        } | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding utf8
+        & $paths.SignTool sign /fd SHA256 /tr 'http://timestamp.acs.microsoft.com' /td SHA256 `
+            /dlib $paths.Dlib /dmdf $metadataPath $Path
+        if ($LASTEXITCODE -ne 0) { throw "Azure SignTool failed with exit code $LASTEXITCODE." }
     } finally {
-        foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
+        $env:AZURE_FEDERATED_TOKEN_FILE = $savedTokenPath
+        $env:AZURE_AUTHORITY_HOST = $savedAuthority
+        if (Test-Path -LiteralPath $tokenPath) { Remove-Item -LiteralPath $tokenPath -Force }
     }
 }
 
-function Get-TipTuneUploadedArtifactId {
-    param([Parameter(Mandatory)][string]$OutputFile)
-    $content = Get-Content -LiteralPath $OutputFile -Raw
-    # @actions/core emits the multiline file-command form, even for numeric IDs.
-    $pattern = '(?m)^artifact-id(?:=(?<id>\d+)[ \t]*\r?$|<<(?<delimiter>[^\r\n]+)\r?\n(?<id>\d+)\r?\n\k<delimiter>[ \t]*\r?$)'
-    $id = [regex]::Match($content, $pattern).Groups['id'].Value
-    if (-not $id) { throw 'The unsigned artifact upload did not return a numeric artifact ID.' }
-    return $id
-}
-
 Export-ModuleMember -Function Get-TipTuneReleaseVersion, Assert-TipTuneFileMetadata,
-    Assert-TipTuneAuthenticode, Assert-TipTuneSigningConfiguration, Invoke-TipTuneSigningAction,
-    Test-TipTuneUpstreamFile, Get-TipTuneUploadedArtifactId
+    Assert-TipTuneAuthenticode, Assert-TipTuneSigningConfiguration, Get-TipTuneSigningToolPaths,
+    Test-TipTuneUpstreamFile, Invoke-TipTuneAzureSigning

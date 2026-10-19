@@ -1,23 +1,17 @@
-# Verify nested upload-artifact from a JavaScript action's real runner context.
-# This uploads only a small text fixture; it never calls a signing provider.
+# Exercise the actual pinned Microsoft tool packages without cloud credentials.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Import-Module (Join-Path $root 'scripts/windows-signing.psm1') -Force
-foreach ($name in @('ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL', 'RUNNER_TEMP')) {
-    if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing inherited runtime setting: $name" }
-}
-$fixture = Join-Path $env:RUNNER_TEMP 'tiptune-signing-runtime.txt'
-'TipTune signing runtime fixture; not a release artifact.' | Set-Content -LiteralPath $fixture
-$output = Join-Path $env:RUNNER_TEMP 'tiptune-signing-runtime-output.txt'
-Invoke-TipTuneSigningAction (Join-Path $root '.signing-tools/upload-artifact/dist/upload/index.js') @{
-    name = ('signing-runtime-fixture-' + [guid]::NewGuid().ToString('N'))
-    path = $fixture
-    'if-no-files-found' = 'error'
-    'retention-days' = '1'
-    'compression-level' = '0'
-    'overwrite' = 'false'
-    'include-hidden-files' = 'false'
-} $output
-Get-TipTuneUploadedArtifactId $output | Out-Null
-Write-Host 'Verified the nested artifact upload in the real GitHub Actions runtime.'
+$paths = Get-TipTuneSigningToolPaths $root
+& $paths.SignTool /? | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'The installed Microsoft SignTool could not start.' }
+$runtimes = @(& dotnet --list-runtimes)
+if ($LASTEXITCODE -ne 0 -or -not ($runtimes -match '^Microsoft.NETCore.App 8\.')) { throw '.NET 8 is required by the Azure signing client.' }
+# Detect missing native dependencies without invoking signing or contacting Azure.
+$handle = [Runtime.InteropServices.NativeLibrary]::Load($paths.Dlib)
+try {
+    if ($handle -eq [IntPtr]::Zero) { throw 'The Azure signing plug-in could not load.' }
+} finally { [Runtime.InteropServices.NativeLibrary]::Free($handle) }
+Write-Host 'Verified the Microsoft SignTool, Azure signing plug-in, and .NET 8 runtime. No cloud signing request was made.'
+exit 0

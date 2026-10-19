@@ -398,8 +398,8 @@ Options:
 
 ### Code signing policy
 
-See [Code signing policy](docs/CODE_SIGNING.md) for the free SignPath Foundation
-application, maintainer approval, Windows signing coverage, and account setup.
+See [Code signing policy](docs/CODE_SIGNING.md) for Azure Artifact Signing account
+setup, GitHub identity federation, signing coverage, and release verification.
 Tag releases require production Windows signing; missing configuration stops the
 release rather than uploading unsigned installers.
 
@@ -409,7 +409,8 @@ The release workflow uses both Windows code signing and Tauri updater signing:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- `SIGNPATH_API_TOKEN`
 
-The policy also lists the required SignPath repository variables. Keep the
-existing Tauri updater key pair so users of earlier versions can receive updates.
+The policy also lists the required variables in the `windows-signing` GitHub
+environment. Azure authentication uses short-lived GitHub identity tokens and
+requires no client secret. Keep the existing Tauri updater key pair so users of
+earlier versions can receive updates.

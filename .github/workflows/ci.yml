@@ -66,25 +66,17 @@ jobs:
         if: runner.os == 'Windows'
         run: ./tests/windows-signing.Tests.ps1
 
-      - name: Fetch pinned artifact client for signing runtime check
+      - name: Set up .NET for the Azure signing client
         if: runner.os == 'Windows'
-        uses: actions/checkout@v4
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
-          repository: actions/upload-artifact
-          ref: ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-          path: .signing-tools/upload-artifact
-          persist-credentials: false
+          dotnet-version: '8.0.x'
 
-      - name: Verify signing artifact handoff in a real Actions runtime
+      - name: Verify Azure signing tools without cloud credentials
         if: runner.os == 'Windows'
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        with:
-          script: |
-            const { spawnSync } = require('node:child_process');
-            const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-File',
-              'tests/windows-signing-runtime.ps1'], { stdio: 'inherit' });
-            if (result.error) throw result.error;
-            if (result.status !== 0) core.setFailed('Signing runtime handoff failed');
+        run: |
+          ./scripts/setup-windows-signing-tools.ps1
+          ./tests/windows-signing-runtime.ps1
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'

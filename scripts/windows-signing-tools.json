@@ -1,0 +1,16 @@
+[
+  {
+    "tool": "SignTool",
+    "id": "Microsoft.Windows.SDK.BuildTools",
+    "version": "10.0.26100.4188",
+    "sha256": "180DEB372659029864C10A0C04787833234D64AACD1D2C0661D2C00295D8E022",
+    "path": "bin/10.0.26100.0/x64/signtool.exe"
+  },
+  {
+    "tool": "Dlib",
+    "id": "Microsoft.ArtifactSigning.Client",
+    "version": "1.0.128",
+    "sha256": "74BD7D27E6CE1051409C38D9B46BC8DF0400ECD643D51FFBF2AC00869061E40B",
+    "path": "bin/x64/Azure.CodeSigning.Dlib.dll"
+  }
+]

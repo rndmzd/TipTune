@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   actions: read
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,7 +20,15 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 90
+    environment: windows-signing
+    env:
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+      AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+      AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+      WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
 
     steps:
       - name: Checkout
@@ -28,30 +37,16 @@ jobs:
       - name: Require production Windows signing and matching versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: ./scripts/prepare-windows-signing.ps1
 
-      - name: Fetch pinned artifact upload client
-        uses: actions/checkout@v4
+      - name: Set up .NET for the Azure signing client
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
-          repository: actions/upload-artifact
-          ref: ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-          path: .signing-tools/upload-artifact
-          persist-credentials: false
+          dotnet-version: '8.0.x'
 
-      - name: Fetch pinned SignPath client
-        uses: actions/checkout@v4
-        with:
-          repository: SignPath/github-action-submit-signing-request
-          ref: f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-          path: .signing-tools/signpath
-          persist-credentials: false
+      - name: Install verified Microsoft signing tools
+        run: ./scripts/setup-windows-signing-tools.ps1
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -93,12 +88,6 @@ jobs:
 
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
 
         with:
           tagName: ${{ github.ref_name }}
