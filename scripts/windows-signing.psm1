@@ -39,20 +39,21 @@ function Get-TipTuneMsiProperty {
 function Assert-TipTuneFileMetadata {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Version)
     $file = Get-Item -LiteralPath $Path
-    switch ($file.Extension.ToLowerInvariant()) {
-        '.exe' {
-            $info = $file.VersionInfo
-            if ($info.ProductName -cne 'TipTune' -or $info.ProductVersion -cne $Version -or $info.FileVersion -cne $Version) {
-                throw "Refusing to sign $($file.Name): expected TipTune product and file version $Version."
-            }
+    if ($file.Extension -ieq '.msi') {
+        if ((Get-TipTuneMsiProperty $file.FullName 'ProductName') -cne 'TipTune' -or
+            (Get-TipTuneMsiProperty $file.FullName 'ProductVersion') -cne $Version) {
+            throw "Refusing to sign $($file.Name): MSI product/version does not match TipTune $Version."
         }
-        '.msi' {
-            if ((Get-TipTuneMsiProperty $file.FullName 'ProductName') -cne 'TipTune' -or
-                (Get-TipTuneMsiProperty $file.FullName 'ProductVersion') -cne $Version) {
-                throw "Refusing to sign $($file.Name): MSI product/version does not match TipTune $Version."
-            }
-        }
-        default { throw "Unsupported signing file type: $($file.Extension)" }
+        return
+    }
+    # NSIS passes a PE uninstaller with a .tmp name to !uninstfinalize.
+    $stream = [IO.File]::OpenRead($file.FullName)
+    try { $isPe = ($stream.ReadByte() -eq 0x4D -and $stream.ReadByte() -eq 0x5A) }
+    finally { $stream.Dispose() }
+    if (-not $isPe) { throw "Refusing to sign $($file.Name): not a PE executable or MSI installer." }
+    $info = $file.VersionInfo
+    if ($info.ProductName -cne 'TipTune' -or $info.ProductVersion -cne $Version -or $info.FileVersion -cne $Version) {
+        throw "Refusing to sign $($file.Name): expected TipTune product and file version $Version."
     }
 }
 

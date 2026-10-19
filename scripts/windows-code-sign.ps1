@@ -32,7 +32,8 @@ $requestRoot = Join-Path $env:RUNNER_TEMP ('tiptune-sign-' + [guid]::NewGuid().T
 $unsigned = Join-Path $requestRoot 'unsigned'
 $signed = Join-Path $requestRoot 'signed'
 New-Item -ItemType Directory -Path $unsigned, $signed | Out-Null
-$inputPath = Join-Path $unsigned $file.Name
+$artifactName = if ($file.Extension -ieq '.tmp') { 'TipTune-uninstaller.exe' } else { $file.Name }
+$inputPath = Join-Path $unsigned $artifactName
 Copy-Item -LiteralPath $file.FullName -Destination $inputPath
 $uploadOutput = Join-Path $requestRoot 'upload-output.txt'
 Invoke-TipTuneSigningAction (Join-Path $root '.signing-tools/upload-artifact/dist/upload/index.js') @{
@@ -62,9 +63,10 @@ Invoke-TipTuneSigningAction (Join-Path $root '.signing-tools/signpath/index.js')
     'output-artifact-directory' = $signed
     'skip-decompress' = 'false'
 } (Join-Path $requestRoot 'signpath-output.txt')
-$signedPath = Join-Path $signed $file.Name
+$signedPath = Join-Path $signed $artifactName
 Assert-TipTuneFileMetadata $signedPath $version
 $evidence = Assert-TipTuneAuthenticode $signedPath $env:WINDOWS_SIGNING_CERT_SUBJECT
+$evidence.file = $file.Name
 if ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -cne $originalHash) {
     throw "The input changed while signing $($file.Name); refusing to replace it."
 }
