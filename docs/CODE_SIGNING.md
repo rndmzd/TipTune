@@ -154,6 +154,11 @@ References: [GitHub OIDC with Azure](https://docs.github.com/en/actions/security
    executables and updater bundle markers. Review the successful job and
    `windows-signing-report` artifact before publishing the draft.
 
+Keep Azure billing active and renew identity validation before the expiration
+shown in the portal. Microsoft sends reminders starting 60 days before expiry;
+expired validation stops new signing and certificate renewal. See
+[identity validation renewal](https://learn.microsoft.com/en-us/azure/artifact-signing/faq#what-if-my-identity-validation-expires).
+
 Do not sign the desktop once before bundling: Tauri patches it separately for
 MSI and NSIS. The generated overlay also prevents a second sidecar build from
 replacing signed bytes. Ordinary CI and local builds work without Azure settings.
@@ -177,6 +182,6 @@ default**, requires a separate opt-in, and is documented in
 policies when enabling their services. No signing credentials are distributed
 with the app.
 
-Production Azure authentication/signing, identity approval, and execution on a
-separate Smart App Control machine remain unverified until a configured signing
-run succeeds. Offline tests and package checks do not establish those outcomes.
+A configured production run must verify Azure authentication and signing. Also
+test execution on a separate Smart App Control machine. Offline tests and
+package checks do not establish those outcomes.
