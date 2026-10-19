@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync, spawn } from 'child_process';
+import { execFileSync, execSync, spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -148,6 +148,16 @@ const sidecarName = 'TipTune';
 const extension = process.platform === 'win32' ? '.exe' : '';
 const targetTriple = getTargetTriple();
 const distPath = ensureSidecarBuilt(sidecarName, extension);
+
+// Sign the backend before copying it into the installer inputs. The release
+// overlay disables the second build hook so these signed bytes are retained.
+if (process.platform === 'win32' && process.env.TIPTUNE_WINDOWS_SIGNING === '1') {
+  execFileSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File',
+    path.join(repoRoot, 'scripts', 'windows-code-sign.ps1'), '-FilePath', distPath], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  });
+}
 
 const binariesDir = path.join(repoRoot, 'src-tauri', 'binaries');
 fs.mkdirSync(binariesDir, { recursive: true });

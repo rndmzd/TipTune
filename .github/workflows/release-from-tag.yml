@@ -7,6 +7,12 @@ on:
 
 permissions:
   contents: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   FFMPEG_VERSION: "7.1.1"
@@ -14,15 +20,38 @@ env:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 90
+    environment: windows-signing
+    env:
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+      AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+      AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+      WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Require production Windows signing and matching versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: ./scripts/prepare-windows-signing.ps1
+
+      - name: Set up .NET for the Azure signing client
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install verified Microsoft signing tools
+        run: ./scripts/setup-windows-signing-tools.ps1
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install frontend deps
@@ -52,9 +81,10 @@ jobs:
         shell: bash
 
       - name: Build + Release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TIPTUNE_WINDOWS_SIGNING: '1'
 
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -62,10 +92,27 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "TipTune ${{ github.ref_name }}"
-          releaseBody: "See assets for downloads."
+          releaseBody: |
+            See assets for downloads.
+
+            [Code signing policy](https://github.com/rndmzd/TipTune/blob/${{ github.ref_name }}/docs/CODE_SIGNING.md).
           releaseDraft: true
           prerelease: false
-          args: -- --locked
+          args: --config .signing-tools/windows.conf.json -- --locked
+
+      - name: Verify signatures inside both installer formats
+        env:
+          WINDOWS_SIGNING_CERT_SUBJECT: ${{ vars.WINDOWS_SIGNING_CERT_SUBJECT }}
+        run: ./scripts/verify-windows-release.ps1
+
+      - name: Keep Windows signing evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signing-report
+          path: ${{ runner.temp }}/tiptune-windows-signatures.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload private source maps for the final build
         env:
