@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from utils.error_reporting import ErrorReporter
 from unittest.mock import AsyncMock, Mock, patch
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -67,6 +69,31 @@ class RequestHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored._request_history_recent[0]['id'], 101)
         self.assertEqual(restored._request_history_recent[-1]['id'], 1100)
         self.assertEqual(service.get_config_for_ui()['General']['request_history_size'], '1000')
+
+    async def test_restored_queue_reports_playback_failure_against_the_saved_history_support_id(self):
+        reporting_config = self.root / 'reporting.ini'
+        reporting_config.write_text('[General]\nsend_error_reports=true')
+        reporter = ErrorReporter(reporting_config, self.root / 'report-cache', 'https://public@example.org/1', start_worker=False)
+        self.addCleanup(reporter.close)
+        service = self.service()
+        service._queue_paused = True
+        with patch.object(self.app, 'error_reporter', reporter), reporter.operation():
+            support = reporter.support_details()
+            service.publish_request_history_item({'status': 'added', 'support': support})
+            await service.add_track_to_queue('spotify:track:0JvxCw2L2ChMeVpIfSwvqN')
+        restored = self.service()
+        self.assertEqual(restored._queue_items[0]['support_id'], support['support_id'])
+        restored.actions = SimpleNamespace(chatdj_enabled=True, auto_dj=SimpleNamespace(
+            start_track=Mock(return_value=False), playback_device_name='Web Player (Microsoft Edge)'))
+        restored._queue_paused = False
+        with patch.object(self.app, 'error_reporter', reporter):
+            self.assertFalse(await restored._queue_start_next_if_needed())
+        saved = json.loads((self.root / 'request_history.json').read_text())
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['support']['support_id'], support['support_id'])
+        self.assertEqual(saved[0]['support']['error_code'], 'spotify.playback.unconfirmed')
+        self.assertIn('report_id', saved[0]['support'])
+        self.assertIn('playback_error', saved[0])
 
     async def test_resize_applies_immediately_and_persists(self):
         service = self.service()

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { apiJson } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
+import { SupportDetails } from '../components/SupportDetails';
 
 function toLocalTimeLabel(v: any): string | null {
   try {
@@ -114,7 +115,7 @@ function HistoryArtwork(props: { item: any; imageUrl: unknown; uri: unknown; son
   );
 }
 
-function HistoryCard(props: { item: any; showDebug: boolean }) {
+function HistoryCard(props: { item: any; showDebug: boolean; onCopyStatus: (message: string) => void }) {
   const s = useMemo(() => summarize(props.item), [props.item]);
   const extractionDebug = props.item?.extraction_debug;
   const extractionFailed = s.status === 'failed' && (
@@ -169,6 +170,10 @@ function HistoryCard(props: { item: any; showDebug: boolean }) {
       </div>
       <div className="cardBody">
         {typeof s.error === 'string' && s.error.trim() !== '' ? <div className="message">{s.error}</div> : null}
+        {typeof props.item?.playback_error === 'string' && props.item.playback_error.trim() !== ''
+          ? <div className="message">{props.item.playback_error}</div> : null}
+        {props.item?.support && (s.status === 'failed' || props.item.playback_error || props.item.support.error_code)
+          ? <SupportDetails support={props.item.support} onStatus={props.onCopyStatus} /> : null}
         {props.showDebug && extractionFailed ? (
           <details className="historyDebug">
             <summary>Song extraction debug details</summary>
@@ -225,6 +230,7 @@ export function HistoryPage() {
   const [historySize, setHistorySize] = useState<number>(1000);
   const [showDebug, setShowDebug] = useState(false);
   const [exporting, setExporting] = useState<boolean>(false);
+  const [copyStatus, setCopyStatus] = useState('');
 
   async function refresh() {
     setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
@@ -314,8 +320,9 @@ export function HistoryPage() {
       </div>
 
       <div className="out">
+        <p role="status" aria-atomic="true">{copyStatus}</p>
         {items.map((item, idx) => (
-          <HistoryCard key={idx} item={item} showDebug={showDebug} />
+          <HistoryCard key={idx} item={item} showDebug={showDebug} onCopyStatus={setCopyStatus} />
         ))}
       </div>
     </div>
