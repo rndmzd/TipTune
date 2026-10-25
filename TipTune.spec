@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import json
 import sys
 
 from PyInstaller.utils.hooks import collect_submodules, is_module_or_submodule
@@ -21,6 +22,7 @@ hiddenimports += collect_submodules('sentry_sdk', filter=lambda name: not name.s
 
 
 ROOT = os.path.abspath(SPECPATH)
+sys.path.insert(0, ROOT)
 
 if sys.platform == 'win32':
     from scripts.windows_version_info import make_version_info
@@ -34,6 +36,12 @@ SIDECAR_CONSOLE = os.environ.get('TIPTUNE_SIDECAR_CONSOLE', '').strip() == '1'
 def _datas():
     root = ROOT
     items = []
+    from pathlib import Path
+    from utils.build_info import create_build_info
+    build_info = Path(root) / '.cache' / 'build-info.json'
+    build_info.parent.mkdir(parents=True, exist_ok=True)
+    build_info.write_text(json.dumps(create_build_info(root)), encoding='utf-8')
+    items.append((str(build_info), '.'))
 
     def add(rel_path: str, dest: str = '.'):
         src = os.path.join(root, rel_path)

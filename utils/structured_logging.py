@@ -7,6 +7,7 @@ import re
 import socket
 import threading
 from typing import Any, Dict, Union
+from utils.support_diagnostics import current_support_id
 
 def _json_default(obj: Any):
     if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
@@ -52,7 +53,7 @@ class StructuredLogFormatter(logging.Formatter):
 
         # Handle structured logging
         if isinstance(record.msg, dict):
-            for key in ("event_type", "message"):
+            for key in ("event_type", "message", "support_id"):
                 if key in record.msg:
                     log_entry[key] = record.msg[key]
             if "event" in record.msg:
@@ -105,6 +106,9 @@ class StructuredLogger:
             "data": data or {},
             **extra
         }
+        support_id = current_support_id()
+        if support_id:
+            log_entry['support_id'] = support_id
 
         if message:
             log_entry["message"] = message

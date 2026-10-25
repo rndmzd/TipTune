@@ -1,5 +1,7 @@
 import configparser
+import asyncio
 import importlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import unittest
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from chatdj.song_requests import SongRequest, SongExtractionError, SongResolutionError
+from utils.error_reporting import ErrorReporter
 
 
 class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -55,6 +58,50 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def history(self):
         return [call.args[0] for call in self.service.publish_request_history_item.call_args_list]
+
+    def enable_reports(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        config_path = root / 'reporting.ini'
+        config_path.write_text('[General]\nsend_error_reports=true')
+        reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1', start_worker=False)
+        self.addCleanup(reporter.close)
+        self.enterContext(patch.object(self.app, 'error_reporter', reporter))
+        return reporter
+
+    async def test_lookup_exception_creates_a_report_with_the_history_support_id(self):
+        reporter = self.enable_reports()
+        self.actions.find_song_spotify.side_effect = TimeoutError('private-provider-response')
+        await self.handle()
+        item = self.history()[0]
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        error = next(event for event in events if event.get('type') != 'transaction')
+        self.assertEqual(error['tags']['error_code'], 'song.lookup.failed')
+        self.assertEqual(error['tags']['support_id'], item['support']['support_id'])
+        self.assertEqual(error['event_id'], item['support']['report_id'])
+        self.assertEqual(error['contexts']['failure']['source'], 'spotify')
+        self.assertNotIn('private-provider-response', json.dumps(error))
+
+    async def test_youtube_lookup_exception_and_queue_rejection_have_distinct_codes(self):
+        reporter = self.enable_reports()
+        self.service._active_source.return_value = 'youtube'
+        self.service.search_youtube_tracks.side_effect = TimeoutError('private')
+        await self.handle()
+        self.assertEqual(self.history()[0]['support']['error_code'], 'song.lookup.failed')
+        self.service._active_source.return_value = 'spotify'
+        self.service.add_track_to_queue.return_value = False
+        await self.handle()
+        self.assertEqual(self.history()[1]['support']['error_code'], 'song.queue.failed')
+        self.assertNotEqual(self.history()[0]['support']['support_id'], self.history()[1]['support']['support_id'])
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        self.assertEqual(len([event for event in events if event.get('type') != 'transaction']), 2)
+
+    async def test_normal_catalog_miss_keeps_a_local_id_without_an_error_report(self):
+        reporter = self.enable_reports()
+        self.actions.find_song_spotify.return_value = None
+        await self.handle()
+        self.assertTrue(self.history()[0]['support']['support_id'].startswith('TT-'))
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        self.assertFalse(any(event.get('type') != 'transaction' for event in events))
 
     async def test_only_exact_song_cost_triggers_a_request(self):
         for tokens in (0, -27, 26, 28, 54, 81, 100, 27.0, '27', True):
@@ -112,6 +159,37 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(debug['outcome'], 'extraction_failed')
         self.assertGreaterEqual(debug['elapsed_ms'], 0)
         self.actions.find_song_spotify.assert_not_called()
+
+    async def test_tip_worker_links_extraction_failure_to_the_request_trace(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            config_path = root / 'config.ini'
+            config_path.write_text('[General]\nsend_error_reports=true')
+            reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1',
+                                     start_worker=False, traces_sample_rate=1.0)
+            self.addCleanup(reporter.close)
+            self.actions.extract_song_titles.side_effect = SongExtractionError('private provider response')
+            worker = SimpleNamespace(_stop_event=asyncio.Event(), _tip_queue=asyncio.Queue())
+
+            async def handle_tip(event):
+                await self.app.SongRequestService._handle_tip(self.service, event)
+                worker._stop_event.set()
+
+            worker._handle_tip = handle_tip
+            await worker._tip_queue.put({'tip': {'tokens': 27, 'message': 'private request'},
+                                         'user': {'username': 'private username'}})
+            with patch.object(self.app, 'error_reporter', reporter), patch('utils.error_reporting.httpx.post') as post:
+                await self.app.SongRequestService._tip_processor_loop(worker)
+                post.assert_not_called()
+            events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+            self.assertEqual(len(events), 2)
+            error = next(event for event in events if event.get('type') != 'transaction')
+            transaction = next(event for event in events if event.get('type') == 'transaction')
+            self.assertEqual(transaction['transaction'], 'song.request')
+            self.assertEqual(transaction['spans'][0]['description'], 'song.extract')
+            self.assertEqual(error['contexts']['trace']['span_id'], transaction['spans'][0]['span_id'])
+            self.assertEqual(error['contexts']['trace']['trace_id'], transaction['contexts']['trace']['trace_id'])
+            self.assertNotIn('private', json.dumps(events))
 
     async def test_failure_retains_model_response_and_exception_cause(self):
         error = SongExtractionError('Song extraction failed', diagnostics={

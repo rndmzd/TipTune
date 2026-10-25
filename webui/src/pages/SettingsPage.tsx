@@ -82,7 +82,7 @@ function tooltip(section: string, key: string) {
     'General.request_history_size': 'Maximum number of song request results to save. Default: 1,000 entries.',
     'General.show_debug_data': 'Show extra debug information in the dashboard (like YouTube playback details).',
     'General.show_history_debug': 'Show saved song extraction diagnostics on failed History entries. Details are saved even when this display is off. Default: off.',
-    'General.send_error_reports': 'Opt in to automatically sending technical error reports to the TipTune developer through Sentry. Default: off.',
+    'General.send_error_reports': 'Opt in to automatically sending technical error reports and operation timings to the TipTune developer through Sentry. Default: off.',
     'General.debug_log_to_file': 'When enabled, TipTune writes verbose DEBUG logs to a file. Useful for troubleshooting, but can grow quickly.',
     'General.debug_log_path': 'Optional. Path to the log file. Leave blank to use the app default location.',
   };
@@ -804,11 +804,12 @@ export function SettingsPage({ audioOutputError = '', audioOutputActive }: { aud
                 setCfg((c) => ({ ...c, General: { ...(c.General || {}), send_error_reports: value } }));
               }}
             />
-            <span>Automatically send error reports to the TipTune developer</span>
+            <span>Automatically send error reports and operation timings to the TipTune developer</span>
           </label>
           <p id="error-reporting-help" className="muted">
             Off by default. Reports go through Sentry and include the app version, operating system,
-            exception types, code locations, and technical failure details. Usernames, tip messages,
+            exception types, code locations, technical failure details, operation timings, support IDs,
+            dependency versions, and selected playback settings. Usernames, tip messages,
             credentials, and raw error text are excluded. Turning this off and saving deletes unsent reports.
           </p>
           {reportingStatus?.configured === false && <p className="muted">Error reporting is unavailable in this build.</p>}

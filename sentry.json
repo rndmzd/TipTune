@@ -1,4 +1,5 @@
 {
   "dsn": "https://c3186dc4dd597e3887c3d02b97c8aa88@o4512246763290624.ingest.us.sentry.io/4512246770827264",
-  "environment": "production"
+  "environment": "production",
+  "traces_sample_rate": 1.0
 }

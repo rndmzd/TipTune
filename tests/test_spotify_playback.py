@@ -1,4 +1,7 @@
 import asyncio
+import json
+from pathlib import Path
+import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
@@ -7,7 +10,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from spotipy import SpotifyException
 
 from app import SongRequestService
+import app as application
 from chatdj.chatdj import AutoDJ
+from utils.error_reporting import ErrorReporter
+from utils.support_diagnostics import current_support_id
 
 
 URI = 'spotify:track:0JvxCw2L2ChMeVpIfSwvqN'
@@ -145,6 +151,83 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.service._persist_queue_state_to_disk = Mock()
         patch('chatdj.chatdj.time.sleep').start()
         self.addCleanup(patch.stopall)
+
+    async def test_playback_failure_reports_the_original_request_id_and_updates_only_its_history(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        config_path = root / 'config.ini'
+        config_path.write_text('[General]\nsend_error_reports=true')
+        reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1', start_worker=False)
+        self.addCleanup(reporter.close)
+        support_id = 'TT-' + 'a' * 32
+        other_id = 'TT-' + 'b' * 32
+        self.service._queue_items[0]['support_id'] = support_id
+        self.service._request_history_recent = [
+            {'status': 'added', 'support': {'support_id': support_id}},
+            {'status': 'added', 'support': {'support_id': other_id}},
+        ]
+        self.service._persist_request_history_to_disk = Mock()
+
+        def unconfirmed():
+            self.assertEqual(current_support_id(), support_id)
+            return playback(None, False)
+
+        self.dj.spotify.current_playback.side_effect = unconfirmed
+        with patch.object(application, 'error_reporter', reporter):
+            self.assertFalse(await self.service._queue_start_next_if_needed())
+        record, other = self.service._request_history_recent
+        self.assertIn('did not start playback', record['playback_error'])
+        self.assertNotIn('playback_error', other)
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        error = next(event for event in events if event.get('type') != 'transaction')
+        self.assertEqual(error['tags']['error_code'], 'spotify.playback.unconfirmed')
+        self.assertEqual(error['tags']['support_id'], support_id)
+        self.assertEqual(error['event_id'], record['support']['report_id'])
+        self.assertEqual(error['contexts']['diagnostics']['playback_backend'], 'spotify_external')
+        self.assertNotIn(URI, json.dumps(error))
+
+        self.dj.spotify.current_playback.side_effect = None
+        self.dj.spotify.current_playback.return_value = playback()
+        self.service._queue_paused = False
+        with patch.object(application, 'error_reporter', reporter):
+            self.assertTrue(await self.service._queue_start_next_if_needed())
+        self.assertNotIn('playback_error', record)
+        self.assertEqual(record['support']['report_id'], error['event_id'])
+
+    async def test_disconnected_spotify_reports_unknown_backend_without_guessing_a_device(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        config_path = root / 'config.ini'
+        config_path.write_text('[General]\nsend_error_reports=true')
+        reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1', start_worker=False)
+        self.addCleanup(reporter.close)
+        self.service.actions.chatdj_enabled = False
+        with patch.object(application, 'error_reporter', reporter):
+            self.assertFalse(await self.service._queue_start_next_if_needed())
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        error = next(event for event in events if event.get('type') != 'transaction')
+        self.assertEqual(error['tags']['error_code'], 'spotify.playback.unavailable')
+        self.assertEqual(error['contexts']['diagnostics']['playback_backend'], 'unknown')
+
+    async def test_normal_shutdown_during_playback_start_does_not_create_a_failure_report(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        config_path = root / 'config.ini'
+        config_path.write_text('[General]\nsend_error_reports=true')
+        reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1', start_worker=False)
+        self.addCleanup(reporter.close)
+        started = asyncio.Event()
+
+        async def start_track(*args):
+            started.set()
+            await asyncio.Event().wait()
+
+        with patch.object(application, 'error_reporter', reporter), patch('app.asyncio.to_thread', side_effect=start_track):
+            task = asyncio.create_task(self.service._queue_start_next_if_needed())
+            await asyncio.wait_for(started.wait(), 2)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        self.assertFalse(any(event.get('type') != 'transaction' for event in events))
+        self.assertEqual(len(self.service._queue_items), 1)
 
     async def test_resume_starts_pending_request_with_uri(self):
         self.dj.spotify.current_playback.return_value = playback()

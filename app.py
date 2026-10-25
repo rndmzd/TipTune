@@ -40,6 +40,7 @@ from utils.structured_logging import get_structured_logger, StructuredLogFormatt
 from utils.spotify_errors import spotify_error_message
 from utils.song_extraction_debug import extraction_exception_debug, sanitize_extraction_debug
 from utils.error_reporting import ErrorReporter, install_reporter, reporting_enabled, MAX_REPORT_BYTES
+from utils.support_diagnostics import new_support_id, valid_support_id
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -591,7 +592,27 @@ class WebUI:
                 resp.headers['Access-Control-Allow-Private-Network'] = 'true'
             return resp
 
-        self._app = web.Application(middlewares=[_cors_middleware])
+        @web.middleware
+        async def _tracing_middleware(request: web.Request, handler):
+            resource = request.match_info.route.resource
+            route = resource.canonical if resource is not None else ''
+            with error_reporter.operation(), error_reporter.trace(f'{request.method} {route}') as span:
+                try:
+                    response = await handler(request)
+                except web.HTTPException as exc:
+                    if span is not None:
+                        span.set_http_status(exc.status)
+                    if exc.status >= 500:
+                        error_reporter.capture_exception('webui.request.failed', exc, handled=False)
+                    raise
+                except Exception as exc:
+                    error_reporter.capture_exception('webui.request.failed', exc, handled=False)
+                    raise
+                if span is not None:
+                    span.set_http_status(response.status)
+                return response
+
+        self._app = web.Application(middlewares=[_tracing_middleware, _cors_middleware])
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
 
@@ -1484,6 +1505,8 @@ class SongRequestService:
 
             item['source'] = src
             item['queue_entry_id'] = uuid.uuid4().hex
+            item['support_id'] = (valid_support_id(item.get('support_id'))
+                                  or error_reporter.support_details().get('support_id') or new_support_id())
             return item
         except Exception:
             return None
@@ -1576,27 +1599,46 @@ class SongRequestService:
             self._persist_queue_state_to_disk()
             return True
 
+        return await self._start_spotify_queue_item(nxt)
+
+    async def _start_spotify_queue_item(self, nxt: dict) -> bool:
+        support_id = valid_support_id(nxt.get('support_id')) or new_support_id()
+        nxt['support_id'] = support_id
+        with error_reporter.operation(support_id), error_reporter.trace('song.playback'):
+            return await self._attempt_spotify_queue_item(nxt)
+
+    async def _attempt_spotify_queue_item(self, nxt: dict) -> bool:
         error = None
+        error_code = None
+        failure_exception = None
+        interrupted = False
         ok = False
         try:
             track_uri = self._normalize_spotify_track_uri(nxt.get('uri'))
             if not track_uri:
+                error_code = 'spotify.playback.invalid_track'
                 error = "The queued Spotify track is invalid. Remove it, then resume the queue."
             elif not getattr(self.actions, 'chatdj_enabled', False) or not hasattr(self.actions, 'auto_dj'):
+                error_code = 'spotify.playback.unavailable'
                 error = "Spotify is not connected. Connect Spotify in Settings, then select Resume Queue."
             else:
                 # Await the actual operation: timing out just the executor future
                 # would leave a live Spotify command behind and allow overlapping retries.
-                loop = asyncio.get_running_loop()
-                ok = await loop.run_in_executor(None, self.actions.auto_dj.start_track, track_uri)
+                ok = await asyncio.to_thread(self.actions.auto_dj.start_track, track_uri)
                 if not ok:
+                    error_code = 'spotify.playback.unconfirmed'
                     error = (
                         "Spotify accepted the request but did not start playback on the selected device. "
                         "The song is still queued. Try opening Spotify Web Player and selecting it "
                         "as the playback device in Settings, then select Resume Queue."
                     )
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+            interrupted = True
+            raise
         except Exception as exc:
-            logger.exception("spotify.playback.start.error", exc=exc,
+            failure_exception = exc
+            error_code = 'spotify.playback.failed'
+            logger.warning("spotify.playback.start.error", exc_info=(type(exc), exc, exc.__traceback__),
                              message="Failed to start requested Spotify track; pausing the queue",
                              data={"track_uri": nxt.get('uri')})
             error = (
@@ -1604,6 +1646,13 @@ class SongRequestService:
                 "Check the Spotify connection and playback device in Settings, then select Resume Queue."
             )
         finally:
+            if not ok and not interrupted:
+                device_name = getattr(getattr(self.actions, 'auto_dj', None), 'playback_device_name', None)
+                backend = ('spotify_embedded' if device_name == 'Web Player (Microsoft Edge)'
+                           else 'spotify_external' if isinstance(device_name, str) and device_name.strip() else 'unknown')
+                error_reporter.capture_failure(error_code or 'spotify.playback.failed', failure_exception,
+                                               source='spotify', stage='playback_confirmation', playback_backend=backend)
+                nxt['support'] = error_reporter.support_details()
             async with self._queue_lock:
                 self._queue_starting = False
                 if ok:
@@ -1621,7 +1670,30 @@ class SongRequestService:
                     self._queue_paused = True
                     self._queue_error = error or "Playback was interrupted. Select Resume Queue to retry."
             self._persist_queue_state_to_disk()
+            if not interrupted:
+                self._update_history_playback_support(nxt, None if ok else self._queue_error)
         return bool(ok)
+
+    def _update_history_playback_support(self, item, error):
+        support_id = valid_support_id(item.get('support_id'))
+        if not support_id:
+            return
+        for record in reversed(getattr(self, '_request_history_recent', [])):
+            support = record.get('support')
+            if not isinstance(support, dict) or support.get('support_id') != support_id:
+                continue
+            if error:
+                record['playback_error'] = error
+                latest = dict(item.get('support') or {})
+                if not latest.get('report_id') and support.get('error_code') == latest.get('error_code'):
+                    for key in ('report_id', 'trace_id', 'report_state'):
+                        if key in support:
+                            latest[key] = support[key]
+                record['support'] = latest
+            else:
+                record.pop('playback_error', None)
+            self._persist_request_history_to_disk()
+            break
 
     def _persist_yt_queue_state_to_disk(self) -> None:
         try:
@@ -3199,13 +3271,25 @@ class SongRequestService:
                 break
 
             try:
-                await self._handle_tip(tip_obj)
-            except Exception as exc:
-                logger.exception("tip.queue.process.error", exc=exc, message="Error processing queued tip")
+                with error_reporter.operation(), error_reporter.trace('song.request'):
+                    try:
+                        await self._handle_tip(tip_obj)
+                    except Exception as exc:
+                        logger.exception("tip.queue.process.error", exc=exc, message="Error processing queued tip")
             finally:
                 self._tip_queue.task_done()
 
     async def _handle_tip(self, event: Dict[str, Any]) -> None:
+        with error_reporter.operation():
+            await SongRequestService._process_tip(self, event)
+
+    async def _process_tip(self, event: Dict[str, Any]) -> None:
+        def publish_history(item):
+            item['support'] = error_reporter.support_details()
+            if item['support'].get('error_code', '').startswith('spotify.playback.'):
+                item['playback_error'] = getattr(self, '_queue_error', None)
+            self.publish_request_history_item(item)
+
         try:
             tip_amount = event.get('tip', {}).get('tokens', 0)
             tip_message = event.get('tip', {}).get('message', '').strip()
@@ -3252,7 +3336,7 @@ class SongRequestService:
             }
 
             if tip_message == "":
-                self.publish_request_history_item({
+                publish_history({
                     "ts": time.time(),
                     "tip_ts": tip_ts,
                     "username": username,
@@ -3274,28 +3358,29 @@ class SongRequestService:
             direct_youtube = self._youtube_url_from_text(tip_message) if source == 'youtube' else None
             extraction_error = None
             extraction_started = time.monotonic()
-            try:
-                if direct_youtube:
-                    song_extracts = [SongRequest(song=direct_youtube, artist="")]
-                else:
-                    song_extracts = await self.actions.extract_song_titles(
-                        tip_message, diagnostics=extraction_debug)
-            except Exception as exc:
-                logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
-                extraction_error = "song extraction failed"
-                song_extracts = []
-                details = getattr(exc, 'diagnostics', None)
-                if isinstance(details, dict):
-                    extraction_debug.update(details)
-                error_reporter.capture_exception('song.extract.failed', exc, details=extraction_debug)
-                extraction_debug['exception'] = extraction_exception_debug(exc)
+            with error_reporter.trace('song.extract'):
+                try:
+                    if direct_youtube:
+                        song_extracts = [SongRequest(song=direct_youtube, artist="")]
+                    else:
+                        song_extracts = await self.actions.extract_song_titles(
+                            tip_message, diagnostics=extraction_debug)
+                except Exception as exc:
+                    logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
+                    extraction_error = "song extraction failed"
+                    song_extracts = []
+                    details = getattr(exc, 'diagnostics', None)
+                    if isinstance(details, dict):
+                        extraction_debug.update(details)
+                    error_reporter.capture_failure('song.extract.failed', exc, source=source, details=extraction_debug)
+                    extraction_debug['exception'] = extraction_exception_debug(exc)
 
             if not song_extracts:
                 extraction_debug.update({
                     'outcome': 'extraction_failed' if extraction_error else 'no_songs_identified',
                     'elapsed_ms': round((time.monotonic() - extraction_started) * 1000, 2),
                 })
-                self.publish_request_history_item({
+                publish_history({
                     "ts": time.time(), "tip_ts": tip_ts, "username": username,
                     "tip_amount": tip_amount, "tip_message": tip_message,
                     "request_count": 1, "status": "failed",
@@ -3321,11 +3406,13 @@ class SongRequestService:
                 else:
                     q = f"{getattr(song_info, 'artist', '')} - {getattr(song_info, 'song', '')}".strip(' -')
                     try:
-                        results = await self.search_youtube_tracks(q, limit=1)
+                        with error_reporter.trace('song.lookup.youtube'):
+                            results = await self.search_youtube_tracks(q, limit=1)
                         if results and isinstance(results[0], dict):
                             song_uri = results[0].get('uri') if isinstance(results[0].get('uri'), str) else None
                     except Exception as exc:
                         logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
+                        error_reporter.capture_failure('song.lookup.failed', exc, source='youtube', stage='track_lookup')
                         lookup_error = "youtube lookup failed"
                         song_uri = None
             else:
@@ -3333,15 +3420,17 @@ class SongRequestService:
                     song_uri = song_info.spotify_uri
                 else:
                     try:
-                        song_uri = await self.actions.find_song_spotify(song_info)
+                        with error_reporter.trace('song.lookup.spotify'):
+                            song_uri = await self.actions.find_song_spotify(song_info)
                     except Exception as exc:
                         logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
+                        error_reporter.capture_failure('song.lookup.failed', exc, source='spotify', stage='track_lookup')
                         lookup_error = "spotify lookup failed"
 
             if not song_uri:
                 not_found_error = lookup_error or ('youtube track not found' if source == 'youtube' else 'spotify track not found')
                 not_found_msg = "Couldn't find song on YouTube." if source == 'youtube' else "Couldn't find song on Spotify. Did you include artist and song name?"
-                self.publish_request_history_item({
+                publish_history({
                     "ts": time.time(),
                     "tip_ts": tip_ts,
                     "username": username,
@@ -3363,7 +3452,7 @@ class SongRequestService:
                 return
 
             if source != 'youtube' and not await self.actions.available_in_market(song_uri):
-                self.publish_request_history_item({
+                publish_history({
                     "ts": time.time(),
                     "tip_ts": tip_ts,
                     "username": username,
@@ -3385,12 +3474,17 @@ class SongRequestService:
                 return
 
             song_details = f"{song_info.artist} - {song_info.song}".strip()
+            queue_exception = None
             try:
-                ok = await self.add_track_to_queue({"source": source, "uri": song_uri, "requester": username})
+                with error_reporter.trace('song.queue'):
+                    ok = await self.add_track_to_queue({"source": source, "uri": song_uri, "requester": username,
+                                                        'support_id': error_reporter.support_details()['support_id']})
             except Exception as exc:
                 logger.warning("song.queue.failed", data={"error_type": type(exc).__name__})
+                queue_exception = exc
                 ok = False
             if not ok:
+                error_reporter.capture_failure('song.queue.failed', queue_exception, source=source, stage='queue_insertion')
                 await self.actions.trigger_warning_overlay(username, "Couldn't add song to the queue.", 10)
             if ok:
                 try:
@@ -3402,7 +3496,7 @@ class SongRequestService:
                 except Exception:
                     pass
 
-            self.publish_request_history_item({
+            publish_history({
                 "ts": time.time(),
                 "tip_ts": tip_ts,
                 "username": username,

@@ -31,7 +31,33 @@ Debug IDs match the content of each JavaScript chunk, including the OBS overlay,
 
 Reports allowlist the app release, OS, component, exception types, code filenames/functions/line numbers, exception causes, failure stage, selected music source, provider HTTP status/request ID, elapsed time, and desktop exit code. Up to 50 preceding structured application event names can accompany a failure.
 
-Free-form log/exception text, usernames, tip/request messages, authentication headers, cookies, configured secrets, runtime source text, frame locals, request bodies, provider response bodies, device/host names, and absolute machine paths are excluded from reports. The separate build upload provides application source maps to Sentry. No sessions, tracing, profiling, metrics, continuous remote logs, screenshots, or attachments are sent. The SDK has automatic integrations disabled and runs only inside the delivery worker.
+Free-form log/exception text, usernames, tip/request messages, authentication headers, cookies, configured secrets, runtime source text, frame locals, request bodies, provider response bodies, device/host names, and absolute machine paths are excluded from reports. The separate build upload provides application source maps to Sentry. No automatic session reports, profiling, metrics, continuous remote logs, screenshots, or attachments are sent. Automatic SDK integrations and propagation to external services are disabled.
+
+## Functional failures and support IDs
+
+Opt-in reports also cover `song.lookup.failed`, `song.queue.failed`, and Spotify playback that is unconfirmed, unavailable, invalid, or raises an exception. These use fixed `error_code` tags and technical metadata. Blank requests, no identified song, normal catalog misses, and market restrictions remain normal request outcomes. They do not create new automatic error reports.
+
+Each song request gets an opaque `TT-<32 hex digits>` support ID. It appears on failed History entries and requests with a playback problem, with a **Copy support ID** action and a selectable fallback when clipboard access is unavailable. The same ID accompanies local structured logs, the queued track, and any Sentry errors or transactions. In Sentry, search `support_id:TT-...`; use `error_code:song.lookup.failed` (or another listed code) to group functional failures. A provider's `request_id` remains a separate provider reference.
+
+Support IDs are saved locally even when automatic reporting is off. History distinguishes a report that was queued from one that was disabled, unavailable, or limited. Queuing does not confirm ingestion. Repeated identical errors within one operation are suppressed for one minute; separate requests keep separate IDs, subject to the existing queue and rate bounds. Background playback starts a fresh trace when necessary and retains the request's support ID. Playback failures update the matching History entry, including after queue restoration; a successful retry clears the playback error without changing the fact that the request was added to the queue.
+
+## Safe environment details
+
+New backend-collected reports and transactions snapshot a `diagnostics` context containing only allowlisted values: backend app/Python versions, OS build, CPU architecture, installed versions of selected Python dependencies, selected music source, OBS enablement, overlay mode, and a fixed playback-backend category when known. UI errors retain their compiled release and include the receiving backend's environment. On Windows, the installed Evergreen WebView2 version is included if its registry entry is available; this is not a claim about a separately supplied fixed runtime. Missing metadata is omitted. Native startup/crash records keep their existing technical fields; replay does not invent missing environment details.
+
+Packaging embeds `build-info.json` with the Git commit, tracked-dirty flag, source/build content hash, and dependency versions. The hash covers application code and distributed frontend assets, excluding configuration, logs, and caches. Source runs identify themselves as `source` and do not invent packaged build identifiers. Backend reports also include a random reporting-session ID, created only after opt-in and reset on process restart or opt-out. No persistent installation or hardware identifier is collected.
+
+Environment details are sanitized before storage and again before upload. Offline replay retains the original snapshot and does not attach the environment of a later app version to old reports. The existing public reporting DSN still grants no read access, and no additional credentials are needed by an installation.
+
+## Tracing
+
+The reporting opt-in also enables [Sentry tracing](https://docs.sentry.io/platforms/python/tracing/). Named app actions (POST API routes), music searches, queued song requests, and Spotify playback attempts create transactions. Song extraction, provider lookup, and queue insertion create child spans. Routine status polling, event streams, static assets, and audio streaming are excluded. UI errors link to the backend transaction receiving their local error report; browser rendering and native crash durations are not measured.
+
+`sentry.json` sets `traces_sample_rate` to `1.0`, so all these selected operations are sampled while reporting is enabled. Rebuild after changing this setting; development can override it with `TIPTUNE_SENTRY_TRACES_SAMPLE_RATE` between `0` and `1`. A value of `0` disables tracing while retaining error reporting. Invalid values disable tracing. With sampling below `1`, an error can retain a trace ID even when its transaction was not sampled.
+
+Transactions contain fixed operation names, random trace/span IDs, support IDs, start/end timestamps, status, release, and the safe environment details described above, with at most 50 child spans. Request URLs/queries, headers, bodies, provider attributes, and arbitrary span data are discarded before storage and again before upload. Error events retain their original trace/span context when queued and replayed, so the background sender does not assign them to an unrelated trace. Tracing only enqueues locally on the operation thread; the existing consent-controlled worker uploads both event types.
+
+Transactions share the bounded offline queue and stop entering it at half capacity, reserving space for errors. Turning reporting off deletes both unsent errors and traces; an operation still running when consent is revoked cannot queue its completed trace. **Send test report** creates a linked error and transaction when tracing is sampled. Use its event ID in Sentry and open the associated trace.
 
 ## Delivery and consent
 
