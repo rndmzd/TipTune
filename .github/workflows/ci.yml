@@ -62,6 +62,22 @@ jobs:
       - name: Embedded player and audio routing regression tests
         run: node --test tests/audio-output.test.mjs tests/spotify-player.test.mjs
 
+      - name: Windows release signing regression tests
+        if: runner.os == 'Windows'
+        run: ./tests/windows-signing.Tests.ps1
+
+      - name: Set up .NET for the Azure signing client
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Verify Azure signing tools without cloud credentials
+        if: runner.os == 'Windows'
+        run: |
+          ./scripts/setup-windows-signing-tools.ps1
+          ./tests/windows-signing-runtime.ps1
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |

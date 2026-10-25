@@ -1,0 +1,6 @@
+{
+  "name": "tiptune-windows-releases",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:rndmzd/TipTune:environment:windows-signing",
+  "audiences": ["api://AzureADTokenExchange"]
+}
