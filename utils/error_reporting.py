@@ -35,6 +35,9 @@ from utils.support_diagnostics import (
 MAX_REPORTS = 100
 MAX_REPORT_BYTES = 64 * 1024
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+# Python 3.11 on Windows can sample wall time at a coarser resolution than the
+# monotonic clock used for span durations. Keep the SDK's original timestamps.
+TRACE_CLOCK_TOLERANCE_SECONDS = 0.05
 _REPORT_NAME = re.compile(r'^[a-f0-9]{32}\.(?:json|tmp)$')
 _ATOM = re.compile(r'^[A-Za-z0-9_.:-]{1,128}$')
 _EVENT_TYPES = re.compile(r'^[a-z][a-z0-9_.]{0,127}$')
@@ -198,7 +201,9 @@ def sanitize_transaction(event):
         context = _trace_context(span)
         span_start, span_end = _trace_timestamp(span.get('start_timestamp')), _trace_timestamp(span.get('timestamp'))
         if (not context or context['trace_id'] != trace['trace_id'] or span_start is None or span_end is None
-                or not start <= span_start <= span_end <= end):
+                or not 0 <= span_end - span_start <= 86_400
+                or span_start < start - TRACE_CLOCK_TOLERANCE_SECONDS
+                or span_end > end + TRACE_CLOCK_TOLERANCE_SECONDS):
             continue
         context.update({'op': TRACE_OPERATIONS[span['description']], 'description': span['description'],
                         'start_timestamp': span_start, 'timestamp': span_end})

@@ -343,15 +343,32 @@ class ErrorReportingTests(unittest.TestCase):
         self.assertEqual(envelope_event(self.post.call_args.kwargs['content'])['tags']['event_type'], 'app.error')
 
     def test_configured_credentials_cannot_be_uploaded_as_trace_ids(self):
-        secret = '0123456789abcdef0123456789abcdef'
-        self.config_path.write_text('[General]\nsend_error_reports=true\n[OBS]\npassword=' + secret)
+        # Public, deterministic test data; this is not an application credential.
+        test_trace_id = '0123456789abcdef0123456789abcdef'
+        self.config_path.write_text('[General]\nsend_error_reports=true\n[OBS]\npassword=' + test_trace_id)
         reporter = self.reporter()
-        reporter.capture_event({'contexts': {'trace': {'trace_id': secret, 'span_id': '1234567890abcdef'}}})
+        reporter.capture_event({'contexts': {'trace': {'trace_id': test_trace_id, 'span_id': '1234567890abcdef'}}})
         stored = next(reporter.pending_dir.glob('*.json')).read_text()
-        self.assertNotIn(secret, stored)
+        self.assertNotIn(test_trace_id, stored)
         reporter.process_pending()
-        self.assertNotIn(secret, self.post.call_args.kwargs['content'].decode())
+        self.assertNotIn(test_trace_id, self.post.call_args.kwargs['content'].decode())
         self.assertNotIn('trace', envelope_event(self.post.call_args.kwargs['content'])['contexts'])
+
+    def test_short_span_clock_skew_is_preserved_and_unrelated_timestamps_are_rejected(self):
+        trace_id = '0123456789abcdef0123456789abcdef'
+        start, end = 1_700_000_000.0, 1_700_000_000.001
+        child = {'trace_id': trace_id, 'span_id': '1234567890abcdef',
+                 'parent_span_id': 'abcdef0123456789', 'description': 'song.extract', 'op': 'function',
+                 'start_timestamp': end + 0.000066, 'timestamp': end + 0.00008}
+        event = {'type': 'transaction', 'transaction': 'song.request',
+                 'start_timestamp': start, 'timestamp': end,
+                 'contexts': {'trace': {'trace_id': trace_id, 'span_id': 'abcdef0123456789'}},
+                 'spans': [child, {**child, 'timestamp': end + 1}]}
+        safe = sanitize_report(event)
+        self.assertEqual(len(safe['spans']), 1)
+        self.assertEqual(safe['spans'][0]['start_timestamp'], child['start_timestamp'])
+        self.assertEqual(safe['spans'][0]['timestamp'], child['timestamp'])
+        self.assertEqual(sanitize_report(sanitize_report(safe)), safe)
 
     def test_revoking_consent_during_operation_prevents_trace_storage_and_delivery(self):
         self.consent(True)
