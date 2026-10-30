@@ -46,6 +46,9 @@ export function DashboardPage() {
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [err, setErr] = useState<string>('');
   const [opBusy, setOpBusy] = useState(false);
+  const [queueCommand, setQueueCommand] = useState<'pause' | 'resume' | null>(null);
+  const [queueCommandError, setQueueCommandError] = useState('');
+  const queueCommandPendingRef = useRef(false);
   const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const dragFromIndexRef = useRef<number | null>(null);
@@ -346,6 +349,27 @@ export function DashboardPage() {
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
+  }
+
+  async function toggleQueue() {
+    if (opBusy || queueCommandPendingRef.current || queueState?.starting) return;
+    queueCommandPendingRef.current = true;
+    const command = paused ? 'resume' : 'pause';
+    setQueueCommand(command);
+    setQueueCommandError('');
+    setOpBusy(true);
+    try {
+      // Spotify confirmation and device recovery can outlast the normal 8s request timeout.
+      await apiJson(`/api/queue/${command}`, { method: 'POST' }, 60000);
+    } catch (e: any) {
+      setQueueCommandError(e?.message ? String(e.message) : 'Unable to change queue processing. Try again.');
+    } finally {
+      await refresh(true);
+      refreshPlayback().catch(() => {});
+      setQueueCommand(null);
+      setOpBusy(false);
+      queueCommandPendingRef.current = false;
+    }
   }
 
   async function nextTrack() {
@@ -742,18 +766,11 @@ export function DashboardPage() {
             </span>
             <button
               type="button"
-              onClick={async () => {
-                if (paused) {
-                  await post('/api/queue/resume');
-                } else {
-                  await post('/api/queue/pause');
-                }
-                await refresh(true);
-                refreshPlayback().catch(() => {});
-              }}
-              disabled={opBusy || !canUseQueueControls}
+              onClick={toggleQueue}
+              aria-busy={queueCommand !== null}
+              disabled={opBusy || queueState?.starting || !canUseQueueControls}
             >
-              {paused ? 'Resume Queue' : 'Pause Queue'}
+              {queueCommand === 'resume' ? 'Resuming…' : queueCommand === 'pause' ? 'Pausing…' : paused ? 'Resume Queue' : 'Pause Queue'}
             </button>
             <button type="button" onClick={() => refresh(true)} disabled={opBusy}>
               Refresh
@@ -781,6 +798,13 @@ export function DashboardPage() {
               {addTrackOpen ? 'Close Add Track' : 'Add Track'}
             </button>
           </div>
+
+          {queueCommandError ? (
+            <div className="callout calloutDanger" role="alert">
+              <div className="calloutTitle">Queue processing could not be changed</div>
+              <div className="muted">{queueCommandError}</div>
+            </div>
+          ) : null}
 
           {addTrackOpen ? (
             <div className="callout calloutInfo">

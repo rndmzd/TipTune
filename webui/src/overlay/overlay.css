@@ -30,7 +30,7 @@
 .tt-alerts { display: flex; flex-direction: column; gap: 10px; }
 .tt-alert-heading { display: flex; gap: 9px; align-items: center; font-size: 17px; }
 .tt-alert-requester { margin-left: auto; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
-.tt-alert-message { font-size: 22px; margin-top: 9px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+.tt-alert-message { font-size: 1.375rem; margin-top: 9px; overflow-wrap: anywhere; }
 .tt-alert-warning .tt-status-dot { background: #ffca76; }
 .tt-advertisement-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 24px; }
 .tt-advertisement-heading strong { font-weight: 650; }
@@ -51,7 +51,7 @@
 .tt-compact .tt-panel-heading { font-size: 15px; margin-bottom: 10px; }
 .tt-compact .tt-queue .tt-title { font-size: 18px; }
 .tt-compact .tt-queue li { padding: 9px 0; }
-.tt-compact .tt-alert-message { font-size: 19px; }
+.tt-compact .tt-alert-message { font-size: 1.1875rem; }
 .tt-compact .tt-advertisement-heading { font-size: 21px; }
 .tt-compact .tt-advertisement-price strong { font-size: 28px; }
 .tt-compact .tt-advertisement-instructions { font-size: 18px; }

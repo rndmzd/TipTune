@@ -15,6 +15,29 @@ from .song_requests import (SongRequest, SongExtractor, SongExtractionError, Son
 logger = get_structured_logger('tiptune.chatdj.chatdj')
 
 
+def _same_recording(requested: Any, playing: Dict[str, Any]) -> bool:
+    """Confirm an alternate release without trusting a title or an arbitrary URI."""
+    if not isinstance(requested, dict):
+        return False
+    signatures = []
+    for track in (requested, playing):
+        external_ids = track.get('external_ids')
+        artists = track.get('artists')
+        duration = track.get('duration_ms')
+        if not isinstance(external_ids, dict) or not isinstance(artists, list) or not artists:
+            return False
+        isrc = external_ids.get('isrc')
+        artist_ids = [artist.get('id') if isinstance(artist, dict) else None for artist in artists]
+        if (not isinstance(isrc, str) or not isrc.strip()
+                or not all(isinstance(artist_id, str) and artist_id for artist_id in artist_ids)
+                or type(duration) is not int or duration <= 0):
+            return False
+        signatures.append((isrc.strip().upper(), set(artist_ids), duration))
+    # Different album encodings can have a small amount of extra leading/trailing audio.
+    return (signatures[0][:2] == signatures[1][:2]
+            and abs(signatures[0][2] - signatures[1][2]) <= 2000)
+
+
 class AutoDJ:
     """AutoDJ class using Spotify APIs.
     Song interpretation and catalog matching live in song_requests, independent of playback."""
@@ -587,6 +610,7 @@ class AutoDJ:
             if not self._refresh_playback_device() or self.playback_device == old_id:
                 raise
             self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+        requested_recording = None
         for attempt in range(11):
             if attempt:
                 time.sleep(0.5)
@@ -595,11 +619,23 @@ class AutoDJ:
             device = playback.get('device') or {}
             # Spotify may relink a track to an equivalent available recording.
             original_uri = (item.get('linked_from') or {}).get('uri')
-            if (
-                playback.get('is_playing')
-                and track_uri in (item.get('uri'), original_uri)
-                and (not self.playback_device or device.get('id') == self.playback_device)
-            ):
+            if not playback.get('is_playing') or (self.playback_device and device.get('id') != self.playback_device):
+                continue
+            matches = track_uri in (item.get('uri'), original_uri)
+            if not matches and isinstance(item.get('external_ids'), dict) and item['external_ids'].get('isrc'):
+                # Spotify can play another release of the same recording without
+                # returning linked_from. Resolve its identity once per attempt.
+                if requested_recording is None:
+                    try:
+                        metadata = self.spotify.track(track_uri)
+                        requested_recording = metadata if isinstance(metadata, dict) else {}
+                    except Exception as exc:
+                        requested_recording = {}
+                        logger.debug('spotify.playback.recording_lookup.error',
+                                     message='Could not verify the alternate Spotify recording',
+                                     data={'error_type': type(exc).__name__})
+                matches = _same_recording(requested_recording, item)
+            if matches:
                 self.now_playing_track_uri = item.get('uri') or track_uri
                 self._last_start_playback_ts = time.time()
                 return True

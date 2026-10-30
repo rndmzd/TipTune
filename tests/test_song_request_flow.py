@@ -40,7 +40,7 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.actions = SimpleNamespace(
             extract_song_titles=AsyncMock(return_value=[SongRequest(song='Hello', artist='Adele')]),
             find_song_spotify=AsyncMock(return_value='spotify:track:'+'A'*22),
-            available_in_market=AsyncMock(return_value=True),
+            spotify_unavailability=AsyncMock(return_value=None),
             trigger_warning_overlay=AsyncMock(), trigger_song_requester_overlay=AsyncMock())
         self.service = SimpleNamespace(
             checks=checks,
@@ -58,6 +58,12 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def history(self):
         return [call.args[0] for call in self.service.publish_request_history_item.call_args_list]
+
+    def notice(self):
+        username, message, duration = self.actions.trigger_warning_overlay.call_args.args
+        self.assertEqual(username, 'Test')
+        self.assertGreaterEqual(duration, 15)
+        return message
 
     def enable_reports(self):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -100,6 +106,16 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.actions.find_song_spotify.return_value = None
         await self.handle()
         self.assertTrue(self.history()[0]['support']['support_id'].startswith('TT-'))
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        self.assertFalse(any(event.get('type') != 'transaction' for event in events))
+
+    async def test_spotify_restriction_is_not_reported_as_a_service_failure(self):
+        reporter = self.enable_reports()
+        self.actions.spotify_unavailability.return_value = 'market'
+        await self.handle()
+        self.assertEqual(self.history()[0]['error'], 'not available in market')
+        self.assertTrue(self.history()[0]['support']['support_id'].startswith('TT-'))
+        self.assertNotIn('error_code', self.history()[0]['support'])
         events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
         self.assertFalse(any(event.get('type') != 'transaction' for event in events))
 
@@ -147,6 +163,11 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.history()[0]['error'], 'no song identified')
         self.actions.find_song_spotify.assert_not_called()
         self.service.add_track_to_queue.assert_not_called()
+        message = self.notice()
+        self.assertIn('nothing was queued', message)
+        self.assertIn('song title and artist', message)
+        self.assertIn('Spotify link in chat', message)
+        self.assertIn('before tipping again', message)
 
     async def test_extraction_failure_is_separate_from_no_song(self):
         self.actions.extract_song_titles.side_effect = SongExtractionError('timeout')
@@ -159,6 +180,59 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(debug['outcome'], 'extraction_failed')
         self.assertGreaterEqual(debug['elapsed_ms'], 0)
         self.actions.find_song_spotify.assert_not_called()
+        self.assertIn("TipTune couldn't read", self.notice())
+        self.assertIn('before tipping again', self.notice())
+
+    async def test_missing_message_explains_both_causes_and_how_to_recover(self):
+        for tip in ({'tokens': 27}, {'tokens': 27, 'message': None},
+                    {'tokens': 27, 'message': ''}, {'tokens': 27, 'message': ' \n\t '}):
+            with self.subTest(tip=tip):
+                self.actions.trigger_warning_overlay.reset_mock()
+                await self.app.SongRequestService._handle_tip(self.service,
+                    {'tip': tip, 'user': {'username': 'Test'}})
+                message = self.notice()
+                self.assertIn('arrived without a message', message)
+                self.assertIn('may have been left blank', message)
+                self.assertIn("site's word filter", message)
+                self.assertIn('song title and artist in chat', message)
+                self.assertIn('before tipping again', message)
+                self.assertEqual(self.history()[-1]['error'], 'blank tip message')
+                self.actions.trigger_warning_overlay.assert_awaited_once()
+        self.actions.extract_song_titles.assert_not_called()
+        self.service.add_track_to_queue.assert_not_called()
+
+    async def test_ordinary_tips_do_not_get_song_request_notices(self):
+        await self.handle(None, tokens=26)
+        self.actions.trigger_warning_overlay.assert_not_called()
+        self.assertEqual(self.history(), [])
+
+    async def test_notices_honor_a_longer_configured_duration(self):
+        self.service._get_obs_overlay_duration_seconds.return_value = 25
+        await self.handle('')
+        self.assertEqual(self.actions.trigger_warning_overlay.call_args.args[2], 25)
+
+    async def test_lookup_outage_and_catalog_miss_offer_different_help(self):
+        for source in ('spotify', 'youtube'):
+            for outage in (False, True):
+                with self.subTest(source=source, outage=outage):
+                    self.service._active_source.return_value = source
+                    lookup = self.service.search_youtube_tracks if source == 'youtube' else self.actions.find_song_spotify
+                    lookup.return_value = [] if source == 'youtube' else None
+                    lookup.side_effect = TimeoutError('private-provider-response') if outage else None
+                    await self.handle()
+                    message = self.notice()
+                    self.assertIn('YouTube' if source == 'youtube' else 'Spotify', message)
+                    self.assertIn('before tipping again', message)
+                    self.assertNotIn('private-provider-response', message)
+                    if outage:
+                        self.assertIn("Couldn't search", message)
+                        self.assertIn('not queued', message)
+                    else:
+                        self.assertIn('link in chat', message)
+                        if source == 'spotify':
+                            self.assertIn("streamer's Spotify catalog", message)
+                            self.assertIn('country', message)
+        self.service.add_track_to_queue.assert_not_called()
 
     async def test_tip_worker_links_extraction_failure_to_the_request_trace(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -277,6 +351,8 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
                 await self.handle()
                 self.assertEqual(self.history()[0]['status'], 'failed')
                 self.assertEqual(self.history()[0]['error'], 'queue insertion failed')
+                self.assertIn("couldn't add it to the queue", self.notice())
+                self.assertIn('before tipping again', self.notice())
         self.actions.trigger_song_requester_overlay.assert_not_called()
 
     async def test_direct_spotify_uri_is_authoritative(self):
@@ -287,10 +363,82 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.history()[0]['resolved_uri'], 'spotify:track:'+'B'*22)
 
     async def test_unavailable_track_is_not_queued(self):
-        self.actions.available_in_market.return_value = False
+        self.actions.spotify_unavailability.return_value = 'market'
         await self.handle()
         self.assertEqual(self.history()[0]['error'], 'not available in market')
+        self.assertIn("streamer's Spotify country", self.notice())
+        self.assertIn('another version or a different song', self.notice())
+        self.assertIn('before tipping again', self.notice())
         self.service.add_track_to_queue.assert_not_called()
+
+    async def test_nonregional_spotify_restrictions_get_specific_guidance(self):
+        for reason, advice in [('explicit', 'clean version'), ('product', 'subscription'),
+                               ('local', 'local files'), ('unavailable', 'another version'),
+                               ('future_reason', 'another version')]:
+            with self.subTest(reason=reason):
+                self.actions.spotify_unavailability.return_value = reason
+                await self.handle()
+                self.assertIn(advice, self.notice())
+                self.assertNotIn('country', self.notice())
+                self.assertIn('before tipping again', self.notice())
+                self.assertEqual(self.history()[-1]['status'], 'failed')
+        self.service.add_track_to_queue.assert_not_called()
+
+    async def test_availability_outage_is_not_a_country_restriction(self):
+        reporter = self.enable_reports()
+        self.actions.spotify_unavailability.side_effect = SongResolutionError('private-provider-response')
+        await self.handle()
+        item = self.history()[0]
+        self.assertEqual(item['error'], 'spotify availability check failed')
+        self.assertEqual(item['support']['error_code'], 'song.availability.failed')
+        message = self.notice()
+        self.assertIn("Couldn't check", message)
+        self.assertIn("wasn't queued", message)
+        self.assertNotIn('country', message)
+        self.assertNotIn('private-provider-response', message)
+        self.service.add_track_to_queue.assert_not_called()
+        events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
+        error = next(event for event in events if event.get('type') != 'transaction')
+        self.assertEqual(error['tags']['support_id'], item['support']['support_id'])
+
+    async def test_queued_requests_explain_paused_or_failed_playback(self):
+        for flag, error in [('_queue_paused', None), ('_queue_playback_paused', None),
+                            ('_queue_paused', 'private device error')]:
+            with self.subTest(flag=flag, error=error):
+                self.service._queue_paused = self.service._queue_playback_paused = False
+                setattr(self.service, flag, True)
+                self.service._queue_error = error
+                await self.handle()
+                self.assertEqual(self.history()[-1]['status'], 'added')
+                self.assertIn('saved in the queue', self.notice())
+                self.assertIn('no need to tip again', self.notice())
+                self.assertIn("streamer's attention" if error else 'paused', self.notice())
+                self.assertNotIn('private device error', self.notice())
+        self.assertEqual(self.actions.trigger_song_requester_overlay.await_count, 3)
+
+    async def test_success_does_not_warn_and_short_title_has_no_dangling_separator(self):
+        self.actions.extract_song_titles.return_value = [SongRequest(song='U', artist='')]
+        await self.handle('U')
+        self.actions.trigger_song_requester_overlay.assert_awaited_once_with('Test', 'U', 10)
+        self.actions.trigger_warning_overlay.assert_not_called()
+        self.assertEqual(self.history()[0]['status'], 'added')
+
+    async def test_notice_display_failure_does_not_change_or_lose_the_queue_result(self):
+        self.actions.trigger_warning_overlay.side_effect = RuntimeError('OBS disconnected')
+        self.service._queue_paused = True
+        for accepted in (True, False):
+            with self.subTest(accepted=accepted):
+                self.service.add_track_to_queue.return_value = accepted
+                await self.handle()
+                self.assertEqual(self.history()[-1]['status'], 'added' if accepted else 'failed')
+        self.assertEqual(len(self.history()), 2)
+
+    async def test_skip_with_no_next_song_explains_empty_or_paused_queue(self):
+        self.service.advance_queue.return_value = False
+        await self.handle(tokens=51)
+        self.assertIn('No next song started', self.notice())
+        self.assertIn('empty or paused', self.notice())
+        self.assertIn('before tipping again', self.notice())
 
     async def test_youtube_search_uses_shared_extraction(self):
         self.service._active_source.return_value = 'youtube'
@@ -299,6 +447,14 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.service.search_youtube_tracks.assert_awaited_once_with('Adele - Hello', limit=1)
         self.assertEqual(self.history()[0]['resolved_uri'], 'https://youtu.be/abc')
         self.actions.find_song_spotify.assert_not_called()
+        self.actions.spotify_unavailability.assert_not_called()
+
+    async def test_youtube_no_song_guidance_uses_youtube_links(self):
+        self.service._active_source.return_value = 'youtube'
+        self.actions.extract_song_titles.return_value = []
+        await self.handle('thank you')
+        self.assertIn('YouTube link in chat', self.notice())
+        self.assertNotIn('Spotify', self.notice())
 
     async def test_direct_youtube_bypasses_model_failure(self):
         self.service._active_source.return_value = 'youtube'
@@ -320,21 +476,50 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         await self.Actions.find_song_spotify(actions, song)
         actions.song_extractor.resolve_spotify.assert_not_called()
 
-    async def test_availability_checks_market_playability_and_failures(self):
+    async def test_availability_checks_market_playability_and_restriction_reasons(self):
         spotify = Mock()
         spotify.me.return_value = {'country': 'CA'}
         actions = SimpleNamespace(chatdj_enabled=True, auto_dj=SimpleNamespace(spotify=spotify))
-        for info, expected in [({'uri': 'track', 'is_playable': True}, True),
-                               ({'uri': 'track', 'is_playable': False}, False),
-                               ({'uri': 'track', 'available_markets': []}, False),
-                               ({'uri': 'track', 'available_markets': [], 'is_playable': True}, True),
-                               ({'uri': 'track', 'available_markets': ['US']}, False)]:
+        for info, expected in [({'uri': 'track', 'is_playable': True}, None),
+                               ({'uri': 'track', 'is_playable': False}, 'unavailable'),
+                               ({'uri': 'track', 'available_markets': []}, 'market'),
+                               ({'uri': 'track', 'available_markets': [], 'is_playable': True}, None),
+                               ({'uri': 'track', 'available_markets': ['US']}, 'market'),
+                               ({'uri': 'track', 'available_markets': ['CA']}, None),
+                               ({'uri': 'track', 'is_local': True}, 'local'),
+                               *[({'uri': 'track', 'restrictions': {'reason': reason}}, reason)
+                                 for reason in ('market', 'explicit', 'product')],
+                               ({'uri': 'track', 'restrictions': {'reason': 'future_reason'},
+                                 'available_markets': []}, 'unavailable')]:
             with self.subTest(info=info):
                 spotify.track.return_value = info
-                self.assertEqual(await self.Actions.available_in_market(actions, 'track'), expected)
+                self.assertEqual(await self.Actions.spotify_unavailability(actions, 'track'), expected)
                 spotify.track.assert_called_with('track', market='CA')
+
+    async def test_availability_failures_do_not_claim_a_region_block(self):
+        spotify = Mock()
+        spotify.me.return_value = {'country': 'CA'}
+        actions = SimpleNamespace(chatdj_enabled=True, auto_dj=SimpleNamespace(spotify=spotify))
         spotify.track.side_effect = RuntimeError('lookup failed')
-        self.assertFalse(await self.Actions.available_in_market(actions, 'track'))
+        with self.assertRaises(SongResolutionError):
+            await self.Actions.spotify_unavailability(actions, 'track')
+        spotify.track.side_effect = None
+        for track in (None, {}, []):
+            spotify.track.return_value = track
+            with self.subTest(track=track), self.assertRaises(SongResolutionError):
+                await self.Actions.spotify_unavailability(actions, 'track')
+        spotify.track.reset_mock()
+        for profile in (None, {}, {'country': 'USA'}, {'country': None}, {'country': '12'}):
+            spotify.me.return_value = profile
+            with self.subTest(profile=profile), self.assertRaises(SongResolutionError):
+                await self.Actions.spotify_unavailability(actions, 'track')
+        spotify.me.side_effect = TimeoutError('profile failed')
+        with self.assertRaises(SongResolutionError):
+            await self.Actions.spotify_unavailability(actions, 'track')
+        spotify.track.assert_not_called()
+        for actions in (SimpleNamespace(chatdj_enabled=False), SimpleNamespace(chatdj_enabled=True)):
+            with self.assertRaises(SongResolutionError):
+                await self.Actions.spotify_unavailability(actions, 'track')
 
 
 if __name__ == '__main__':

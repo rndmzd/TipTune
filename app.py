@@ -795,7 +795,14 @@ class WebUI:
 
     async def _api_resume(self, _request: web.Request) -> web.Response:
         ok = await self._service.resume_queue()
-        return web.json_response({"ok": bool(ok)})
+        payload = {"ok": bool(ok)}
+        if not ok:
+            payload['error'] = getattr(self._service, '_queue_error', None) or (
+                'Playback is still starting. Wait for it to finish before retrying.'
+                if getattr(self._service, '_queue_starting', False)
+                else 'The queue could not resume. Check the Spotify connection and playback device in Settings.'
+            )
+        return web.json_response(payload)
 
     async def _api_playback_pause(self, _request: web.Request) -> web.Response:
         ok = await self._service.pause_playback()
@@ -1662,7 +1669,12 @@ class SongRequestService:
                         if item is nxt:
                             self._queue_items.pop(index)
                             break
-                    self._queue_now_playing = dict(nxt, source='spotify', uri=track_uri)
+                    playing_uri = getattr(self.actions.auto_dj, 'now_playing_track_uri', None)
+                    if not isinstance(playing_uri, str) or not playing_uri.startswith('spotify:track:'):
+                        playing_uri = track_uri
+                    self._queue_now_playing = dict(nxt, source='spotify', uri=playing_uri)
+                    if playing_uri != track_uri:
+                        self._queue_now_playing['requested_uri'] = track_uri
                     self._queue_playback_paused = False
                     self._queue_started_ts = time.time()
                     self._queue_error = None
@@ -3291,14 +3303,26 @@ class SongRequestService:
             self.publish_request_history_item(item)
 
         try:
-            tip_amount = event.get('tip', {}).get('tokens', 0)
-            tip_message = event.get('tip', {}).get('message', '').strip()
+            tip = event.get('tip')
+            if not isinstance(tip, dict):
+                return
+            tip_amount = tip.get('tokens', 0)
+            raw_message = tip.get('message')
+            tip_message = raw_message.strip() if isinstance(raw_message, str) else ''
             username = event.get('user', {}).get('username', 'Anonymous')
 
-            if not isinstance(tip_amount, int) or tip_amount <= 0:
+            if type(tip_amount) is not int or tip_amount <= 0:
                 return
 
             tip_ts = time.time()
+
+            async def notice(message: str) -> None:
+                # Give explanatory notices time to be read, honoring longer settings.
+                try:
+                    await self.actions.trigger_warning_overlay(
+                        username, message, max(15, self._get_obs_overlay_duration_seconds()))
+                except Exception as exc:
+                    logger.warning('obs.overlay.notice.error', data={'error_type': type(exc).__name__})
 
             is_song_request = self.checks.is_song_request(tip_amount)
             is_skip_request = self.checks.is_skip_song_request(tip_amount)
@@ -3308,11 +3332,8 @@ class SongRequestService:
             if not is_song_request and is_skip_request:
                 skipped = await self.advance_queue()
                 if not skipped:
-                    await self.actions.trigger_warning_overlay(
-                        username,
-                        "Failed to skip current song",
-                        5
-                    )
+                    await notice("No next song started. The queue may be empty or paused. "
+                                 "Ask the streamer to check playback before tipping again.")
                 return
 
             if not is_song_request:
@@ -3348,11 +3369,9 @@ class SongRequestService:
                         **extraction_debug, 'outcome': 'blank_tip_message', 'elapsed_ms': 0,
                     }),
                 })
-                await self.actions.trigger_warning_overlay(
-                    username,
-                    "Couldn't identify a song in your tip, because the tip note was blank. It may have been removed due to blocked words.",
-                    10
-                )
+                await notice("Your song-request tip arrived without a message. It may have been left blank "
+                             "or hidden by the site's word filter. Share the song title and artist in chat; "
+                             "ask the streamer for help before tipping again.")
                 return
 
             direct_youtube = self._youtube_url_from_text(tip_message) if source == 'youtube' else None
@@ -3387,12 +3406,12 @@ class SongRequestService:
                     "error": extraction_error or "no song identified",
                     "extraction_debug": _history_extraction_debug(extraction_debug),
                 })
-                await self.actions.trigger_warning_overlay(
-                    username,
-                    "Couldn't process your song request. Please try again." if extraction_error
-                    else "Couldn't identify a song in your request. Please include a song title.",
-                    10,
-                )
+                await notice(
+                    "TipTune couldn't read your request, so nothing was queued. "
+                    "Ask the streamer in chat for help before tipping again." if extraction_error else
+                    "No song was identified, so nothing was queued. Share the song title and artist "
+                    f"or a {'YouTube' if source == 'youtube' else 'Spotify'} link in chat. "
+                    "Ask the streamer for help before tipping again.")
                 return
 
             song_info = song_extracts[0]
@@ -3429,7 +3448,17 @@ class SongRequestService:
 
             if not song_uri:
                 not_found_error = lookup_error or ('youtube track not found' if source == 'youtube' else 'spotify track not found')
-                not_found_msg = "Couldn't find song on YouTube." if source == 'youtube' else "Couldn't find song on Spotify. Did you include artist and song name?"
+                provider = 'YouTube' if source == 'youtube' else 'Spotify'
+                if lookup_error:
+                    not_found_msg = (f"Couldn't search {provider} right now; your song was not queued. "
+                                     "Ask the streamer to check TipTune before tipping again.")
+                elif source == 'youtube':
+                    not_found_msg = ("Couldn't find this song on YouTube. Share the title and artist or a direct "
+                                     "video link in chat. Ask the streamer for help before tipping again.")
+                else:
+                    not_found_msg = ("Couldn't find this song in the streamer's Spotify catalog. Availability varies "
+                                     "by country. Share the title, artist, or a Spotify track link in chat; "
+                                     "ask the streamer before tipping again.")
                 publish_history({
                     "ts": time.time(),
                     "tip_ts": tip_ts,
@@ -3444,14 +3473,20 @@ class SongRequestService:
                     "status": "failed",
                     "error": not_found_error,
                 })
-                await self.actions.trigger_warning_overlay(
-                    username,
-                    not_found_msg,
-                    10
-                )
+                await notice(not_found_msg)
                 return
 
-            if source != 'youtube' and not await self.actions.available_in_market(song_uri):
+            restriction = None
+            availability_error = None
+            if source != 'youtube':
+                try:
+                    with error_reporter.trace('song.availability.spotify'):
+                        restriction = await self.actions.spotify_unavailability(song_uri)
+                except Exception as exc:
+                    availability_error = 'spotify availability check failed'
+                    error_reporter.capture_failure('song.availability.failed', exc, source='spotify', stage='availability')
+
+            if restriction or availability_error:
                 publish_history({
                     "ts": time.time(),
                     "tip_ts": tip_ts,
@@ -3464,16 +3499,29 @@ class SongRequestService:
                     "spotify_uri": getattr(song_info, 'spotify_uri', None),
                     "resolved_uri": song_uri,
                     "status": "failed",
-                    "error": "not available in market",
+                    "error": availability_error or (
+                        "not available in market" if restriction == 'market' else f"spotify restriction: {restriction}"),
                 })
-                await self.actions.trigger_warning_overlay(
-                    username,
-                    "Requested song not available in your Spotify market.",
-                    10
-                )
+                if availability_error:
+                    await notice("Couldn't check whether Spotify can play your song, so it wasn't queued. "
+                                 "Ask the streamer to check the Spotify connection before tipping again.")
+                else:
+                    messages = {
+                        'market': "This song isn't available in the streamer's Spotify country. Ask in chat about "
+                                  "another version or a different song before tipping again.",
+                        'explicit': "The streamer's Spotify settings block explicit songs. Ask in chat about a "
+                                    "clean version or another song before tipping again.",
+                        'product': "This song can't play with the streamer's Spotify subscription. Ask the "
+                                   "streamer in chat for help before tipping again.",
+                        'local': "Spotify local files can't be requested through TipTune. Share a Spotify catalog "
+                                 "link or another song with the streamer in chat before tipping again.",
+                    }
+                    await notice(messages.get(restriction,
+                        "Spotify can't play this version for the streamer's account. Ask in chat about "
+                        "another version or a different song before tipping again."))
                 return
 
-            song_details = f"{song_info.artist} - {song_info.song}".strip()
+            song_details = ' - '.join(part for part in (song_info.artist, song_info.song) if part)
             queue_exception = None
             try:
                 with error_reporter.trace('song.queue'):
@@ -3485,7 +3533,8 @@ class SongRequestService:
                 ok = False
             if not ok:
                 error_reporter.capture_failure('song.queue.failed', queue_exception, source=source, stage='queue_insertion')
-                await self.actions.trigger_warning_overlay(username, "Couldn't add song to the queue.", 10)
+                await notice("Your song was found, but TipTune couldn't add it to the queue. "
+                             "Ask the streamer in chat to check TipTune before tipping again.")
             if ok:
                 try:
                     await self.actions.trigger_song_requester_overlay(
@@ -3495,6 +3544,12 @@ class SongRequestService:
                     )
                 except Exception:
                     pass
+                if getattr(self, '_queue_paused', False) or getattr(self, '_queue_playback_paused', False):
+                    await notice(
+                        "Your song is saved in the queue, but playback needs the streamer's attention. "
+                        "Please wait; no need to tip again." if getattr(self, '_queue_error', None) else
+                        "Your song is saved in the queue. Playback is paused; the streamer needs to resume it. "
+                        "Please wait; no need to tip again.")
 
             publish_history({
                 "ts": time.time(),

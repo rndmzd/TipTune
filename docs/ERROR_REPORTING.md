@@ -35,7 +35,7 @@ Free-form log/exception text, usernames, tip/request messages, authentication he
 
 ## Functional failures and support IDs
 
-Opt-in reports also cover `song.lookup.failed`, `song.queue.failed`, and Spotify playback that is unconfirmed, unavailable, invalid, or raises an exception. These use fixed `error_code` tags and technical metadata. Blank requests, no identified song, normal catalog misses, and market restrictions remain normal request outcomes. They do not create new automatic error reports.
+Opt-in reports also cover `song.lookup.failed`, `song.availability.failed`, `song.queue.failed`, and Spotify playback that is unconfirmed, unavailable, invalid, or raises an exception. These use fixed `error_code` tags and technical metadata. An availability-check failure means Spotify could not be checked; it does not establish a country restriction. Blank requests, no identified song, normal catalog misses, and confirmed Spotify restrictions remain normal request outcomes. They do not create new automatic error reports.
 
 Each song request gets an opaque `TT-<32 hex digits>` support ID. It appears on failed History entries and requests with a playback problem, with a **Copy support ID** action and a selectable fallback when clipboard access is unavailable. The same ID accompanies local structured logs, the queued track, and any Sentry errors or transactions. In Sentry, search `support_id:TT-...`; use `error_code:song.lookup.failed` (or another listed code) to group functional failures. A provider's `request_id` remains a separate provider reference.
 

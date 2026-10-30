@@ -2,7 +2,7 @@ import asyncio
 from typing import List, Optional
 
 from chatdj.chatdj import SongRequest, SongExtractionError
-from chatdj.song_requests import DEFAULT_MODEL, account_market, playable
+from chatdj.song_requests import DEFAULT_MODEL, SongResolutionError, playable
 from utils.structured_logging import get_structured_logger
 
 logger = get_structured_logger('tiptune.helpers.actions')
@@ -131,12 +131,10 @@ class Actions:
         song_info.spotify_uri = resolved.spotify_uri
         return resolved.spotify_uri
 
-    async def available_in_market(self, song_uri: str) -> bool:
-        """Check if a song is available in the user's market."""
-        if not self.chatdj_enabled:
-            return False
-        if not hasattr(self, 'auto_dj'):
-            return False
+    async def spotify_unavailability(self, song_uri: str) -> str | None:
+        """Return a playback restriction, or None when playable; raise on service failure."""
+        if not self.chatdj_enabled or not hasattr(self, 'auto_dj'):
+            raise SongResolutionError('Spotify is not configured')
 
         try:
             logger.debug("spotify.market.check.start", message="Checking market availability", data={"uri": song_uri})
@@ -144,18 +142,37 @@ class Actions:
             loop = asyncio.get_running_loop()
             def check():
                 spotify = self.auto_dj.spotify
-                market = account_market(spotify)
+                # A guessed country would misdiagnose a connection/profile failure
+                # as a regional restriction. Use the connected account's country.
+                profile = spotify.me()
+                market = profile.get('country') if isinstance(profile, dict) else None
+                if not isinstance(market, str) or len(market) != 2 or not market.isascii() or not market.isalpha():
+                    raise SongResolutionError('Spotify account country unavailable')
+                market = market.upper()
                 track = spotify.track(song_uri, market=market)
-                return bool(track and track.get('uri') and playable(track, market))
+                if not isinstance(track, dict) or not track.get('uri'):
+                    raise SongResolutionError('Spotify track availability unavailable')
+                if playable(track, market):
+                    return None
+                if track.get('is_local'):
+                    return 'local'
+                restrictions = track.get('restrictions') or {}
+                reason = restrictions.get('reason') if isinstance(restrictions, dict) else None
+                if reason:
+                    return reason if reason in ('market', 'product', 'explicit') else 'unavailable'
+                markets = track.get('available_markets')
+                if isinstance(markets, list) and market not in markets:
+                    return 'market'
+                return 'unavailable'
 
-            is_available = await loop.run_in_executor(None, check)
+            restriction = await loop.run_in_executor(None, check)
             logger.debug("spotify.market.check.complete",
-                        data={"is_available": is_available})
-            return is_available
+                        data={"is_available": restriction is None, "restriction": restriction})
+            return restriction
 
         except Exception as exc:
             logger.exception("spotify.market.error", message="Failed to check market availability", exc=exc)
-            return False
+            raise SongResolutionError('Spotify availability check failed') from exc
 
     async def add_song_to_queue(self, uri: str, requester_name: str, song_details: str) -> bool:
         """Add a song to the playback queue and trigger the song requester overlay."""

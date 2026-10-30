@@ -59,6 +59,7 @@ TRACE_OPERATIONS = {
     'GET /api/music/search': 'http.server',
     'song.request': 'task', 'song.extract': 'function',
     'song.lookup.spotify': 'function', 'song.lookup.youtube': 'function',
+    'song.availability.spotify': 'function',
     'song.queue': 'queue.submit', 'song.playback': 'function',
 }
 _TRACE_STATUSES = frozenset(('ok', 'internal_error', 'cancelled', 'unknown_error',
