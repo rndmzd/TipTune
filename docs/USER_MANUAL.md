@@ -234,7 +234,7 @@ tip requests one song, and a 54-token tip does not trigger a song request.
 
 For song requests, TipTune reads the tip note/message text.
 
-- If the message is **blank**, the request is marked failed and a warning overlay can be shown.
+- If the message is **blank, missing, or null**, the request is marked failed. The notice explains that the message may have been omitted or hidden by the site's word filter and asks the tipper to share the title and artist in chat before tipping again. TipTune cannot tell which cause applied or recover a filtered message.
 - Short titles (including one or two characters) and meaningful punctuation are preserved.
 
 Extraction behavior:
@@ -252,7 +252,8 @@ Extraction behavior:
 
 After resolving a Spotify URI, TipTune checks market availability.
 
-- Searches and the final track check use the Spotify account market, falling back to US when the account country is unavailable. Unplayable/restricted tracks and failed availability lookups are rejected.
+- Searches use the connected Spotify account's country, falling back to US if it cannot be read. The final track check requires the connected account's country; a profile or track lookup failure is reported as a failed availability check rather than a country restriction. No song is queued when that check fails.
+- Confirmed country restrictions refer to the **streamer's Spotify country**, which may differ from the tipper's. Notices suggest discussing another version or a different song in chat. Explicit-content settings, subscription restrictions, local files, and other unplayable versions have separate notices. A playable Spotify replacement of the same track is still accepted.
 
 ---
 
@@ -539,8 +540,20 @@ refresh the source; with the OBS connection enabled, TipTune attempts a startup
 refresh automatically. On a lost connection, alerts clear immediately and
 persistent content hides after 15 seconds without a heartbeat. Reconnection
 restores current state without replaying expired messages. Alert durations use
-`General.request_overlay_duration` by default; at most three alerts are visible
+`General.request_overlay_duration` by default. Explanatory tip notices stay visible
+for at least 15 seconds, or the configured duration if longer. Their text wraps
+in full so recovery instructions remain visible. At most three alerts are visible
 at once, with a bounded queue for bursts.
+
+Request notices tell the tipper what happened and how to ask the streamer for help:
+
+- Missing messages may have been omitted or removed by the site's word filter; share the title and artist in chat.
+- Unidentified songs and catalog misses suggest a title, artist, or link for the selected music source. Spotify catalog misses mention that availability varies by country without claiming a confirmed regional block.
+- Extraction, search, availability-check, and queue failures ask the streamer to check TipTune before another tip is sent. Technical errors are not displayed on stream.
+- A request accepted while playback is paused or needs attention is still saved in the queue. The notice explains that the streamer must resume or check playback and that another tip is unnecessary.
+- A skip that starts no next song explains that the queue may be empty or paused.
+
+Chat replies are not automatically processed as replacement requests. The streamer can use the Dashboard to add or correct a song; notices do not promise an automatic retry or refund.
 
 Appearance is stored in `[Overlay]` in `config.ini`. The display checkbox controls browser display. Existing legacy text inputs are retained for manual cleanup in OBS; the wizard and Settings use browser display. Other scenes are retained, so hide old text items there when reusing the browser input.
 
@@ -741,7 +754,7 @@ TipTune keeps the song queued when Spotify cannot start it. Check **Settings →
 
 TipTune requires a tip note/message for song requests.
 
-If the message is blank, TipTune will fail the request and may warn that the note could have been removed due to blocked words.
+The notice explains that the message may have been omitted or hidden by the site's word filter. Ask the tipper to share the song title and artist in chat, then add the song manually from the Dashboard as appropriate. TipTune cannot recover a filtered message or automatically use a chat reply. The tipper should ask for help before tipping again.
 
 ### Requests failing with “spotify track not found”
 

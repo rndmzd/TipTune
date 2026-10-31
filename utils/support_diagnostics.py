@@ -17,7 +17,7 @@ SUPPORT_ID = re.compile(r'^TT-[a-f0-9]{32}$')
 VERSION = re.compile(r'^[0-9]+(?:\.[0-9]+)*(?:[.-]?(?:a|b|alpha|beta|rc|post|dev)[.-]?[0-9]+)?(?:\+[0-9]+)?$')
 DEPENDENCIES = ('openai', 'httpx', 'httpx2', 'aiohttp', 'spotipy', 'sentry-sdk')
 FAILURE_CODES = frozenset((
-    'song.extract.failed', 'song.lookup.failed', 'song.queue.failed',
+    'song.extract.failed', 'song.lookup.failed', 'song.availability.failed', 'song.queue.failed',
     'spotify.playback.unconfirmed', 'spotify.playback.failed',
     'spotify.playback.unavailable', 'spotify.playback.invalid_track',
 ))

@@ -27,6 +27,15 @@ def playback(uri=URI, playing=True, device='desktop'):
     }
 
 
+def recording(uri=URI, *, isrc='USRC11000915', artist='artist', duration=240000):
+    return {
+        'uri': uri,
+        'external_ids': {'isrc': isrc},
+        'artists': [{'id': artist}],
+        'duration_ms': duration,
+    }
+
+
 def make_dj():
     dj = AutoDJ.__new__(AutoDJ)
     dj.spotify = Mock()
@@ -67,6 +76,48 @@ class StartTrackTests(unittest.TestCase):
         state['item']['linked_from'] = {'uri': URI}
         self.dj.spotify.current_playback.return_value = state
         self.assertTrue(self.dj.start_track(URI))
+
+    def test_equivalent_recording_without_linked_from_is_confirmed(self):
+        state = playback('spotify:track:alternate-release')
+        state['item'] = recording(state['item']['uri'], duration=241053)
+        self.dj.spotify.track.return_value = recording()
+        self.dj.spotify.current_playback.return_value = state
+
+        self.assertTrue(self.dj.start_track(URI))
+        self.assertEqual(self.dj.now_playing_track_uri, state['item']['uri'])
+        self.dj.spotify.track.assert_called_once_with(URI)
+        self.dj.spotify.start_playback.assert_called_once()
+
+    def test_different_recording_is_not_confirmed_despite_matching_title(self):
+        for changes in ({'isrc': 'USUM71509342'}, {'artist': 'other'},
+                        {'duration': 260000}, {'isrc': ''}):
+            with self.subTest(changes=changes):
+                self.dj.spotify.track.reset_mock()
+                state = playback('spotify:track:other')
+                state['item'] = dict(recording(state['item']['uri'], **changes), name='Same title')
+                self.dj.spotify.track.return_value = dict(recording(), name='Same title')
+                self.dj.spotify.current_playback.return_value = state
+
+                self.assertFalse(self.dj.start_track(URI))
+                self.assertLessEqual(self.dj.spotify.track.call_count, 1)
+
+    def test_recording_match_on_another_device_is_not_confirmed(self):
+        state = playback('spotify:track:alternate-release', device='speaker')
+        state['item'] = recording(state['item']['uri'])
+        self.dj.spotify.track.return_value = recording()
+        self.dj.spotify.current_playback.return_value = state
+
+        self.assertFalse(self.dj.start_track(URI))
+        self.dj.spotify.track.assert_not_called()
+
+    def test_failed_recording_lookup_keeps_the_request_unconfirmed(self):
+        state = playback('spotify:track:alternate-release')
+        state['item'] = recording(state['item']['uri'])
+        self.dj.spotify.track.side_effect = SpotifyException(429, -1, 'Rate limited')
+        self.dj.spotify.current_playback.return_value = state
+
+        self.assertFalse(self.dj.start_track(URI))
+        self.dj.spotify.track.assert_called_once_with(URI)
 
     def test_expired_web_player_id_is_replaced_before_starting(self):
         self.dj.playback_device_name = 'Web Player'
@@ -310,12 +361,56 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.service._queue_error)
         self.assertEqual(self.dj.spotify.start_playback.call_count, 2)
 
+    async def test_resume_recovers_an_equivalent_recording_and_tracks_its_playing_uri(self):
+        self.dj.spotify.current_playback.return_value = playback(None, False)
+        await self.service._queue_start_next_if_needed()
+        state = playback('spotify:track:alternate-release')
+        state['item'] = recording(state['item']['uri'], duration=241053)
+        state['progress_ms'] = 1200
+        self.dj.spotify.track.return_value = recording()
+        self.dj.spotify.current_playback.return_value = state
+        self.service.actions.trigger_queue_state_overlay = AsyncMock()
+        self.service._enrich_mixed_queue_items = AsyncMock(side_effect=lambda items: items)
+
+        self.assertTrue(await self.service.resume_queue())
+        self.assertFalse(self.service._queue_paused)
+        self.assertIsNone(self.service._queue_error)
+        self.assertEqual(self.service._queue_items, [])
+        self.assertEqual(self.service._queue_now_playing['uri'], state['item']['uri'])
+        self.assertEqual(self.service._queue_now_playing['requested_uri'], URI)
+        queue = await self.service.get_queue_state()
+        self.assertTrue(queue['playback_is_playing'])
+        self.assertEqual(queue['playback_progress_ms'], 1200)
+        self.assertEqual(self.dj.spotify.start_playback.call_count, 2)
+
     async def test_repeated_manual_failure_reports_failure_and_pauses_again(self):
         self.dj.spotify.current_playback.return_value = playback(None, False)
         await self.service._queue_start_next_if_needed()
         self.assertFalse(await self.service.resume_queue())
         self.assertTrue(self.service._queue_paused)
         self.assertEqual(len(self.service._queue_items), 1)
+
+    async def test_resume_api_returns_the_playback_failure_message(self):
+        self.dj.spotify.current_playback.return_value = playback(None, False)
+        web = application.WebUI.__new__(application.WebUI)
+        web._service = self.service
+
+        response = await web._api_resume(None)
+        payload = json.loads(response.text)
+        self.assertFalse(payload['ok'])
+        self.assertIn('did not start playback', payload['error'])
+        self.assertIn('still queued', payload['error'])
+
+    async def test_resume_api_explains_an_attempt_already_in_progress(self):
+        self.service._queue_starting = True
+        web = application.WebUI.__new__(application.WebUI)
+        web._service = self.service
+
+        response = await web._api_resume(None)
+        payload = json.loads(response.text)
+        self.assertFalse(payload['ok'])
+        self.assertIn('still starting', payload['error'])
+        self.dj.spotify.start_playback.assert_not_called()
 
     async def test_concurrent_starts_do_not_send_duplicate_commands(self):
         entered = threading.Event()
