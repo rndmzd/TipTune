@@ -1,6 +1,7 @@
 import configparser
 import asyncio
 import importlib
+import io
 import json
 import logging
 from pathlib import Path
@@ -124,6 +125,46 @@ class ErrorReportingTests(unittest.TestCase):
         record = json.loads(next(reporter.pending_dir.glob('*.json')).read_text())
         self.assertEqual(record['event']['exception']['values'][0]['type'], 'ValueError')
         self.assertIn('lineno', record['event']['exception']['values'][0]['stacktrace']['frames'][-1])
+
+    def test_obs_errors_stay_in_local_logs_without_being_queued(self):
+        self.consent(True)
+        reporter = self.reporter()
+        local_log = io.StringIO()
+        logger = logging.Logger('isolated', level=logging.INFO)
+        logger.addHandler(logging.StreamHandler(local_log))
+        logger.addHandler(ErrorReportingHandler(reporter))
+        structured = StructuredLogger(logger)
+
+        for event_type in ('obs.connect.refused', 'obs.reconnect.error', 'obs.request.failed'):
+            structured.error(event_type)
+            self.assertIn(event_type, local_log.getvalue())
+        self.assertEqual(reporter.status()['pending'], 0)
+
+        structured.error('events_api.poll.error')
+        reporter.process_pending()
+        self.post.assert_called_once()
+        event = envelope_event(self.post.call_args.kwargs['content'])
+        self.assertEqual(event['tags']['event_type'], 'events_api.poll.error')
+
+    def test_obs_error_queued_by_an_older_release_is_discarded_on_replay(self):
+        self.consent(True)
+        reporter = self.reporter()
+        event = {
+            'event_id': 'a' * 32,
+            'release': 'tiptune@1.10.0',
+            'tags': {'component': 'python', 'event_type': 'obs.reconnect.error'},
+            'exception': {'values': [{'type': 'LoggedError', 'value': 'obs.reconnect.error'}]},
+        }
+        reporter.pending_dir.mkdir(parents=True, exist_ok=True)
+        path = reporter.pending_dir / (event['event_id'] + '.json')
+        path.write_text(json.dumps({
+            'event': event, 'created_at': time.time(), 'attempts': 1, 'retry_at': 0,
+        }), encoding='utf-8')
+
+        reporter.process_pending()
+
+        self.post.assert_not_called()
+        self.assertFalse(path.exists())
 
     def test_offline_report_replays_after_restart_and_keeps_its_original_release(self):
         self.consent(True)
