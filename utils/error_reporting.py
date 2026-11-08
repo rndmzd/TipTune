@@ -222,6 +222,7 @@ def sanitize_report(event):
 
     Free-form log/exception messages are deliberately replaced: they can contain
     usernames, request text, authenticated URLs, or provider response bodies.
+    Standalone OBS integration reports are dropped.
     """
     if event.get('type') == 'transaction':
         return sanitize_transaction(event)
@@ -229,6 +230,8 @@ def sanitize_report(event):
     event_type = tags.get('event_type', 'app.error')
     if not isinstance(event_type, str) or not _EVENT_TYPES.fullmatch(event_type):
         event_type = 'app.error'
+    if event_type.startswith('obs.'):
+        return None
     component = tags.get('component')
     if component not in ('python', 'webui', 'overlay', 'desktop'):
         component = 'python'
@@ -737,14 +740,14 @@ class ErrorReporter:
                     continue
                 if record.get('retry_at', 0) > now:
                     continue
-                _transport_active.value = True
-                self._ensure_client()
-                self._transport.delivered = False
-                self._transport.discard = False
                 event = sanitize_report(record['event'])
                 if event is None:
                     path.unlink(missing_ok=True)
                     continue
+                _transport_active.value = True
+                self._ensure_client()
+                self._transport.delivered = False
+                self._transport.discard = False
                 self._client.capture_event(event, hint={
                     'tiptune_queued': True, 'tiptune_has_trace': 'trace' in event.get('contexts', {}),
                 }, scope=sentry_sdk.Scope())

@@ -31,6 +31,8 @@ Debug IDs match the content of each JavaScript chunk, including the OBS overlay,
 
 Reports allowlist the app release, OS, component, exception types, code filenames/functions/line numbers, exception causes, failure stage, selected music source, provider HTTP status/request ID, elapsed time, and desktop exit code. Up to 50 preceding structured application event names can accompany a failure.
 
+TipTune keeps OBS integration errors (`obs.*`) in local logs and drops their standalone reports before upload.
+
 Free-form log/exception text, usernames, tip/request messages, authentication headers, cookies, configured secrets, runtime source text, frame locals, request bodies, provider response bodies, device/host names, and absolute machine paths are excluded from reports. The separate build upload provides application source maps to Sentry. No automatic session reports, profiling, metrics, continuous remote logs, screenshots, or attachments are sent. Automatic SDK integrations and propagation to external services are disabled.
 
 ## Functional failures and support IDs
