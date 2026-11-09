@@ -22,6 +22,7 @@ except OSError:
     # keep an unmanaged worker alive or open a windowed traceback dialog.
     raise SystemExit(1) from None
 
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -1618,6 +1619,7 @@ class SongRequestService:
         error = None
         error_code = None
         failure_exception = None
+        confirmation_counts = Counter()
         interrupted = False
         ok = False
         try:
@@ -1631,7 +1633,8 @@ class SongRequestService:
             else:
                 # Await the actual operation: timing out just the executor future
                 # would leave a live Spotify command behind and allow overlapping retries.
-                ok = await asyncio.to_thread(self.actions.auto_dj.start_track, track_uri)
+                ok = await asyncio.to_thread(self.actions.auto_dj.start_track, track_uri,
+                                             confirmation_counts=confirmation_counts)
                 if not ok:
                     error_code = 'spotify.playback.unconfirmed'
                     error = (
@@ -1657,8 +1660,12 @@ class SongRequestService:
                 device_name = getattr(getattr(self.actions, 'auto_dj', None), 'playback_device_name', None)
                 backend = ('spotify_embedded' if device_name == 'Web Player (Microsoft Edge)'
                            else 'spotify_external' if isinstance(device_name, str) and device_name.strip() else 'unknown')
+                details = None
+                if error_code == 'spotify.playback.unconfirmed':
+                    details = {'playback_confirmation': confirmation_counts}
                 error_reporter.capture_failure(error_code or 'spotify.playback.failed', failure_exception,
-                                               source='spotify', stage='playback_confirmation', playback_backend=backend)
+                                               source='spotify', stage='playback_confirmation', playback_backend=backend,
+                                               details=details)
                 nxt['support'] = error_reporter.support_details()
             async with self._queue_lock:
                 self._queue_starting = False

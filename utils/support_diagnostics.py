@@ -21,6 +21,7 @@ FAILURE_CODES = frozenset((
     'spotify.playback.unconfirmed', 'spotify.playback.failed',
     'spotify.playback.unavailable', 'spotify.playback.invalid_track',
 ))
+SPOTIFY_CONFIRMATION_CHECKS = 11
 SUPPORT_OPERATION = ContextVar('tiptune_support_operation', default=None)
 
 
@@ -46,6 +47,18 @@ def new_support_id():
 def current_support_id():
     current = SUPPORT_OPERATION.get()
     return current.support_id if current is not None and current.active else None
+
+
+def sanitize_playback_confirmation(value):
+    """Keep only counts for the first failed condition on each Spotify poll."""
+    if not isinstance(value, dict):
+        return {}
+    counts = {}
+    for reason in ('no_playback_state', 'not_playing', 'device_mismatch', 'track_mismatch'):
+        count = value.get(reason)
+        if type(count) is int and 0 < count <= SPOTIFY_CONFIRMATION_CHECKS:
+            counts[reason] = count
+    return counts if sum(counts.values()) <= SPOTIFY_CONFIRMATION_CHECKS else {}
 
 
 @lru_cache(maxsize=1)

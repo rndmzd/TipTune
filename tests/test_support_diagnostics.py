@@ -138,6 +138,18 @@ class SupportDiagnosticsTests(unittest.TestCase):
                                       'dependencies': {'openai': '123-private-token'}})
         self.assertEqual(value, {'os_build': '11.0.12345', 'dependencies': {}})
 
+    def test_playback_confirmation_rejects_private_fields_and_invalid_counts(self):
+        for counts, expected in (
+            ({'no_playback_state': 2, 'not_playing': True, 'device_mismatch': 12,
+              'track_mismatch': 'private-song', 'device_name': 'private-device', 'account_id': 7},
+             {'no_playback_state': 2}),
+            ({'no_playback_state': 6, 'not_playing': 6}, None),
+        ):
+            with self.subTest(counts=counts):
+                event = sanitize_report({'tags': {'event_type': 'spotify.playback.unconfirmed'},
+                                         'contexts': {'failure': {'playback_confirmation': counts}}})
+                self.assertEqual(event['contexts']['failure'].get('playback_confirmation'), expected)
+
     def test_missing_configuration_flags_are_omitted_instead_of_guessing_runtime_defaults(self):
         config = configparser.ConfigParser()
         config.read_dict({'OBS': {'password': 'private-secret'}})

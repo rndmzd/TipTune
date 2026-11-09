@@ -28,7 +28,7 @@ from utils.runtime_paths import get_resource_path
 from utils.song_extraction_debug import sanitize_extraction_debug
 from utils.support_diagnostics import (
     FAILURE_CODES, SUPPORT_OPERATION, SupportOperation, environment_for_report,
-    new_support_id, sanitize_environment, valid_support_id,
+    new_support_id, sanitize_environment, sanitize_playback_confirmation, valid_support_id,
 )
 
 
@@ -291,6 +291,10 @@ def sanitize_report(event):
             failure['exit_code'] = details['exit_code']
         if type(details.get('elapsed_ms')) in (int, float) and 0 <= details['elapsed_ms'] <= 86_400_000:
             failure['elapsed_ms'] = details['elapsed_ms']
+        if event_type == 'spotify.playback.unconfirmed':
+            confirmation = sanitize_playback_confirmation(details.get('playback_confirmation'))
+            if confirmation:
+                failure['playback_confirmation'] = confirmation
     result['contexts'] = {'failure': failure, 'os': {'name': platform.system(), 'version': platform.release()},
                           'runtime': {'name': 'CPython', 'version': platform.python_version()} if component == 'python'
                           else {'name': 'Web UI' if component in ('webui', 'overlay') else 'Tauri'}}

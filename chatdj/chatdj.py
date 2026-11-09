@@ -1,6 +1,7 @@
 import json
 import time
 import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,6 +9,7 @@ from spotipy import Spotify, SpotifyException
 
 from utils.structured_logging import get_structured_logger
 from utils.runtime_paths import ensure_dir, get_cache_dir
+from utils.support_diagnostics import SPOTIFY_CONFIRMATION_CHECKS
 
 from .song_requests import (SongRequest, SongExtractor, SongExtractionError, SongResolutionError,
                             account_market, collect_candidates, exact_candidate)
@@ -592,12 +594,14 @@ class AutoDJ:
             return False
 
 
-    def start_track(self, track_uri: str) -> bool:
-        """Start a request and confirm the device actually began playing it."""
+    def start_track(self, track_uri: str, *, confirmation_counts: Counter[str] | None = None) -> bool:
+        """Start a request and confirm playback, optionally counting failed checks."""
+        if confirmation_counts is None:
+            confirmation_counts = Counter()
         with self._device_lock:
-            return self._start_track(track_uri)
+            return self._start_track(track_uri, confirmation_counts)
 
-    def _start_track(self, track_uri: str) -> bool:
+    def _start_track(self, track_uri: str, confirmation_counts: Counter[str]) -> bool:
         if not self._refresh_playback_device():
             raise ValueError("No available Spotify playback device. Open Spotify and resume the queue.")
         try:
@@ -611,7 +615,7 @@ class AutoDJ:
                 raise
             self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
         requested_recording = None
-        for attempt in range(11):
+        for attempt in range(SPOTIFY_CONFIRMATION_CHECKS):
             if attempt:
                 time.sleep(0.5)
             playback = self.spotify.current_playback() or {}
@@ -619,7 +623,12 @@ class AutoDJ:
             device = playback.get('device') or {}
             # Spotify may relink a track to an equivalent available recording.
             original_uri = (item.get('linked_from') or {}).get('uri')
-            if not playback.get('is_playing') or (self.playback_device and device.get('id') != self.playback_device):
+            if not playback.get('is_playing'):
+                reason = 'not_playing' if playback else 'no_playback_state'
+                confirmation_counts[reason] += 1
+                continue
+            if self.playback_device and device.get('id') != self.playback_device:
+                confirmation_counts['device_mismatch'] += 1
                 continue
             matches = track_uri in (item.get('uri'), original_uri)
             if not matches and isinstance(item.get('external_ids'), dict) and item['external_ids'].get('isrc'):
@@ -639,6 +648,7 @@ class AutoDJ:
                 self.now_playing_track_uri = item.get('uri') or track_uri
                 self._last_start_playback_ts = time.time()
                 return True
+            confirmation_counts['track_mismatch'] += 1
         logger.warning(
             "spotify.playback.unconfirmed",
             message="Spotify accepted the request but did not start the track on the selected device; keeping the request queued.",

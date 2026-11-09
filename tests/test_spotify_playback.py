@@ -7,6 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 from spotipy import SpotifyException
 
 from app import SongRequestService
@@ -207,24 +208,37 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         config_path = root / 'config.ini'
         config_path.write_text('[General]\nsend_error_reports=true')
-        reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1', start_worker=False)
+        reporter = ErrorReporter(config_path, root / 'cache', 'https://public@example.org/1',
+                                 start_worker=False, traces_sample_rate=0)
         self.addCleanup(reporter.close)
         support_id = 'TT-' + 'a' * 32
         other_id = 'TT-' + 'b' * 32
-        self.service._queue_items[0]['support_id'] = support_id
+        request = self.service._queue_items[0]
+        request['support_id'] = support_id
         self.service._request_history_recent = [
             {'status': 'added', 'support': {'support_id': support_id}},
             {'status': 'added', 'support': {'support_id': other_id}},
         ]
         self.service._persist_request_history_to_disk = Mock()
 
+        other_device = playback(device='private-device-id')
+        other_device['device']['name'] = 'private-device-name'
+        other_track = playback('spotify:track:private-track-id')
+        other_track['item']['name'] = 'private-song-name'
+        states = iter([None, {}, playback(None, False), playback(playing=False), other_device] + [other_track] * 6)
+
         def unconfirmed():
             self.assertEqual(current_support_id(), support_id)
-            return playback(None, False)
+            return next(states)
 
         self.dj.spotify.current_playback.side_effect = unconfirmed
         with patch.object(application, 'error_reporter', reporter):
             self.assertFalse(await self.service._queue_start_next_if_needed())
+        self.dj.spotify.start_playback.assert_called_once_with(device_id='desktop', uris=[URI])
+        self.assertEqual(self.dj.spotify.current_playback.call_count, 11)
+        self.assertTrue(self.service._queue_paused)
+        self.assertIsNone(self.service._queue_now_playing)
+        self.assertEqual(self.service._queue_items, [request])
         record, other = self.service._request_history_recent
         self.assertIn('did not start playback', record['playback_error'])
         self.assertNotIn('playback_error', other)
@@ -234,7 +248,20 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error['tags']['support_id'], support_id)
         self.assertEqual(error['event_id'], record['support']['report_id'])
         self.assertEqual(error['contexts']['diagnostics']['playback_backend'], 'spotify_external')
-        self.assertNotIn(URI, json.dumps(error))
+        self.assertEqual(error['contexts']['failure']['playback_confirmation'], {
+            'no_playback_state': 2, 'not_playing': 2, 'device_mismatch': 1, 'track_mismatch': 6,
+        })
+
+        with patch('utils.error_reporting.httpx.post', return_value=httpx.Response(200)) as post:
+            reporter.process_pending()
+        post.assert_called_once()
+        uploaded = json.loads(post.call_args.kwargs['content'].split(b'\n', 2)[2])
+        self.assertEqual(uploaded['tags']['support_id'], support_id)
+        self.assertEqual(uploaded['contexts']['failure'], error['contexts']['failure'])
+        serialized = json.dumps([error, uploaded])
+        for private_value in (URI.removeprefix('spotify:track:'), 'private-track-id', 'private-song-name',
+                              'private-device-id', 'private-device-name'):
+            self.assertNotIn(private_value, serialized)
 
         self.dj.spotify.current_playback.side_effect = None
         self.dj.spotify.current_playback.return_value = playback()
@@ -266,7 +293,7 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(reporter.close)
         started = asyncio.Event()
 
-        async def start_track(*args):
+        async def start_track(*args, **kwargs):
             started.set()
             await asyncio.Event().wait()
 
