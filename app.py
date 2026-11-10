@@ -2,6 +2,7 @@ import asyncio
 import configparser
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -22,7 +23,10 @@ except OSError:
     # keep an unmanaged worker alive or open a windowed traceback dialog.
     raise SystemExit(1) from None
 
-from collections import Counter
+from collections import Counter, deque
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -56,6 +60,7 @@ config.read(config_path)
 
 logger = get_structured_logger('tiptune.app')
 shutdown_event: asyncio.Event = asyncio.Event()
+_events_api_request_active: ContextVar[bool] = ContextVar('events_api_request_active', default=False)
 
 SPOTIFY_END_MARGIN_MS = 2500
 SPOTIFY_OBSERVATION_MAX_AGE_MS = 15000
@@ -205,6 +210,11 @@ def _normalize_music_source(raw: Any, default: str = 'spotify') -> str:
     return str(default or 'spotify')
 
 
+def _exclude_events_api_http_logs(record: logging.LogRecord) -> bool:
+    # HTTPX logs full URLs, and its transport can log raw headers at DEBUG.
+    return not (_events_api_request_active.get() and record.name.split('.', 1)[0] in ('httpx', 'httpcore'))
+
+
 def _setup_logging() -> None:
     root = logging.getLogger()
 
@@ -286,6 +296,7 @@ def _setup_logging() -> None:
         root.addHandler(sh)
     sh.setLevel(console_level)
     sh.setFormatter(formatter)
+    sh.addFilter(_exclude_events_api_http_logs)
 
     file_handlers: list[logging.FileHandler] = []
     for h in list(root.handlers):
@@ -334,6 +345,7 @@ def _setup_logging() -> None:
     if keep is not None:
         keep.setLevel(file_level)
         keep.setFormatter(formatter)
+        keep.addFilter(_exclude_events_api_http_logs)
 
 
 def _default_log_path() -> Path:
@@ -1331,9 +1343,30 @@ def handle_exception(_loop, context):
                      data={"error": str(context.get("message", ""))})
 
 
+EVENTS_API_DEFAULT_RPM = 600
+EVENTS_API_RATE_LIMIT_DELAYS = (3, 6, 10)
+
+
+def _events_api_retry_after_seconds(value: str) -> Optional[float]:
+    value = value.strip()
+    if value.isascii() and value.isdecimal():
+        seconds = float(value)
+        return seconds if math.isfinite(seconds) else None
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (ValueError, OverflowError):
+        return None
+
+
 class EventsAPIClient:
-    def __init__(self, start_url: str, max_requests_per_minute: int = 1000):
+    def __init__(self, start_url: str, max_requests_per_minute: int = EVENTS_API_DEFAULT_RPM):
         self._next_url = start_url
+        self.set_poll_rate(max_requests_per_minute)
+
+    def set_poll_rate(self, max_requests_per_minute: int) -> None:
         rpm = max(1, int(max_requests_per_minute))
         self._poll_interval_seconds = 60 / (rpm / 10)
 
@@ -1342,7 +1375,11 @@ class EventsAPIClient:
         return self._poll_interval_seconds
 
     async def poll(self, client: httpx.AsyncClient) -> list[dict]:
-        resp = await client.get(self._next_url, timeout=30)
+        token = _events_api_request_active.set(True)
+        try:
+            resp = await client.get(self._next_url, timeout=30)
+        finally:
+            _events_api_request_active.reset(token)
         resp.raise_for_status()
         payload = resp.json()
 
@@ -3282,15 +3319,18 @@ class SongRequestService:
         api: Optional[EventsAPIClient] = None
         api_url: Optional[str] = None
         api_rpm: Optional[int] = None
+        rate_limit_step = 0
+        recent_attempts: deque[float] = deque()
 
         async with httpx.AsyncClient() as client:
             while not self._stop_event.is_set():
                 try:
                     events_api_url = config.get("Events API", "url", fallback="").strip()
-                    max_rpm = config.getint("Events API", "max_requests_per_minute", fallback=1000)
+                    configured_rate = config.get("Events API", "max_requests_per_minute", fallback="").strip()
+                    max_rpm = int(configured_rate or EVENTS_API_DEFAULT_RPM)
                 except Exception:
                     events_api_url = ""
-                    max_rpm = 1000
+                    max_rpm = EVENTS_API_DEFAULT_RPM
 
                 if not events_api_url:
                     api = None
@@ -3302,23 +3342,52 @@ class SongRequestService:
                         pass
                     continue
 
-                if api is None or api_url != events_api_url or api_rpm != max_rpm:
+                if api is None or api_url != events_api_url:
                     api = EventsAPIClient(events_api_url, max_requests_per_minute=max_rpm)
                     api_url = events_api_url
-                    api_rpm = max_rpm
+                    rate_limit_step = 0
+                elif api_rpm != max_rpm:
+                    api.set_poll_rate(max_rpm)
+                api_rpm = max_rpm
 
+                wait_seconds = api.poll_interval_seconds
+                # Measure the rolling window at the start of the triggering request.
+                attempted_at = time.monotonic()
+                while recent_attempts and recent_attempts[0] <= attempted_at - 60:
+                    recent_attempts.popleft()
+                recent_attempts.append(attempted_at)
                 try:
-                    events = await api.poll(client)
-                    for event in events:
-                        self.publish_events_api_event(event)
-                        await self._handle_event(event)
+                    try:
+                        events = await api.poll(client)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code != 429:
+                            raise
+                        retry_headers = exc.response.headers.get_list("Retry-After")
+                        retry_after = (
+                            _events_api_retry_after_seconds(retry_headers[0]) if len(retry_headers) == 1 else None
+                        )
+                        wait_seconds = max(wait_seconds, EVENTS_API_RATE_LIMIT_DELAYS[rate_limit_step], retry_after or 0)
+                        rate_limit_step = min(rate_limit_step + 1, len(EVENTS_API_RATE_LIMIT_DELAYS) - 1)
+                        details: dict[str, int | float] = {
+                            "status_code": 429, "local_attempts_last_minute": len(recent_attempts),
+                        }
+                        if retry_after is not None:
+                            details["retry_after_seconds"] = retry_after
+                        # Log only safe fields and use the existing opt-in reporter once.
+                        logger.warning("events_api.poll.error", message="Events API rate limited polling", data=details)
+                        error_reporter.capture_exception("events_api.poll.error", exc, details=details)
+                    else:
+                        rate_limit_step = 0
+                        for event in events:
+                            self.publish_events_api_event(event)
+                            await self._handle_event(event)
                 except asyncio.CancelledError:
                     break
                 except Exception as exc:
                     logger.exception("events_api.poll.error", exc=exc, message="Failed to poll Events API")
 
                 try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=api.poll_interval_seconds)
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=wait_seconds)
                 except asyncio.TimeoutError:
                     pass
 
