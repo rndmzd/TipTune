@@ -1,6 +1,6 @@
 [package]
 name = "tiptune-tauri"
-version = "1.10.2"
+version = "1.10.3"
 description = "TipTune Desktop"
 authors = ["TipTune"]
 edition = "2021"
