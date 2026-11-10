@@ -1,7 +1,7 @@
 [Events API]
 # Events API configuration
 url = https://eventsapi.chaturbate.com/events/yourusername/your-token/
-max_requests_per_minute = 1000
+max_requests_per_minute = 600
 
 [OpenAI]
 # OpenAI API configuration for song extraction

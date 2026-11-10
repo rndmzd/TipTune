@@ -83,7 +83,7 @@ const DEFAULT_CFG: Record<string, Record<string, string>> = {
     source: 'spotify',
   },
   'Events API': {
-    max_requests_per_minute: '1000',
+    max_requests_per_minute: '600',
   },
   OpenAI: {
     model: 'gpt-6-luna',
@@ -712,7 +712,7 @@ export function SetupPage({ audioOutputError = '', audioOutputActive }: { audioO
             }
           />
           <div className="muted">
-            TipTune uses this to pace polling. If you’re not sure, leave the default (e.g. 1000).
+            The default of 600 gives a one-second pause between poll attempts.
           </div>
         </div>
       ) : null}
