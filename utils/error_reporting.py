@@ -291,6 +291,13 @@ def sanitize_report(event):
             failure['exit_code'] = details['exit_code']
         if type(details.get('elapsed_ms')) in (int, float) and 0 <= details['elapsed_ms'] <= 86_400_000:
             failure['elapsed_ms'] = details['elapsed_ms']
+        if event_type == 'events_api.poll.error' and failure.get('status_code') == 429:
+            local_attempts = details.get('local_attempts_last_minute')
+            if type(local_attempts) is int and local_attempts > 0:
+                failure['local_attempts_last_minute'] = local_attempts
+            retry_after = details.get('retry_after_seconds')
+            if type(retry_after) in (int, float) and 0 <= retry_after < math.inf:
+                failure['retry_after_seconds'] = retry_after
         if event_type == 'spotify.playback.unconfirmed':
             confirmation = sanitize_playback_confirmation(details.get('playback_confirmation'))
             if confirmation:
