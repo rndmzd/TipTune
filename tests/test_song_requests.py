@@ -324,27 +324,64 @@ class SongRequestTests(unittest.TestCase):
             return Mock(json=Mock(return_value={'items': [dict(title='Hello', link='https://example.com',
                                                               snippet='Adele song')]*5}))
         self.api.return_value = completed(SearchIdentification(song='Hello', artist='Adele'))
-        with patch('chatdj.song_requests.requests.get', side_effect=get):
-            result = self.extractor.resolve_spotify(SongRequest(song='Helo', artist=''))
+        observer = Mock()
+        with patch('chatdj.song_requests.requests.get', side_effect=get) as google:
+            result = self.extractor.resolve_spotify(SongRequest(song='Helo', artist=''), on_google_fallback=observer)
         self.assertEqual(result.spotify_uri, URI)
         self.assertEqual(calls, ['spotify', 'spotify', 'google', 'spotify', 'spotify', 'spotify'])
+        observer.assert_called_once_with('recovered', google.call_args.kwargs['params']['q'])
         payload = json.loads(self.api.call_args.kwargs['input'][1]['content'])
         self.assertEqual(len(payload['results']), 3)
 
     def test_google_skipped_on_match_or_missing_keys(self):
+        observer = Mock()
         with patch('chatdj.song_requests.requests.get') as google:
-            self.assertIsNone(self.extractor.resolve_spotify(SongRequest(song='Unknown', artist='')))
+            self.assertIsNone(self.extractor.resolve_spotify(
+                SongRequest(song='Unknown', artist=''), on_google_fallback=observer))
             self.extractor.google_api_key = 'key'
             self.extractor.google_cx = 'cx'
             self.catalog([track()])
-            self.extractor.resolve_spotify(SongRequest(song='Hello', artist='Adele'))
+            self.extractor.resolve_spotify(SongRequest(song='Hello', artist='Adele'), on_google_fallback=observer)
+            self.extractor.resolve_spotify(
+                SongRequest(song='Hello', artist='Adele', spotify_uri=URI), on_google_fallback=observer)
             google.assert_not_called()
+            observer.assert_not_called()
 
     def test_google_outage_is_nonfatal(self):
         self.extractor.google_api_key = 'key'
         self.extractor.google_cx = 'cx'
+        observer = Mock()
         with patch('chatdj.song_requests.requests.get', side_effect=TimeoutError()):
-            self.assertIsNone(self.extractor.resolve_spotify(SongRequest(song='Unknown', artist='')))
+            self.assertIsNone(self.extractor.resolve_spotify(
+                SongRequest(song='Unknown', artist='Adele'), on_google_fallback=observer))
+        observer.assert_called_once_with('failed', 'Unknown Adele song artist')
+
+    def test_google_success_without_a_spotify_result_does_not_count_as_recovered(self):
+        self.extractor.google_api_key = 'key'
+        self.extractor.google_cx = 'cx'
+        self.api.return_value = completed(SearchIdentification(song='Hello', artist='Adele'))
+        for items, outcome in (([], 'empty'), ([{'title': 'Hello'}], 'no_match')):
+            with self.subTest(outcome=outcome):
+                observer = Mock()
+                with patch('chatdj.song_requests.requests.get') as google:
+                    google.return_value.json.return_value = {'items': items}
+                    self.assertIsNone(self.extractor.resolve_spotify(
+                        SongRequest(song='Helo', artist='Adele'), on_google_fallback=observer))
+                    google.assert_called_once()
+                observer.assert_called_once_with(outcome, 'Helo Adele song artist')
+
+    def test_second_spotify_lookup_failure_is_counted_and_still_propagates(self):
+        self.extractor.google_api_key = 'key'
+        self.extractor.google_cx = 'cx'
+        self.api.return_value = completed(SearchIdentification(song='Hello', artist='Adele'))
+        observer = Mock()
+        with patch('chatdj.song_requests.requests.get') as google:
+            google.return_value.json.return_value = {'items': [{'title': 'Hello'}]}
+            with patch.object(self.extractor, '_select', side_effect=[None, SongResolutionError('unavailable')]):
+                with self.assertRaises(SongResolutionError):
+                    self.extractor.resolve_spotify(
+                        SongRequest(song='Helo', artist='Adele'), on_google_fallback=observer)
+        observer.assert_called_once_with('failed', 'Helo Adele song artist')
 
     def test_selector_receives_at_most_ten_real_candidates(self):
         self.catalog([track(name=f'Hello {i}', uri='spotify:track:' + f'{i:022}') for i in range(20)])

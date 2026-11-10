@@ -809,8 +809,10 @@ export function SettingsPage({ audioOutputError = '', audioOutputActive }: { aud
           <p id="error-reporting-help" className="muted">
             Off by default. Reports go through Sentry and include the app version, operating system,
             exception types, code locations, technical failure details, operation timings, support IDs,
-            dependency versions, and selected playback settings. Usernames, tip messages,
-            credentials, and raw error text are excluded. Turning this off and saving deletes unsent reports.
+            dependency versions, and selected playback settings. If TipTune tries Google Search after a Spotify miss,
+            reporting can also include the outcome and a redacted, shortened song and artist search phrase.
+            Usernames, original tip messages, credentials, and raw error text are excluded.
+            Turning this off and saving deletes unsent reports.
           </p>
           {reportingStatus?.configured === false && <p className="muted">Error reporting is unavailable in this build.</p>}
           {sendErrorReportsEnabled && isDirty && <p className="muted">Save your changes before sending a test report.</p>}

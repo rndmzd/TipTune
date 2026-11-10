@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
-from chatdj.song_requests import SongRequest, SongExtractionError, SongResolutionError
+import httpx
+
+from chatdj.song_requests import SearchIdentification, SongExtractor, SongRequest, SongExtractionError, SongResolutionError
 from utils.error_reporting import ErrorReporter
 
 
@@ -108,6 +110,62 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.history()[0]['support']['support_id'].startswith('TT-'))
         events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
         self.assertFalse(any(event.get('type') != 'transaction' for event in events))
+
+    async def test_google_outcome_uploads_the_actual_search_phrase_only_with_consent(self):
+        reporter = self.enable_reports()
+        config_text = ('[General]\nsend_error_reports={}\n[Search]\n'
+                       'google_api_key=private-google-key\ngoogle_cx=private-engine-id')
+        reporter.config_path.write_text(config_text.format('false'), encoding='utf-8')
+        reporter.configure()
+        spotify = Mock()
+        spotify.me.return_value = {'country': 'US'}
+        uri = 'spotify:track:' + 'Z' * 22
+        self.actions.extract_song_titles.side_effect = lambda *_args, **_kwargs: [
+            SongRequest(song='Helo', artist='Adele')
+        ]
+        with patch('chatdj.song_requests.OpenAI'):
+            self.actions.song_extractor = SongExtractor('private-model-key', spotify, 'private-google-key',
+                                                       'private-engine-id')
+        self.actions.chatdj_enabled = True
+        self.actions.find_song_spotify = self.Actions.find_song_spotify.__get__(self.actions)
+        self.actions.song_extractor.openai_client.responses.parse.return_value = SimpleNamespace(
+            status='completed', output=[], output_parsed=SearchIdentification(song='Hello', artist='Adele'))
+        track = {'name': 'Hello', 'artists': [{'name': 'Adele'}], 'uri': uri}
+        with patch('chatdj.song_requests.requests.get') as google:
+            google.return_value.json.return_value = {'items': [
+                {'title': 'private-result-title', 'link': 'https://private-result.example', 'snippet': 'private-snippet'}
+            ]}
+            spotify.search.side_effect = lambda **_kwargs: {'tracks': {'items': [track] if google.called else []}}
+            await self.handle('private-original-tip')
+            self.assertFalse(list(reporter.pending_dir.glob('*.json')))
+            self.assertEqual(self.history()[-1]['status'], 'added')
+            google.reset_mock()
+
+            reporter.config_path.write_text(config_text.format('true'), encoding='utf-8')
+            reporter.configure()
+            with reporter.operation(), reporter.trace('song.request') as parent:
+                await self.handle('private-original-tip')
+            google.assert_called_once()
+            query = google.call_args.kwargs['params']['q']
+
+        queued = [json.loads(p.read_text())['event'] for p in reporter.pending_dir.glob('*.json')]
+        self.assertTrue(all(event.get('type') == 'transaction' for event in queued))
+        stored, = (event for event in queued if event['transaction'].startswith('song.lookup.google.'))
+        self.assertEqual(stored['transaction'], 'song.lookup.google.recovered')
+        self.assertEqual(stored['contexts']['google_fallback'], {'search_phrase': query})
+        self.assertEqual(query, 'Helo Adele song artist')
+        self.assertNotEqual(stored['contexts']['trace']['trace_id'], parent.trace_id)
+        self.assertNotIn('parent_span_id', stored['contexts']['trace'])
+        self.assertNotIn('support_id', stored['tags'])
+        self.assertNotIn('diagnostics', stored['contexts'])
+        with patch('utils.error_reporting.httpx.post', return_value=httpx.Response(200)) as post:
+            reporter.process_pending()
+        uploaded = [json.loads(call.kwargs['content'].split(b'\n', 2)[2]) for call in post.call_args_list]
+        sent, = (event for event in uploaded if event['transaction'].startswith('song.lookup.google.'))
+        self.assertEqual(sent, stored)
+        for private in ('private-original-tip', 'private-result-title', 'private-result.example', 'private-snippet',
+                        'private-google-key', 'private-engine-id', 'private-model-key', uri):
+            self.assertNotIn(private, json.dumps(sent))
 
     async def test_spotify_restriction_is_not_reported_as_a_service_failure(self):
         reporter = self.enable_reports()
@@ -326,7 +384,8 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.actions.extract_song_titles.return_value = [SongRequest(song='One', artist=''),
                                                         SongRequest(song='Two', artist='')]
         await self.handle('One; Two')
-        self.actions.find_song_spotify.assert_awaited_once_with(self.actions.extract_song_titles.return_value[0])
+        self.actions.find_song_spotify.assert_awaited_once_with(
+            self.actions.extract_song_titles.return_value[0], on_google_fallback=ANY)
         self.service.add_track_to_queue.assert_awaited_once()
         self.assertEqual(len(self.history()), 1)
         self.assertEqual(self.history()[0]['song'], 'One')

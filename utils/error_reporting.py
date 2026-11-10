@@ -45,6 +45,15 @@ _ASSET_PATH = re.compile(r'^app:///assets/[A-Za-z0-9_.-]{1,128}\.js$')
 _DEBUG_ID = re.compile(r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$')
 _TRACE_ID = re.compile(r'^[a-f0-9]{32}$')
 _SPAN_ID = re.compile(r'^[a-f0-9]{16}$')
+_GOOGLE_FALLBACK_TRACES = {
+    outcome: f'song.lookup.google.{outcome}' for outcome in ('recovered', 'empty', 'no_match', 'failed')
+}
+_UNSAFE_GOOGLE_PHRASE = re.compile(
+    r'(?i)(?:\b[a-z][a-z0-9+.-]*://|(?<!\w)//[\w.-]+\.|\bwww\.|\b(?:[\w-]+\.)+[a-z]{2,}/'
+    r'|\b(?:spotify|mailto):|@[\w.-]+|(?<![\w-])AIza[a-z0-9_-]{35}(?![\w-])'
+    r'|\b(?:[a-z0-9]{22}|[a-f0-9]{17}|[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b'
+    r'|\b(?:authorization|cookie|set-cookie|x-api-key)\s*[:=])'
+)
 # Fixed names only: URLs, query strings, and request/provider data never name spans.
 TRACE_OPERATIONS = {
     **{f'POST /api/{path}': 'http.server' for path in (
@@ -59,6 +68,7 @@ TRACE_OPERATIONS = {
     'GET /api/music/search': 'http.server',
     'song.request': 'task', 'song.extract': 'function',
     'song.lookup.spotify': 'function', 'song.lookup.youtube': 'function',
+    **dict.fromkeys(_GOOGLE_FALLBACK_TRACES.values(), 'function'),
     'song.availability.spotify': 'function',
     'song.queue': 'queue.submit', 'song.playback': 'function',
 }
@@ -170,8 +180,22 @@ def _trace_timestamp(value):
     return value if type(value) in (int, float) and math.isfinite(value) and value > 0 else None
 
 
-def sanitize_transaction(event):
-    """Reconstruct sampled transactions; no SDK attributes or free text survive."""
+def _is_google_fallback(event):
+    return event.get('type') == 'transaction' and event.get('transaction') in _GOOGLE_FALLBACK_TRACES.values()
+
+
+def _google_search_phrase(context, secrets):
+    value = context.get('search_phrase') if isinstance(context, dict) else None
+    if not isinstance(value, str) or len(value) > 4096:
+        return None
+    value = ''.join(char if char.isprintable() else ' ' for char in value).strip()
+    if not value or _UNSAFE_GOOGLE_PHRASE.search(value):
+        return None
+    return sanitize_extraction_debug(value, secrets)[:200].rstrip() or None
+
+
+def sanitize_transaction(event, google_query_secrets=()):
+    """Reconstruct sampled transactions from allowlisted names and contexts."""
     name = event.get('transaction')
     if not isinstance(name, str) or name not in TRACE_OPERATIONS:
         return None
@@ -181,6 +205,9 @@ def sanitize_transaction(event):
     if not trace or start is None or end is None or not 0 <= end - start <= 86_400:
         return None
     trace['op'] = TRACE_OPERATIONS[name]
+    google_fallback = _is_google_fallback(event)
+    if google_fallback:
+        trace.pop('parent_span_id', None)
     result = {
         'type': 'transaction',
         'event_id': event.get('event_id') if _TRACE_ID.fullmatch(str(event.get('event_id', ''))) else uuid.uuid4().hex,
@@ -188,16 +215,22 @@ def sanitize_transaction(event):
         'platform': 'python', 'start_timestamp': start, 'timestamp': end,
         'contexts': {'trace': trace}, 'tags': {'component': 'python'}, 'spans': [],
     }
-    tags = event.get('tags')
-    if isinstance(tags, dict) and valid_support_id(tags.get('support_id')):
-        result['tags']['support_id'] = tags['support_id']
-    diagnostics = sanitize_environment(contexts.get('diagnostics'))
-    if diagnostics:
-        result['contexts']['diagnostics'] = diagnostics
-    spans = event.get('spans')
+    if google_fallback:
+        phrase = _google_search_phrase(contexts.get('google_fallback'), google_query_secrets)
+        if phrase:
+            result['contexts']['google_fallback'] = {'search_phrase': phrase}
+    else:
+        tags = event.get('tags')
+        if isinstance(tags, dict) and valid_support_id(tags.get('support_id')):
+            result['tags']['support_id'] = tags['support_id']
+        diagnostics = sanitize_environment(contexts.get('diagnostics'))
+        if diagnostics:
+            result['contexts']['diagnostics'] = diagnostics
+    spans = None if google_fallback else event.get('spans')
     for span in (spans if isinstance(spans, list) else [])[:50]:
         if (not isinstance(span, dict) or not isinstance(span.get('description'), str)
-                or span['description'] not in TRACE_OPERATIONS):
+                or span['description'] not in TRACE_OPERATIONS
+                or span['description'] in _GOOGLE_FALLBACK_TRACES.values()):
             continue
         context = _trace_context(span)
         span_start, span_end = _trace_timestamp(span.get('start_timestamp')), _trace_timestamp(span.get('timestamp'))
@@ -521,6 +554,23 @@ class ErrorReporter:
                 operation.report_state = 'limited'
             return report_id
 
+    def google_fallback_observer(self):
+        if not self.traces_sample_rate or not self.can_send():
+            return None
+        session_id = self._session_id
+
+        def observe(outcome, query):
+            name = _GOOGLE_FALLBACK_TRACES.get(outcome)
+            if name is None or session_id != self._session_id:
+                return
+            # An outcome has its own trace. It does not identify a song request
+            # or share its trace, support ID, or reporting-session context.
+            with self.trace(name) as span:
+                if span is not None and span.sampled:
+                    span.set_context('google_fallback', {'search_phrase': query})
+
+        return observe
+
     @contextmanager
     def trace(self, name):
         """Isolate concurrent operations and bind errors before background delivery."""
@@ -529,14 +579,16 @@ class ErrorReporter:
             return
         stack = ExitStack()
         try:
-            parent = self._current_trace()
+            google_fallback = name in _GOOGLE_FALLBACK_TRACES.values()
+            parent = None if google_fallback else self._current_trace()
             if parent is None:
                 with self._lock:
                     if self._trace_client is None:
                         self._trace_client = self._make_client(TraceQueueTransport({'dsn': self.dsn}, self))
                 scope = stack.enter_context(sentry_sdk.isolation_scope())
                 scope.set_client(self._trace_client)
-                span = sentry_sdk.start_transaction(name=name, op=TRACE_OPERATIONS[name])
+                trace_kwargs = {'trace_id': uuid.uuid4().hex} if google_fallback else {}
+                span = sentry_sdk.start_transaction(name=name, op=TRACE_OPERATIONS[name], **trace_kwargs)
             else:
                 span = parent.span.start_child(op=TRACE_OPERATIONS[name], name=name)
             stack.enter_context(span)
@@ -568,8 +620,9 @@ class ErrorReporter:
                 self._crumbs.append({'message': event_type})
 
     def _sanitize(self, event):
-        safe = sanitize_report(event)
-        if safe is None:
+        google_fallback = _is_google_fallback(event)
+        safe = None if google_fallback else sanitize_report(event)
+        if safe is None and not google_fallback:
             return None
         # Also remove configured credentials if a provider accidentally puts one
         # in an otherwise allowed field, such as a request ID or code filename.
@@ -581,6 +634,11 @@ class ErrorReporter:
                        or (section.lower() == 'events api' and key.lower() == 'url')]
         except (OSError, configparser.Error):
             return None
+        if google_fallback:
+            engine_id = cfg.get('Search', 'google_cx', fallback='').strip()
+            safe = sanitize_transaction(event, (*secrets, engine_id))
+            if safe is None:
+                return None
         for field in ('tags', 'fingerprint', 'exception', 'breadcrumbs', 'debug_meta'):
             if field in safe:
                 safe[field] = sanitize_extraction_debug(safe[field], secrets)
@@ -646,16 +704,18 @@ class ErrorReporter:
                 if not self.can_send():
                     return None
                 event = dict(event)
-                operation = self._current_operation()
+                google_fallback = _is_google_fallback(event)
+                operation = None if google_fallback else self._current_operation()
                 if operation is not None:
                     event['tags'] = {**(event.get('tags') or {}), 'support_id': operation.support_id}
-                cfg = configparser.ConfigParser(interpolation=None)
-                cfg.read(self.config_path, encoding='utf-8')
-                diagnostics = environment_for_report(cfg, self.release.removeprefix('tiptune@'), self._session_id)
-                failure = (event.get('contexts') or {}).get('failure', {})
-                if isinstance(failure, dict):
-                    diagnostics.update(sanitize_environment({'playback_backend': failure.get('playback_backend')}))
-                event['contexts'] = {**(event.get('contexts') or {}), 'diagnostics': diagnostics}
+                if not google_fallback:
+                    cfg = configparser.ConfigParser(interpolation=None)
+                    cfg.read(self.config_path, encoding='utf-8')
+                    diagnostics = environment_for_report(cfg, self.release.removeprefix('tiptune@'), self._session_id)
+                    failure = (event.get('contexts') or {}).get('failure', {})
+                    if isinstance(failure, dict):
+                        diagnostics.update(sanitize_environment({'playback_backend': failure.get('playback_backend')}))
+                    event['contexts'] = {**(event.get('contexts') or {}), 'diagnostics': diagnostics}
                 current = self._current_trace()
                 if current is not None and event.get('type') != 'transaction':
                     span = current.span
@@ -760,7 +820,8 @@ class ErrorReporter:
                     continue
                 if record.get('retry_at', 0) > now:
                     continue
-                event = sanitize_report(record['event'])
+                raw_event = record['event']
+                event = self._sanitize(raw_event) if _is_google_fallback(raw_event) else sanitize_report(raw_event)
                 if event is None:
                     path.unlink(missing_ok=True)
                     continue

@@ -1,5 +1,6 @@
 import asyncio
-from typing import List, Optional
+from functools import partial
+from typing import Callable, List, Optional
 
 from chatdj.chatdj import SongRequest, SongExtractionError
 from chatdj.song_requests import DEFAULT_MODEL, SongResolutionError, playable
@@ -112,18 +113,19 @@ class Actions:
 
         loop = asyncio.get_running_loop()
         # Run blocking extraction in executor to avoid blocking the event loop
-        from functools import partial
         extract = partial(self.song_extractor.extract_songs, message, diagnostics=diagnostics)
         return await loop.run_in_executor(None, extract)
 
-    async def find_song_spotify(self, song_info: SongRequest) -> Optional[str]:
+    async def find_song_spotify(self, song_info: SongRequest, *,
+                                on_google_fallback: Callable[[str, str], None] | None = None) -> Optional[str]:
         """Resolve a request and update its display fields from Spotify metadata."""
         if song_info.spotify_uri:
             return song_info.spotify_uri
         if not self.chatdj_enabled:
             return None
         loop = asyncio.get_running_loop()
-        resolved = await loop.run_in_executor(None, self.song_extractor.resolve_spotify, song_info)
+        resolve = partial(self.song_extractor.resolve_spotify, song_info, on_google_fallback=on_google_fallback)
+        resolved = await loop.run_in_executor(None, resolve)
         if resolved is None:
             return None
         song_info.song = resolved.song
