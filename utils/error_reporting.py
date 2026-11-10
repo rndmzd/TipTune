@@ -28,7 +28,7 @@ from utils.runtime_paths import get_resource_path
 from utils.song_extraction_debug import sanitize_extraction_debug
 from utils.support_diagnostics import (
     FAILURE_CODES, SUPPORT_OPERATION, SupportOperation, environment_for_report,
-    new_support_id, sanitize_environment, sanitize_playback_confirmation, valid_support_id,
+    new_support_id, sanitize_environment, sanitize_playback_confirmation, sanitize_playback_identity, valid_support_id,
 )
 
 
@@ -302,6 +302,15 @@ def sanitize_report(event):
             confirmation = sanitize_playback_confirmation(details.get('playback_confirmation'))
             if confirmation:
                 failure['playback_confirmation'] = confirmation
+                identity = sanitize_playback_identity(details.get('playback_identity'), confirmation.get('track_mismatch', 0))
+                if identity:
+                    failure['playback_identity'] = identity
+            device_was_active = details.get('playback_device_was_active')
+            if type(device_was_active) is bool:
+                failure['playback_device_was_active'] = device_was_active
+            progress = details.get('playback_progress')
+            if progress in ('advanced', 'reset', 'unchanged'):
+                failure['playback_progress'] = progress
     result['contexts'] = {'failure': failure, 'os': {'name': platform.system(), 'version': platform.release()},
                           'runtime': {'name': 'CPython', 'version': platform.python_version()} if component == 'python'
                           else {'name': 'Web UI' if component in ('webui', 'overlay') else 'Tauri'}}

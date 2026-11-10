@@ -14,7 +14,7 @@ from spotipy import SpotifyException
 
 from app import SongRequestService
 import app as application
-from chatdj.chatdj import AutoDJ
+from chatdj.chatdj import AutoDJ, SpotifyPlayback, SpotifyStartAttempt
 from helpers.actions import Actions
 from utils.error_reporting import ErrorReporter
 from utils.support_diagnostics import current_support_id
@@ -124,8 +124,10 @@ class StartTrackTests(unittest.TestCase):
         self.dj.spotify.track.side_effect = SpotifyException(429, -1, 'Rate limited')
         self.dj.spotify.current_playback.return_value = state
 
-        self.assertFalse(self.dj.start_track(URI))
+        attempt = SpotifyStartAttempt()
+        self.assertFalse(self.dj.start_track(URI, attempt=attempt))
         self.dj.spotify.track.assert_called_once_with(URI)
+        self.assertEqual(attempt.identity_checks, {'identity_unavailable': 11})
 
     def test_expired_web_player_id_is_replaced_before_starting(self):
         self.dj.playback_device_name = 'Web Player'
@@ -159,14 +161,16 @@ class StartTrackTests(unittest.TestCase):
     def test_device_disappearing_after_lookup_is_refreshed_once(self):
         self.dj.playback_device_name = 'Web Player'
         self.dj.spotify.devices.side_effect = [
-            {'devices': [{'id': 'desktop', 'name': 'Web Player'}]},
-            {'devices': [{'id': 'new-web', 'name': 'Web Player'}]},
+            {'devices': [{'id': 'desktop', 'name': 'Web Player', 'is_active': True}]},
+            {'devices': [{'id': 'new-web', 'name': 'Web Player', 'is_active': False}]},
         ]
         self.dj.spotify.start_playback.side_effect = [SpotifyException(404, -1, 'Device not found'), None]
         self.dj.spotify.current_playback.return_value = playback(device='new-web')
-        self.assertTrue(self.dj.start_track(URI))
+        attempt = SpotifyStartAttempt()
+        self.assertTrue(self.dj.start_track(URI, attempt=attempt))
         self.assertEqual([call.kwargs['device_id'] for call in self.dj.spotify.start_playback.call_args_list],
                          ['desktop', 'new-web'])
+        self.assertIs(attempt.device_was_active, False)
 
     def test_no_device_does_not_send_playback_to_an_unspecified_player(self):
         self.dj.spotify.devices.return_value = {'devices': []}
@@ -191,6 +195,27 @@ class StartTrackTests(unittest.TestCase):
         self.dj.spotify.queue.return_value = {'queue': []}
         self.assertTrue(self.dj.clear_playback_context(persist=False))
         self.dj.spotify.pause_playback.assert_called_once_with(device_id='desktop')
+
+
+class ConfirmationProgressTests(unittest.TestCase):
+    def test_uses_comparable_playing_snapshots_and_rejects_older_states(self):
+        def sample(at, position=5000, *, timestamp=100, **kwargs):
+            return replace(SpotifyPlayback.from_response(playback(
+                progress_ms=position, timestamp=timestamp, **kwargs)), observed_at=at)
+
+        for label, before, polls, expected in (
+            ('unchanged', None, [sample(0), sample(0.5), sample(1)], 'unchanged'),
+            ('advance after flat polls', None, [sample(0), sample(1), sample(2, 5500)], 'advanced'),
+            ('repeat reset', sample(0, playing=False), [sample(1, 500, timestamp=200)], 'reset'),
+            ('drop without fresh state', None, [sample(0), sample(1, 500)], None),
+            ('old state', None, [sample(0), sample(0.25, 500, timestamp=99), sample(0.5)], None),
+            ('wrong device or track', None, [sample(0), sample(1, device='other'), sample(2, uri=OTHER_URI)], None),
+            ('paused or missing progress', None, [sample(0), sample(1, playing=False), sample(2, None)], None),
+            ('too brief', None, [sample(0), sample(0.5)], None),
+        ):
+            with self.subTest(label=label):
+                attempt = SpotifyStartAttempt(device_id='desktop', before=before)
+                self.assertEqual(attempt.summarize_progress(polls), expected)
 
 
 class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
@@ -236,9 +261,14 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
 
         other_device = playback(device='private-device-id')
         other_device['device']['name'] = 'private-device-name'
-        other_track = playback('spotify:track:private-track-id')
-        other_track['item']['name'] = 'private-song-name'
-        states = iter([None, {}, playback(None, False), playback(playing=False), other_device] + [other_track] * 6)
+        private_uri = 'spotify:track:private-track-id'
+        other_track = dict(recording(private_uri, artist='private-artist-id'), name='private-song-name')
+        different_recording = [dict(playback(private_uri, progress_ms=progress), item=other_track)
+                               for progress in (1200, 1800, 2200, 2700)]
+        states = iter([None, {}, playback(None, False), playback(playing=False), other_device,
+                       playback(None), dict(playback(), item={}), *different_recording])
+        self.dj.spotify.track.return_value = recording()
+        self.dj.spotify.devices.return_value['devices'][0]['is_active'] = False
 
         def unconfirmed():
             self.assertEqual(current_support_id(), support_id)
@@ -249,6 +279,8 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await self.service._queue_start_next_if_needed())
         self.dj.spotify.start_playback.assert_called_once_with(device_id='desktop', uris=[URI])
         self.assertEqual(self.dj.spotify.current_playback.call_count, 11)
+        self.dj.spotify.devices.assert_called_once()
+        self.dj.spotify.track.assert_called_once_with(URI)
         self.assertTrue(self.service._queue_paused)
         self.assertIsNone(self.service._queue_now_playing)
         self.assertEqual(self.service._queue_items, [request])
@@ -264,6 +296,11 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error['contexts']['failure']['playback_confirmation'], {
             'no_playback_state': 2, 'not_playing': 2, 'device_mismatch': 1, 'track_mismatch': 6,
         })
+        self.assertEqual(error['contexts']['failure']['playback_identity'], {
+            'missing_item': 1, 'identity_unavailable': 1, 'different_recording': 4,
+        })
+        self.assertIs(error['contexts']['failure']['playback_device_was_active'], False)
+        self.assertEqual(error['contexts']['failure']['playback_progress'], 'advanced')
 
         with patch('utils.error_reporting.httpx.post', return_value=httpx.Response(200)) as post:
             reporter.process_pending()
@@ -273,7 +310,7 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uploaded['contexts']['failure'], error['contexts']['failure'])
         serialized = json.dumps([error, uploaded])
         for private_value in (URI.removeprefix('spotify:track:'), 'private-track-id', 'private-song-name',
-                              'private-device-id', 'private-device-name'):
+                              'private-device-id', 'private-device-name', 'private-artist-id'):
             self.assertNotIn(private_value, serialized)
 
         self.dj.spotify.current_playback.side_effect = [playback(None, False), playback(progress_ms=100)]
