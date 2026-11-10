@@ -372,6 +372,50 @@ class ErrorReportingTests(unittest.TestCase):
         error = sanitize_report({'contexts': {'trace': {'trace_id': 'private', 'span_id': 'private'}}})
         self.assertNotIn('trace', error['contexts'])
 
+    def test_google_query_is_redacted_before_bounding_and_unsafe_phrases_keep_the_outcome(self):
+        self.config_path.write_text('[General]\nsend_error_reports=true\n[Search]\n'
+                                    'google_api_key=key-for-test\ngoogle_cx=engine-for-test', encoding='utf-8')
+        reporter = self.reporter(traces_sample_rate=1.0)
+        observe = reporter.google_fallback_observer()
+        with reporter.operation(), reporter.trace('song.request'):
+            observe('no_match', 'a' * 192 + ' key-for-test engine-for-test song artist')
+            observe('empty', 'Song https://private.example/lookup song artist')
+            observe('failed', 'Song spotify:track:' + 'a' * 22 + ' song artist')
+            observe('private-outcome', 'Do not send')
+            with reporter.trace('song.lookup.google.recovered') as span:
+                span.set_context('google_fallback', {'search_phrase': 'Hello Adele song artist',
+                                                      'provider_request_id': 'private-request-id'})
+                span.set_tag('query', 'private-tag')
+        reporter.process_pending()
+        records = [json.loads(call.kwargs['content'].split(b'\n', 2)[2]) for call in self.post.call_args_list]
+        google = {event['transaction'].split('.')[-1]: event for event in records
+                  if event.get('transaction', '').startswith('song.lookup.google.')}
+        self.assertEqual(set(google), {'no_match', 'empty', 'failed', 'recovered'})
+        self.assertEqual(google['no_match']['contexts']['google_fallback']['search_phrase'],
+                         'a' * 192 + ' [REDACT')
+        self.assertEqual(google['recovered']['contexts']['google_fallback'],
+                         {'search_phrase': 'Hello Adele song artist'})
+        self.assertNotIn('query', google['recovered']['tags'])
+        for outcome in ('empty', 'failed'):
+            self.assertNotIn('google_fallback', google[outcome]['contexts'])
+        for event in google.values():
+            self.assertNotIn('support_id', event['tags'])
+            self.assertNotIn('diagnostics', event['contexts'])
+            self.assertNotIn('parent_span_id', event['contexts']['trace'])
+        self.assertNotIn('engine-for-test', json.dumps(google))
+
+    def test_google_observer_is_invalidated_when_consent_is_revoked(self):
+        self.consent(True)
+        reporter = self.reporter(traces_sample_rate=1.0)
+        observe = reporter.google_fallback_observer()
+        self.consent(False)
+        reporter.configure()
+        self.assertIsNone(reporter.google_fallback_observer())
+        self.consent(True)
+        reporter.configure()
+        observe('recovered', 'Old search song artist')
+        self.assertEqual(reporter.status()['pending'], 0)
+
     def test_trace_sampling_can_be_disabled_without_disabling_error_reporting(self):
         self.consent(True)
         reporter = self.reporter(traces_sample_rate=0.0)

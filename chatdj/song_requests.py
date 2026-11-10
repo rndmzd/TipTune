@@ -3,7 +3,7 @@
 import json
 import re
 import unicodedata
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 from openai import OpenAI
@@ -329,42 +329,69 @@ class SongExtractor:
         except Exception as exc:
             raise SongResolutionError('Catalog selection failed') from exc
 
-    def _google_hint(self, song: SongRequest) -> SearchIdentification | None:
-        if not self.google_api_key or not self.google_cx:
+    def _google_hint(self, song: SongRequest, query: str) -> SearchIdentification | None:
+        response = requests.get('https://www.googleapis.com/customsearch/v1',
+            params={'key': self.google_api_key, 'cx': self.google_cx, 'q': query, 'num': 3}, timeout=5)
+        response.raise_for_status()
+        results = [{k: item.get(k, '') for k in ('title', 'link', 'snippet')}
+                   for item in response.json().get('items', [])[:3]]
+        if not results:
             return None
-        try:
-            response = requests.get('https://www.googleapis.com/customsearch/v1',
-                params={'key': self.google_api_key, 'cx': self.google_cx,
-                        'q': f'{song.song} {song.artist} song artist', 'num': 3}, timeout=5)
-            response.raise_for_status()
-            results = [{k: item.get(k, '') for k in ('title', 'link', 'snippet')}
-                       for item in response.json().get('items', [])[:3]]
-            if not results:
-                return None
-            return self._parse(SearchIdentification,
-                'Identify the requested song and artist using the provided search evidence. '
-                'Preserve explicit artist and version constraints. Return null for unsupported fields. '
-                'Do not infer a song from unrelated snippets.',
-                {'song': song.song, 'artist': song.artist, 'original_message': song._request_text,
-                 'results': results})
-        except Exception as exc:
-            logger.warning('song.lookup.google_failed', data={'error_type': type(exc).__name__})
-            return None
+        return self._parse(SearchIdentification,
+            'Identify the requested song and artist using the provided search evidence. '
+            'Preserve explicit artist and version constraints. Return null for unsupported fields. '
+            'Do not infer a song from unrelated snippets.',
+            {'song': song.song, 'artist': song.artist, 'original_message': song._request_text,
+             'results': results})
 
-    def resolve_spotify(self, song: SongRequest) -> SongRequest | None:
+    def _resolve_google_fallback(self, song: SongRequest, market: str,
+                                 observe: Callable[[str, str], None] | None) -> SongRequest | None:
+        query = f'{song.song} {song.artist} song artist'
+        outcome = 'failed'
+        try:
+            try:
+                hint = self._google_hint(song, query)
+            except Exception as exc:
+                logger.warning('song.lookup.google_failed', data={'error_type': type(exc).__name__})
+                return None
+            if hint is None:
+                outcome = 'empty'
+                return None
+            if not hint.song or not hint.song.strip():
+                outcome = 'no_match'
+                return None
+            # Never replace an explicitly supplied artist with a search-engine guess.
+            search = SongRequest(song=hint.song.strip(), artist=song.artist or (hint.artist or '').strip())
+            if versions(song.song) - versions(search.song) or len(normalize(song.song)) <= 2:
+                search.song = song.song
+            search._request_text = song._request_text
+            track = self._select(search, market)
+            if not track:
+                outcome = 'no_match'
+                return None
+            resolved = track_request(track, song._request_text)
+            outcome = 'recovered' if resolved.spotify_uri else 'no_match'
+            return resolved
+        finally:
+            if observe is not None:
+                try:
+                    # Redact against the credentials used for this call even if
+                    # settings changed while the lookup was running.
+                    observe(outcome, sanitize_extraction_debug(query, (self.google_api_key, self.google_cx)))
+                except Exception:
+                    # Reporting must not affect the catalog result.
+                    pass
+
+    def resolve_spotify(self, song: SongRequest, *,
+                        on_google_fallback: Callable[[str, str], None] | None = None) -> SongRequest | None:
         if song.spotify_uri:
             return song
         if self.spotify_client is None:
             raise SongResolutionError('Spotify is not configured')
         market = account_market(self.spotify_client)
         track = self._select(song, market)
-        if track is None:
-            hint = self._google_hint(song)
-            if hint and hint.song and hint.song.strip():
-                # Never replace an explicitly supplied artist with a search-engine guess.
-                search = SongRequest(song=hint.song.strip(), artist=song.artist or (hint.artist or '').strip())
-                if versions(song.song) - versions(search.song) or len(normalize(song.song)) <= 2:
-                    search.song = song.song
-                search._request_text = song._request_text
-                track = self._select(search, market)
-        return track_request(track, song._request_text) if track else None
+        if track is not None:
+            return track_request(track, song._request_text) if track else None
+        if self.google_api_key and self.google_cx:
+            return self._resolve_google_fallback(song, market, on_google_fallback)
+        return None

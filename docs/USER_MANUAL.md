@@ -439,7 +439,7 @@ Logging notes:
 
 `General.show_debug_data` toggles the display of debug information in the UI.
 
-**Automatically send error reports to the TipTune developer** is a separate opt-in setting. Save after enabling it to send technical exception types, code locations, app/OS versions, failure stages, and provider status/request IDs through Sentry. Usernames, tip messages, credentials, raw error text, and complete logs/History records are excluded. Reports retry in the background and expire after seven days; turning reporting off and saving deletes unsent reports. **Send test report** queues a synthetic report and shows its ID. Desktop launcher failures and unexpected service exits send on the next successful launch while reporting remains enabled.
+**Automatically send error reports to the TipTune developer** is a separate opt-in setting. Save after enabling it to send technical exception types, code locations, app/OS versions, failure stages, and provider status/request IDs through Sentry. If TipTune tries Google Search after a Spotify miss, reporting can also include the outcome and a redacted, shortened song and artist search phrase. Usernames, original tip messages, credentials, raw error text, and complete logs/History records are excluded. Reports retry in the background and expire after seven days; turning reporting off and saving deletes unsent reports. **Send test report** queues a synthetic report and shows its ID. Desktop launcher failures and unexpected service exits send on the next successful launch while reporting remains enabled.
 
 ---
 

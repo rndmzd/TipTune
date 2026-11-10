@@ -3574,7 +3574,8 @@ class SongRequestService:
                 else:
                     try:
                         with error_reporter.trace('song.lookup.spotify'):
-                            song_uri = await self.actions.find_song_spotify(song_info)
+                            song_uri = await self.actions.find_song_spotify(
+                                song_info, on_google_fallback=error_reporter.google_fallback_observer())
                     except Exception as exc:
                         logger.warning("song.lookup.failed", data={"error_type": type(exc).__name__})
                         error_reporter.capture_failure('song.lookup.failed', exc, source='spotify', stage='track_lookup')

@@ -131,7 +131,7 @@ Failed song extractions save diagnostics with the History record: the failure st
 
 **Settings → Logging → Automatically send error reports to the TipTune developer** is off by default and separate from displaying debug details in History. After opting in and saving, technical error reports go to the developer's private Sentry project. Reports include the app version, OS, exception types, code locations, failure stage, and provider status/request IDs when available. Usernames, tip messages, credentials, raw exception messages, provider response bodies, source text, and frame locals are excluded. Entire logs and History records are never uploaded.
 
-Reports send in the background. Unsent reports expire after seven days; disabling reporting and saving deletes them. **Send test report** queues a synthetic report and displays its ID. Unexpected desktop-service exits and launcher failures are reported on the next successful launch if reporting remains enabled. See [Error reporting](docs/ERROR_REPORTING.md) for receiver configuration and validation.
+If TipTune uses Google Search after a Spotify miss, reporting can include the outcome and a redacted, shortened song and artist search phrase. Reports send in the background. Unsent reports expire after seven days; disabling reporting and saving deletes them. **Send test report** queues a synthetic report and displays its ID. Unexpected desktop-service exits and launcher failures are reported on the next successful launch if reporting remains enabled. See [Error reporting](docs/ERROR_REPORTING.md) for receiver configuration and validation.
 
 ### Song request tips
 
