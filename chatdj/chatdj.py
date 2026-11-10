@@ -2,6 +2,7 @@ import json
 import time
 import threading
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +16,97 @@ from .song_requests import (SongRequest, SongExtractor, SongExtractionError, Son
                             account_market, collect_candidates, exact_candidate)
 
 logger = get_structured_logger('tiptune.chatdj.chatdj')
+
+
+@dataclass(frozen=True)
+class SpotifyPlayback:
+    item: dict
+    device_id: str | None
+    playing: bool | None
+    progress_ms: int | None
+    changed_ms: int | None
+    observed_at: float
+
+    @classmethod
+    def from_response(cls, response):
+        playback = response or {}
+        item = playback.get('item')
+        device = playback.get('device') or {}
+        progress = playback.get('progress_ms')
+        changed = playback.get('timestamp')
+        playing = playback.get('is_playing', False if not playback else None)
+        return cls(item if isinstance(item, dict) else {}, device.get('id'),
+                   playing if type(playing) is bool else None,
+                   progress if type(progress) is int and progress >= 0 else None,
+                   changed if type(changed) is int and changed > 0 else None, time.monotonic())
+
+    @property
+    def uri(self):
+        uri = self.item.get('uri')
+        return uri if isinstance(uri, str) and uri else None
+
+    @property
+    def linked_uri(self):
+        linked = self.item.get('linked_from')
+        return linked.get('uri') if isinstance(linked, dict) else None
+
+    @property
+    def remaining_ms(self):
+        duration = self.item.get('duration_ms')
+        if type(duration) is int and duration > 0 and self.progress_ms is not None:
+            return max(0, duration - self.progress_ms)
+        return None
+
+    def matches(self, uri):
+        return bool(uri) and uri in (self.uri, self.linked_uri)
+
+    def older_than(self, previous):
+        return (previous is not None and self.changed_ms is not None and previous.changed_ms is not None
+                and self.changed_ms < previous.changed_ms)
+
+
+@dataclass
+class SpotifyStartAttempt:
+    restart: bool = False
+    device_id: str | None = None
+    sent_ms: int | None = None
+    before: SpotifyPlayback | None = None
+    confirmed: SpotifyPlayback | None = None
+    recording: dict | None = None
+
+    def confirms_new_play(self, playback: SpotifyPlayback, *, late=False) -> bool:
+        if self.sent_ms is None or playback.progress_ms is None:
+            return False
+        # A new play from zero cannot have progressed farther than the time
+        # since the command, allowing for clock and observation imprecision.
+        start_delay_ms = int(time.time() * 1000) - playback.progress_ms - self.sent_ms
+        if start_delay_ms < -2000:
+            return False
+        if late and (start_delay_ms > 30000 or playback.changed_ms is None
+                     or not self.sent_ms <= playback.changed_ms <= self.sent_ms + 30000):
+            return False
+        if not self.restart:
+            return True
+        before = self.before
+        if (before is None or playback.older_than(before)
+                or (playback.changed_ms is not None and playback.changed_ms < self.sent_ms)):
+            return False
+        if before.device_id != self.device_id or not (
+            before.matches(playback.uri) or before.matches(playback.linked_uri)
+            or _same_recording(before.item, playback.item)
+        ):
+            return True
+        if playback.changed_ms is not None and playback.changed_ms == before.changed_ms:
+            return False
+        if (before.playing is False and before.progress_ms is not None and before.progress_ms <= 2000
+                and playback.changed_ms is not None and playback.changed_ms >= self.sent_ms):
+            # Spotify can leave the finished item selected at zero. A fresh
+            # stopped-to-playing transition can establish the next play.
+            return True
+        # During Resume, the new play may already have passed the old position.
+        # The changed timestamp and estimated start time above date that reset.
+        progress = 0 if late else playback.progress_ms
+        return before.progress_ms is not None and before.progress_ms - progress >= 2000
 
 
 def _same_recording(requested: Any, playing: Dict[str, Any]) -> bool:
@@ -61,6 +153,7 @@ class AutoDJ:
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
         self._last_start_playback_ts = 0.0
+        self._last_queued_track_uri: str | None = None
 
         self._queue_unpaused = threading.Event()
         self._queue_unpaused.set()
@@ -594,18 +687,77 @@ class AutoDJ:
             return False
 
 
-    def start_track(self, track_uri: str, *, confirmation_counts: Counter[str] | None = None) -> bool:
+    def read_playback(self) -> SpotifyPlayback | None:
+        try:
+            return SpotifyPlayback.from_response(self.spotify.current_playback())
+        except Exception:
+            # A failed read supplies no evidence, unlike Spotify's idle response.
+            return None
+
+    def start_track(self, track_uri: str, *, confirmation_counts: Counter[str] | None = None,
+                    attempt: SpotifyStartAttempt | None = None) -> bool:
         """Start a request and confirm playback, optionally counting failed checks."""
         if confirmation_counts is None:
             confirmation_counts = Counter()
         with self._device_lock:
-            return self._start_track(track_uri, confirmation_counts)
+            return self._start_track(track_uri, confirmation_counts, attempt)
 
-    def _start_track(self, track_uri: str, confirmation_counts: Counter[str]) -> bool:
+    def _send_track_start(self, track_uri: str, attempt: SpotifyStartAttempt) -> None:
+        attempt.device_id = self.playback_device
+        attempt.before = self.read_playback() if attempt.restart else None
+        sent_ms = int(time.time() * 1000)
+        if attempt.restart:
+            self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri], position_ms=0)
+        else:
+            self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+        attempt.sent_ms = sent_ms
+
+    def _matches_requested_track(self, track_uri: str, playback: SpotifyPlayback, attempt: SpotifyStartAttempt) -> bool:
+        if playback.matches(track_uri):
+            return True
+        external_ids = playback.item.get('external_ids')
+        if not isinstance(external_ids, dict) or not external_ids.get('isrc'):
+            return False
+        # Spotify can play another release without returning linked_from.
+        if attempt.recording is None:
+            try:
+                metadata = self.spotify.track(track_uri)
+                attempt.recording = metadata if isinstance(metadata, dict) else {}
+            except Exception as exc:
+                attempt.recording = {}
+                logger.debug('spotify.playback.recording_lookup.error',
+                             message='Could not verify the alternate Spotify recording',
+                             data={'error_type': type(exc).__name__})
+        return _same_recording(attempt.recording, playback.item)
+
+    def record_track_start(self, track_uri: str, playback: SpotifyPlayback) -> None:
+        self.now_playing_track_uri = playback.uri or track_uri
+        self._last_start_playback_ts = time.time()
+
+    def confirm_late_start(self, track_uri: str, attempt: SpotifyStartAttempt) -> SpotifyPlayback | None:
+        with self._device_lock:
+            if attempt.sent_ms is None or attempt.device_id != self.playback_device:
+                return None
+            playback = self.read_playback()
+            if (playback and playback.playing and playback.device_id == attempt.device_id
+                    and attempt.confirms_new_play(playback, late=True)
+                    and self._matches_requested_track(track_uri, playback, attempt)):
+                return playback
+            return None
+
+    def _start_track(self, track_uri: str, confirmation_counts: Counter[str],
+                     attempt: SpotifyStartAttempt | None) -> bool:
         if not self._refresh_playback_device():
             raise ValueError("No available Spotify playback device. Open Spotify and resume the queue.")
+        queued = attempt is not None
+        if queued:
+            attempt.restart = attempt.restart or track_uri in (
+                getattr(self, '_last_queued_track_uri', None), self.now_playing_track_uri,
+            )
+        else:
+            attempt = SpotifyStartAttempt()
         try:
-            self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+            self._send_track_start(track_uri, attempt)
         except SpotifyException as exc:
             if exc.http_status != 404:
                 raise
@@ -613,42 +765,30 @@ class AutoDJ:
             old_id = self.playback_device
             if not self._refresh_playback_device() or self.playback_device == old_id:
                 raise
-            self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
-        requested_recording = None
-        for attempt in range(SPOTIFY_CONFIRMATION_CHECKS):
-            if attempt:
+            self._send_track_start(track_uri, attempt)
+        if queued:
+            self._last_queued_track_uri = track_uri
+        for check in range(SPOTIFY_CONFIRMATION_CHECKS):
+            if check:
                 time.sleep(0.5)
-            playback = self.spotify.current_playback() or {}
-            item = playback.get('item') or {}
-            device = playback.get('device') or {}
-            # Spotify may relink a track to an equivalent available recording.
-            original_uri = (item.get('linked_from') or {}).get('uri')
-            if not playback.get('is_playing'):
-                reason = 'not_playing' if playback else 'no_playback_state'
+            response = self.spotify.current_playback()
+            playback = SpotifyPlayback.from_response(response)
+            if not playback.playing:
+                reason = 'not_playing' if response else 'no_playback_state'
                 confirmation_counts[reason] += 1
                 continue
-            if self.playback_device and device.get('id') != self.playback_device:
+            if playback.device_id != attempt.device_id:
                 confirmation_counts['device_mismatch'] += 1
                 continue
-            matches = track_uri in (item.get('uri'), original_uri)
-            if not matches and isinstance(item.get('external_ids'), dict) and item['external_ids'].get('isrc'):
-                # Spotify can play another release of the same recording without
-                # returning linked_from. Resolve its identity once per attempt.
-                if requested_recording is None:
-                    try:
-                        metadata = self.spotify.track(track_uri)
-                        requested_recording = metadata if isinstance(metadata, dict) else {}
-                    except Exception as exc:
-                        requested_recording = {}
-                        logger.debug('spotify.playback.recording_lookup.error',
-                                     message='Could not verify the alternate Spotify recording',
-                                     data={'error_type': type(exc).__name__})
-                matches = _same_recording(requested_recording, item)
-            if matches:
-                self.now_playing_track_uri = item.get('uri') or track_uri
-                self._last_start_playback_ts = time.time()
-                return True
-            confirmation_counts['track_mismatch'] += 1
+            if not self._matches_requested_track(track_uri, playback, attempt):
+                confirmation_counts['track_mismatch'] += 1
+                continue
+            if attempt.restart and not attempt.confirms_new_play(playback):
+                confirmation_counts['restart_unconfirmed'] += 1
+                continue
+            attempt.confirmed = playback
+            self.record_track_start(track_uri, playback)
+            return True
         logger.warning(
             "spotify.playback.unconfirmed",
             message="Spotify accepted the request but did not start the track on the selected device; keeping the request queued.",

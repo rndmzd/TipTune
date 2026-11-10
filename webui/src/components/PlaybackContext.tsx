@@ -193,6 +193,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
   const nowSource = inferredYoutube ? 'youtube' : String(nowPlaying?.source || source);
   const isYouTube = nowSource === 'youtube';
   const isSpotify = nowSource === 'spotify';
+  const youtubeQueueEntryId = isYouTube ? nowPlaying?.queue_entry_id : undefined;
   const youtubeStreamUrl =
     isYouTube && typeof nowPlaying?.uri === 'string' && nowPlaying.uri.trim() !== ''
       ? sseUrl(`/api/youtube/stream?url=${encodeURIComponent(nowPlaying.uri)}`)
@@ -232,7 +233,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     setYoutubeDebugInfo(null);
     setYoutubeTimeMs(null);
     setYoutubeDurationMs(null);
-  }, [isYouTube, nowPlaying?.uri]);
+  }, [isYouTube, nowPlaying?.uri, youtubeQueueEntryId]);
 
   function updateYoutubeDebug(event: string) {
     const a = youtubeAudioRef.current;
@@ -373,12 +374,13 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     setDockEl(el);
   }, []);
 
-  async function nextTrack() {
+  async function completeYoutubeTrack() {
+    if (!youtubePlaybackStartedRef.current || !youtubeQueueEntryId) return;
     try {
-      await apiJson('/api/queue/next', {
+      await apiJson('/api/queue/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify({ queue_entry_id: youtubeQueueEntryId }),
       });
     } catch {
     }
@@ -423,7 +425,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
     return () => {
       window.clearTimeout(t);
     };
-  }, [isYouTube, playbackPaused, youtubeStreamUrl, nowPlaying?.uri]);
+  }, [isYouTube, playbackPaused, youtubeStreamUrl, youtubeQueueEntryId]);
 
   const ctxValue = useMemo<PlaybackContextValue>(
     () => ({
@@ -472,6 +474,7 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
       {portalTarget
         ? createPortal(
             <audio
+              key={youtubeQueueEntryId}
               ref={youtubeAudioRef}
               autoPlay
               preload="auto"
@@ -504,13 +507,11 @@ export function PlaybackProvider(props: { children: React.ReactNode }) {
               onTimeUpdate={() => updateYoutubeDebug('timeupdate')}
               onEnded={() => {
                 updateYoutubeDebug('ended');
-                if (!youtubePlaybackStartedRef.current) return;
-                nextTrack().catch(() => {});
+                completeYoutubeTrack().catch(() => {});
               }}
               onError={() => {
                 updateYoutubeDebug('error');
-                if (!youtubePlaybackStartedRef.current) return;
-                nextTrack().catch(() => {});
+                completeYoutubeTrack().catch(() => {});
               }}
             />,
             portalTarget,
