@@ -150,6 +150,17 @@ class SupportDiagnosticsTests(unittest.TestCase):
                                          'contexts': {'failure': {'playback_confirmation': counts}}})
                 self.assertEqual(event['contexts']['failure'].get('playback_confirmation'), expected)
 
+    def test_playback_evidence_is_bounded_and_accepts_only_known_fields(self):
+        event = sanitize_report({'tags': {'event_type': 'spotify.playback.unconfirmed'},
+                                 'contexts': {'failure': {
+                                     'playback_confirmation': {'track_mismatch': 3},
+                                     'playback_identity': {'missing_item': 2, 'different_recording': 2,
+                                                           'identity_unavailable': True, 'device_id': 1},
+                                     'playback_device_was_active': 'private-device',
+                                     'playback_progress': 'spotify:track:private-track',
+                                 }}})
+        self.assertEqual(event['contexts']['failure'], {'playback_confirmation': {'track_mismatch': 3}})
+
     def test_missing_configuration_flags_are_omitted_instead_of_guessing_runtime_defaults(self):
         config = configparser.ConfigParser()
         config.read_dict({'OBS': {'password': 'private-secret'}})

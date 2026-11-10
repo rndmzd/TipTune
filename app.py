@@ -1791,7 +1791,12 @@ class SongRequestService:
                            else 'spotify_external' if isinstance(device_name, str) and device_name.strip() else 'unknown')
                 details = None
                 if error_code == 'spotify.playback.unconfirmed':
-                    details = {'playback_confirmation': confirmation_counts}
+                    details = {
+                        'playback_confirmation': confirmation_counts,
+                        'playback_identity': attempt.identity_checks,
+                        'playback_device_was_active': attempt.device_was_active,
+                        'playback_progress': attempt.progress,
+                    }
                 error_reporter.capture_failure(error_code or 'spotify.playback.failed', failure_exception,
                                                source='spotify', stage='playback_confirmation', playback_backend=backend,
                                                details=details)

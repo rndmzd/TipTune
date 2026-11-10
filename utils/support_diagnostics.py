@@ -49,16 +49,29 @@ def current_support_id():
     return current.support_id if current is not None and current.active else None
 
 
-def sanitize_playback_confirmation(value):
-    """Keep only counts for the first failed condition on each Spotify poll."""
+def _bounded_counts(value, reasons, max_total):
     if not isinstance(value, dict):
         return {}
     counts = {}
-    for reason in ('no_playback_state', 'not_playing', 'device_mismatch', 'track_mismatch', 'restart_unconfirmed'):
+    for reason in reasons:
         count = value.get(reason)
-        if type(count) is int and 0 < count <= SPOTIFY_CONFIRMATION_CHECKS:
+        if type(count) is int and 0 < count <= max_total:
             counts[reason] = count
-    return counts if sum(counts.values()) <= SPOTIFY_CONFIRMATION_CHECKS else {}
+    return counts if sum(counts.values()) <= max_total else {}
+
+
+def sanitize_playback_confirmation(value):
+    """Keep only counts for the first failed condition on each Spotify poll."""
+    return _bounded_counts(value, (
+        'no_playback_state', 'not_playing', 'device_mismatch', 'track_mismatch', 'restart_unconfirmed',
+    ), SPOTIFY_CONFIRMATION_CHECKS)
+
+
+def sanitize_playback_identity(value, track_mismatches):
+    """Break down track_mismatch without altering its meaning in older reports."""
+    return _bounded_counts(value, (
+        'missing_item', 'identity_unavailable', 'different_recording',
+    ), track_mismatches)
 
 
 @lru_cache(maxsize=1)
