@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { HeaderBar } from '../components/HeaderBar';
+import { rememberFrontendAction } from '../errorReporting';
 import { playerCommand } from '../spotifyPlayer';
 
 export function SpotifyPage() {
@@ -44,11 +45,15 @@ export function SpotifyPage() {
         <p className="muted">Sign in with the same Spotify account connected to TipTune. Your login is saved on this computer.
           {' '}On Windows, TipTune selects and activates Web Player (Microsoft Edge) automatically when available to play song requests. Spotify may occasionally ask you to sign in again.</p>
         {desktop ? <button type="button" onClick={() => {
+          rememberFrontendAction('reload_spotify_player');
           playerCommand('spotify_player_reload').then(() => setRetry((n) => n + 1)).catch((e) => setError(String(e)));
         }}>Reload player</button> : null}
       </div>
       {error ? <div className="card" role="alert">Unable to open Spotify: {error}
-        <button type="button" onClick={() => setRetry((n) => n + 1)}>Retry</button>
+        <button type="button" onClick={() => {
+          rememberFrontendAction('retry_spotify_player');
+          setRetry((n) => n + 1);
+        }}>Retry</button>
       </div> : null}
       <div ref={host} className="spotifyPlayerHost" aria-label="Spotify web player">
         {!desktop ? <div className="card">The embedded player is available in the TipTune desktop app.

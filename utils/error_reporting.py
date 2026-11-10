@@ -54,6 +54,13 @@ _UNSAFE_GOOGLE_PHRASE = re.compile(
     r'|\b(?:[a-z0-9]{22}|[a-f0-9]{17}|[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b'
     r'|\b(?:authorization|cookie|set-cookie|x-api-key)\s*[:=])'
 )
+_WEBUI_SCREENS = ('dashboard', 'spotify', 'settings', 'setup', 'events', 'history', 'stats', 'help')
+_WEBUI_ACTION_SCREEN = {
+    'resume_queue': 'dashboard',
+    'reload_spotify_player': 'spotify',
+    'retry_spotify_player': 'spotify',
+    'apply_spotify_device': 'settings',
+}
 # Fixed names only: URLs, query strings, and request/provider data never name spans.
 TRACE_OPERATIONS = {
     **{f'POST /api/{path}': 'http.server' for path in (
@@ -250,6 +257,22 @@ def sanitize_transaction(event, google_query_secrets=()):
     return result
 
 
+def _webui_error_context(value):
+    if not isinstance(value, dict):
+        return None
+    source = value.get('capture_source')
+    if source not in ('window_error', 'unhandled_rejection', 'react_boundary'):
+        return None
+    safe = {'capture_source': source}
+    screen = value.get('screen')
+    if screen in _WEBUI_SCREENS:
+        safe['screen'] = screen
+        action = value.get('recent_action')
+        if isinstance(action, str) and _WEBUI_ACTION_SCREEN.get(action) == screen:
+            safe['recent_action'] = action
+    return safe
+
+
 def sanitize_report(event):
     """Allowlist the complete event, including events restored from disk or the UI.
 
@@ -347,6 +370,11 @@ def sanitize_report(event):
     result['contexts'] = {'failure': failure, 'os': {'name': platform.system(), 'version': platform.release()},
                           'runtime': {'name': 'CPython', 'version': platform.python_version()} if component == 'python'
                           else {'name': 'Web UI' if component in ('webui', 'overlay') else 'Tauri'}}
+    if (component == 'webui' and event_type == 'webui.unhandled.error'
+            and not any('stacktrace' in exc for exc in exceptions)):
+        webui = _webui_error_context((event.get('contexts') or {}).get('webui'))
+        if webui:
+            result['contexts']['webui'] = webui
     trace = _trace_context((event.get('contexts') or {}).get('trace'))
     if trace:
         result['contexts']['trace'] = trace
@@ -696,7 +724,8 @@ class ErrorReporter:
         return self.capture_event({'release': payload.get('release'),
                                    'tags': {'component': component, 'event_type': component + '.unhandled.error'},
                                    'exception': {'values': [{'type': error_type, 'mechanism': {'handled': False},
-                                                            'stacktrace': {'frames': payload.get('frames', [])}}]}})
+                                                            'stacktrace': {'frames': payload.get('frames', [])}}]},
+                                   'contexts': {'webui': payload.get('webui')}})
 
     def capture_event(self, event):
         try:

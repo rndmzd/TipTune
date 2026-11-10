@@ -7,7 +7,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; overlay?: bo
   static getDerivedStateFromError() { return { failed: true }; }
 
   componentDidCatch(error: Error, _info: ErrorInfo) {
-    reportFrontendError(error);
+    reportFrontendError('react_boundary', error);
   }
 
   render() {

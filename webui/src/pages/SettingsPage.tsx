@@ -8,7 +8,7 @@ import { ObsSetup } from '../components/ObsSetup';
 import { ObsAudioSettings } from '../components/ObsAudioSettings';
 import { ConfiguredSection } from '../components/ConfiguredSection';
 import { SettingsLayout } from '../components/SettingsLayout';
-import { refreshReportingConsent, setReportingConsent, type ReportingStatus } from '../errorReporting';
+import { refreshReportingConsent, rememberFrontendAction, setReportingConsent, type ReportingStatus } from '../errorReporting';
 
 declare const __APP_VERSION__: string;
 
@@ -670,6 +670,7 @@ export function SettingsPage({ audioOutputError = '', audioOutputActive }: { aud
                 type="button"
                 disabled={devicesBusy || deviceApplyBusy || !devices.some((d) => d.id === deviceId && !d.is_restricted && d.id)}
                 onClick={async () => {
+                  rememberFrontendAction('apply_spotify_device');
                   setDeviceApplyBusy(true);
                   setDeviceApplyMsg('');
                   try {
