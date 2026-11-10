@@ -54,7 +54,7 @@ def sanitize_playback_confirmation(value):
     if not isinstance(value, dict):
         return {}
     counts = {}
-    for reason in ('no_playback_state', 'not_playing', 'device_mismatch', 'track_mismatch'):
+    for reason in ('no_playback_state', 'not_playing', 'device_mismatch', 'track_mismatch', 'restart_unconfirmed'):
         count = value.get(reason)
         if type(count) is int and 0 < count <= SPOTIFY_CONFIRMATION_CHECKS:
             counts[reason] = count

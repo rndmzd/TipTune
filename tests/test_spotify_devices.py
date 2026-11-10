@@ -364,6 +364,8 @@ class SpotifyInitializationTests(unittest.TestCase):
 class SpotifyDeviceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.service = SongRequestService.__new__(SongRequestService)
+        self.service._queue_lock = asyncio.Lock()
+        self.service._queue_spotify_attempt = None
         self.service._spotify_auth_lock = asyncio.Lock()
         self.service._spotify_auth_in_progress = False
         self.service._spotify_auth_url = None

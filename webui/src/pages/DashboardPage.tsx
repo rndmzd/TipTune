@@ -739,7 +739,7 @@ export function DashboardPage() {
 
           {queueState?.playback_error ? (
             <div className="callout calloutDanger" role="alert">
-              <div className="calloutTitle">Spotify playback did not start — queue paused</div>
+              <div className="calloutTitle">Playback needs attention — queue paused</div>
               <div className="muted">{queueState.playback_error}</div>
             </div>
           ) : showPausedBanner ? (
