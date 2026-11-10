@@ -3,6 +3,20 @@ import { sseUrl } from './api';
 declare const __APP_VERSION__: string;
 const debugIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 type CodeFrame = { filename: string; lineno: number; colno: number; abs_path?: string; debug_id?: string };
+type CaptureSource = 'window_error' | 'unhandled_rejection' | 'react_boundary';
+
+const screenByPath = new Map([
+  ['/', 'dashboard'], ['/spotify', 'spotify'], ['/settings', 'settings'], ['/setup', 'setup'],
+  ['/events', 'events'], ['/history', 'history'], ['/stats', 'stats'], ['/help', 'help'],
+]);
+const actionScreen = {
+  resume_queue: 'dashboard',
+  reload_spotify_player: 'spotify',
+  retry_spotify_player: 'spotify',
+  apply_spotify_device: 'settings',
+} as const;
+type ReportedAction = keyof typeof actionScreen;
+const recentActionLimitMs = 45000;
 
 export type ReportingStatus = {
   ok: true;
@@ -18,6 +32,28 @@ let component: 'webui' | 'overlay' = 'webui';
 let installed = false;
 let initialization: Promise<ReportingStatus | null> | null = null;
 const recent = new Map<string, number>();
+let lastAction: { name: ReportedAction; at: number } | null = null;
+
+function currentScreen() {
+  const path = window.location.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  return screenByPath.get(path);
+}
+
+export function rememberFrontendAction(name: ReportedAction) {
+  if (!allowed || component !== 'webui') return;
+  const screen = currentScreen();
+  if (screen && actionScreen[name] === screen) {
+    lastAction = { name, at: performance.now() };
+  }
+}
+
+function webuiContext(source: CaptureSource) {
+  const screen = currentScreen();
+  const recentAction = lastAction && actionScreen[lastAction.name] === screen
+    && performance.now() - lastAction.at <= recentActionLimitMs
+    ? lastAction.name : undefined;
+  return { capture_source: source, screen, recent_action: recentAction };
+}
 
 async function localFetch(path: string, options?: RequestInit) {
   const controller = new AbortController();
@@ -31,7 +67,10 @@ async function localFetch(path: string, options?: RequestInit) {
 
 export function setReportingConsent(enabled: boolean) {
   allowed = enabled;
-  if (!enabled) recent.clear();
+  if (!enabled) {
+    recent.clear();
+    lastAction = null;
+  }
 }
 
 export async function refreshReportingConsent(): Promise<ReportingStatus | null> {
@@ -100,10 +139,13 @@ export function frontendErrorPayload(error: unknown, location?: string, line?: n
   return { component, type, frames, release: 'tiptune@' + __APP_VERSION__ };
 }
 
-export function reportFrontendError(error: unknown, location?: string, line?: number, column?: number) {
+export function reportFrontendError(source: CaptureSource, error: unknown, location?: string, line?: number, column?: number) {
   if (!allowed) return;
   try {
-    const payload = frontendErrorPayload(error, location, line, column);
+    const report = frontendErrorPayload(error, location, line, column);
+    const payload = component === 'webui' && !report.frames.length
+      ? { ...report, webui: webuiContext(source) }
+      : report;
     const signature = JSON.stringify(payload);
     const now = Date.now();
     if (now - (recent.get(signature) || 0) < 60000) return;
@@ -122,8 +164,10 @@ export function installErrorReporting(source: 'webui' | 'overlay') {
   if (installed) return initialization!;
   installed = true;
   component = source;
-  window.addEventListener('error', (event) => reportFrontendError(event.error, event.filename, event.lineno, event.colno));
-  window.addEventListener('unhandledrejection', (event) => reportFrontendError(event.reason));
+  window.addEventListener('error', (event) => {
+    reportFrontendError('window_error', event.error, event.filename, event.lineno, event.colno);
+  });
+  window.addEventListener('unhandledrejection', (event) => reportFrontendError('unhandled_rejection', event.reason));
   initialization = refreshReportingConsent();
   window.setInterval(() => { void refreshReportingConsent(); }, 15000);
   return initialization;

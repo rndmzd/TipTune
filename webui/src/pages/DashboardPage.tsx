@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { apiJson } from '../api';
+import { rememberFrontendAction } from '../errorReporting';
 import type { Device, QueueItem, QueueState } from '../types';
 import { HeaderBar } from '../components/HeaderBar';
 import { QueueCard } from '../components/QueueCard';
@@ -355,6 +356,7 @@ export function DashboardPage() {
     if (opBusy || queueCommandPendingRef.current || queueState?.starting) return;
     queueCommandPendingRef.current = true;
     const command = paused ? 'resume' : 'pause';
+    if (command === 'resume') rememberFrontendAction('resume_queue');
     setQueueCommand(command);
     setQueueCommandError('');
     setOpBusy(true);

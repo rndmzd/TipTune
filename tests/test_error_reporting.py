@@ -637,6 +637,41 @@ class ErrorReportingApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         self.post.assert_not_called()
 
+    async def test_frameless_webui_labels_survive_the_relay_and_distinguish_capture_paths(self):
+        path = '/api/error-reporting/event'
+        payload = {'component': 'webui', 'type': 'JavaScriptError', 'frames': [], 'message': 'private-error',
+                   'webui': {'capture_source': 'unhandled_rejection', 'screen': 'dashboard',
+                             'recent_action': 'resume_queue', 'url': 'https://private.example',
+                             'request_id': 'private-id', 'dom': 'private-element'}}
+        response = await self.client.post(path, json=payload)
+        self.assertFalse((await response.json())['queued'])
+        await self.client.post('/api/config', json={'General': {'send_error_reports': 'true'}})
+
+        response = await self.client.post(path, json=payload)
+        self.assertTrue((await response.json())['queued'])
+
+        payload['webui']['capture_source'] = 'window_error'
+        response = await self.client.post(path, json=payload)
+        self.assertTrue((await response.json())['queued'])
+        payload['webui'].update(capture_source='react_boundary', screen='/private-route')
+        response = await self.client.post(path, json=payload)
+        self.assertTrue((await response.json())['queued'])
+
+        self.reporter.process_pending()
+        events = [json.loads(call.kwargs['content'].split(b'\n', 2)[2]) for call in self.post.call_args_list]
+        errors = [event for event in events if event.get('type') != 'transaction']
+        self.assertEqual(len(errors), 3)
+        labels = {event['contexts']['webui']['capture_source']: event['contexts']['webui'] for event in errors}
+        self.assertEqual(labels, {
+            'unhandled_rejection': {'capture_source': 'unhandled_rejection', 'screen': 'dashboard',
+                                    'recent_action': 'resume_queue'},
+            'window_error': {'capture_source': 'window_error', 'screen': 'dashboard', 'recent_action': 'resume_queue'},
+            'react_boundary': {'capture_source': 'react_boundary'},
+        })
+        self.assertTrue(all('stacktrace' not in event['exception']['values'][0] for event in errors))
+        self.assertNotIn('private-', json.dumps(errors))
+        self.assertNotIn('private.example', json.dumps(errors))
+
 
 if __name__ == '__main__':
     unittest.main()

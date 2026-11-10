@@ -33,6 +33,8 @@ Reports allowlist the app release, OS, component, exception types, code filename
 
 TipTune keeps OBS integration errors (`obs.*`) in local logs and drops their standalone reports before upload.
 
+Frameless Web UI reports can include a `webui` context with the capture source and the screen label for a recognized app route. Capture sources distinguish global window errors, unhandled promise rejections, and React error boundaries. The context can also identify the most recent tracked action on that screen within 45 seconds. The tracked actions are Resume Queue, reloading or retrying the Spotify player, and Apply + Save for a Spotify device. These values use the existing reporting opt-in and consist of fixed labels.
+
 Free-form log/exception text, usernames, tip/request messages, authentication headers, cookies, configured secrets, runtime source text, frame locals, request bodies, provider response bodies, device/host names, and absolute machine paths are excluded from reports. The separate build upload provides application source maps to Sentry. No automatic session reports, profiling, metrics, continuous remote logs, screenshots, or attachments are sent. Automatic SDK integrations and propagation to external services are disabled.
 
 ## Functional failures and support IDs
