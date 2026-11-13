@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { apiJson, sseUrl } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
@@ -97,16 +98,25 @@ function EventCard(props: { item: any }) {
 
 export function EventsPage() {
   const [lines, setLines] = useState<any[]>([]);
+  const [feedStatus, setFeedStatus] = useState('');
+  const [streamDisconnected, setStreamDisconnected] = useState(false);
 
   useEffect(() => {
+    let active = true;
     apiJson('/api/events/recent?limit=50')
       .then((j: any) => {
+        if (!active) return;
         const evs = Array.isArray(j?.events) ? j.events : [];
         setLines(evs.slice().reverse());
       })
       .catch(() => {});
 
     const es = new EventSource(sseUrl('/api/events/sse'));
+    es.onopen = () => setStreamDisconnected(false);
+    es.addEventListener('feed-status', (e: MessageEvent<string>) => {
+      const status = safeParseJSON(e.data);
+      if (typeof status === 'string') setFeedStatus(status);
+    });
     es.onmessage = (e) => {
       const parsed = safeParseJSON(e.data);
       setLines((prev) => {
@@ -115,10 +125,9 @@ export function EventsPage() {
         return next;
       });
     };
-    es.onerror = () => {
-      setLines((prev) => [{ raw: '--- connection error ---' }, ...prev]);
-    };
+    es.onerror = () => setStreamDisconnected(true);
     return () => {
+      active = false;
       es.close();
     };
   }, []);
@@ -133,8 +142,9 @@ export function EventsPage() {
         <button type="button" onClick={() => setLines([])}>
           Clear
         </button>
-        <span className="muted">Streaming Events API payloads via SSE.</span>
+        <Link to="/settings#settings-events">Events API settings</Link>
       </div>
+      <p role="status">{streamDisconnected ? 'Disconnected from TipTune. Reconnecting…' : feedStatus}</p>
 
       <div className="out">
         {lines.map((item, idx) => {

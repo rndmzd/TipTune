@@ -23,7 +23,7 @@ except OSError:
     # keep an unmanaged worker alive or open a windowed traceback dialog.
     raise SystemExit(1) from None
 
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -34,6 +34,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 from aiohttp import web, ClientSession
+from openai import AuthenticationError
 
 from chatdj.chatdj import AutoDJ, SongRequest, SpotifyPlayback, SpotifyStartAttempt
 from chatdj.song_requests import DEFAULT_MODEL
@@ -490,6 +491,13 @@ def _is_setup_complete_fresh() -> bool:
         return _is_setup_complete(fresh_config)
     except Exception:
         return False
+
+
+def _configured_events_api_url(cfg: configparser.ConfigParser) -> str:
+    url = cfg.get('Events API', 'url', fallback='', raw=True).strip()
+    if 'yourusername' in url or 'your-token' in url:
+        return ''
+    return url
 
 
 def _update_ini_file(path: Path, updates: Dict[str, Dict[str, str]]) -> None:
@@ -1092,10 +1100,7 @@ class WebUI:
             fresh_config = configparser.ConfigParser()
             fresh_config.read(config_path)
 
-            events_url = ""
-            if fresh_config.has_section("Events API"):
-                events_url = fresh_config.get("Events API", "url", fallback="").strip()
-            events_configured = bool(events_url) and "yourusername" not in events_url and "your-token" not in events_url
+            events_configured = bool(_configured_events_api_url(fresh_config))
 
             openai_api_key = ""
             if fresh_config.has_section("OpenAI"):
@@ -1293,7 +1298,8 @@ class WebUI:
 
         try:
             try:
-                await resp.write(b': connected\n\n')
+                status = json.dumps(self._service.events_api_status)
+                await resp.write(f'event: feed-status\ndata: {status}\n\n'.encode('utf-8'))
             except (ConnectionResetError, BrokenPipeError):
                 return resp
 
@@ -1314,9 +1320,12 @@ class WebUI:
                 if transport is None or transport.is_closing():
                     break
 
-                data = json.dumps(item, default=str)
+                if 'feed_status' in item:
+                    data = f'event: feed-status\ndata: {json.dumps(item["feed_status"])}\n\n'
+                else:
+                    data = f'data: {json.dumps(item, default=str)}\n\n'
                 try:
-                    await resp.write(f'data: {data}\n\n'.encode('utf-8'))
+                    await resp.write(data.encode('utf-8'))
                 except (ConnectionResetError, BrokenPipeError):
                     break
             return resp
@@ -1345,6 +1354,10 @@ def handle_exception(_loop, context):
 
 EVENTS_API_DEFAULT_RPM = 600
 EVENTS_API_RATE_LIMIT_DELAYS = (3, 6, 10)
+EVENTS_API_FAILURE_DELAYS = (5, 15, 30, 60)
+EVENTS_API_REJECTED_FEED_DELAYS = (30, 60, 300)
+EVENTS_API_REJECTED_STATUSES = (400, 401, 403, 404, 410)
+EVENTS_API_RECENT_TIP_IDS = 1000
 
 
 def _events_api_retry_after_seconds(value: str) -> Optional[float]:
@@ -1363,7 +1376,9 @@ def _events_api_retry_after_seconds(value: str) -> Optional[float]:
 
 class EventsAPIClient:
     def __init__(self, start_url: str, max_requests_per_minute: int = EVENTS_API_DEFAULT_RPM):
+        self._start_url = start_url
         self._next_url = start_url
+        self._recent_tip_ids: OrderedDict[str, None] = OrderedDict()
         self.set_poll_rate(max_requests_per_minute)
 
     def set_poll_rate(self, max_requests_per_minute: int) -> None:
@@ -1374,6 +1389,13 @@ class EventsAPIClient:
     def poll_interval_seconds(self) -> float:
         return self._poll_interval_seconds
 
+    @property
+    def using_cursor(self) -> bool:
+        return self._next_url != self._start_url
+
+    def reset_cursor(self) -> None:
+        self._next_url = self._start_url
+
     async def poll(self, client: httpx.AsyncClient) -> list[dict]:
         token = _events_api_request_active.set(True)
         try:
@@ -1383,12 +1405,27 @@ class EventsAPIClient:
         resp.raise_for_status()
         payload = resp.json()
 
-        events = payload.get("events", [])
-        if isinstance(events, list):
-            self._next_url = payload.get("nextUrl", self._next_url)
-            return events
+        events = payload.get('events') if isinstance(payload, dict) else None
+        if not isinstance(events, list):
+            raise ValueError('Invalid Events API response')
+        next_url = payload.get('nextUrl')
+        if isinstance(next_url, str) and next_url.strip():
+            self._next_url = next_url
+        return events
 
-        return []
+    def accept_event(self, event: Any) -> bool:
+        if not isinstance(event, dict):
+            return False
+        event_id = event.get('id')
+        if event.get('method') != 'tip' or not isinstance(event_id, str) or not event_id:
+            return True
+        # Restarting at the saved feed URL can replay tips that were already queued.
+        if event_id in self._recent_tip_ids:
+            return False
+        self._recent_tip_ids[event_id] = None
+        if len(self._recent_tip_ids) > EVENTS_API_RECENT_TIP_IDS:
+            self._recent_tip_ids.popitem(last=False)
+        return True
 
 
 class SongRequestService:
@@ -1409,6 +1446,8 @@ class SongRequestService:
         self._events_recent: list[dict] = []
         self._events_recent_max = 500
         self._events_subscribers: set[asyncio.Queue] = set()
+        self._events_api_wake = asyncio.Event()
+        self.events_api_status = ''
 
         self._request_history_recent: list[dict] = []
         self._request_history_recent_max = _request_history_size()
@@ -2825,6 +2864,7 @@ class SongRequestService:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        self._events_api_wake.set()
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -3325,24 +3365,29 @@ class SongRequestService:
         api_url: Optional[str] = None
         api_rpm: Optional[int] = None
         rate_limit_step = 0
+        failure_step = 0
+        cursor_reset_used = False
+        reported_failures: set[tuple[str, int | None, type[Exception]]] = set()
         recent_attempts: deque[float] = deque()
+        wake = self._events_api_wake
 
         async with httpx.AsyncClient() as client:
             while not self._stop_event.is_set():
+                wake.clear()
+                events_api_url = _configured_events_api_url(config)
                 try:
-                    events_api_url = config.get("Events API", "url", fallback="").strip()
-                    configured_rate = config.get("Events API", "max_requests_per_minute", fallback="").strip()
-                    max_rpm = int(configured_rate or EVENTS_API_DEFAULT_RPM)
-                except Exception:
-                    events_api_url = ""
+                    max_rpm = int(config.get("Events API", "max_requests_per_minute", fallback="").strip()
+                                  or EVENTS_API_DEFAULT_RPM)
+                except (ValueError, configparser.Error):
                     max_rpm = EVENTS_API_DEFAULT_RPM
 
                 if not events_api_url:
                     api = None
                     api_url = None
                     api_rpm = None
+                    self._set_events_api_status("No Events API URL saved. To receive tips, add it in Settings → Events API.")
                     try:
-                        await asyncio.wait_for(self._stop_event.wait(), timeout=5)
+                        await asyncio.wait_for(wake.wait(), timeout=5)
                     except asyncio.TimeoutError:
                         pass
                     continue
@@ -3351,6 +3396,10 @@ class SongRequestService:
                     api = EventsAPIClient(events_api_url, max_requests_per_minute=max_rpm)
                     api_url = events_api_url
                     rate_limit_step = 0
+                    failure_step = 0
+                    cursor_reset_used = False
+                    reported_failures.clear()
+                    recent_attempts.clear()
                 elif api_rpm != max_rpm:
                     api.set_poll_rate(max_rpm)
                 api_rpm = max_rpm
@@ -3361,38 +3410,79 @@ class SongRequestService:
                 while recent_attempts and recent_attempts[0] <= attempted_at - 60:
                     recent_attempts.popleft()
                 recent_attempts.append(attempted_at)
+                using_cursor = api.using_cursor
                 try:
-                    try:
-                        events = await api.poll(client)
-                    except httpx.HTTPStatusError as exc:
-                        if exc.response.status_code != 429:
-                            raise
+                    events = await api.poll(client)
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                    stage = "continuation_poll" if using_cursor else "feed_poll"
+                    details: dict[str, str | int | float] = {"stage": stage}
+                    if status is not None:
+                        details["status_code"] = status
+                    if status == 429:
                         retry_headers = exc.response.headers.get_list("Retry-After")
                         retry_after = (
                             _events_api_retry_after_seconds(retry_headers[0]) if len(retry_headers) == 1 else None
                         )
                         wait_seconds = max(wait_seconds, EVENTS_API_RATE_LIMIT_DELAYS[rate_limit_step], retry_after or 0)
                         rate_limit_step = min(rate_limit_step + 1, len(EVENTS_API_RATE_LIMIT_DELAYS) - 1)
-                        details: dict[str, int | float] = {
-                            "status_code": 429, "local_attempts_last_minute": len(recent_attempts),
-                        }
+                        details["local_attempts_last_minute"] = len(recent_attempts)
                         if retry_after is not None:
                             details["retry_after_seconds"] = retry_after
-                        # Log only safe fields and use the existing opt-in reporter once.
-                        logger.warning("events_api.poll.error", message="Events API rate limited polling", data=details)
-                        error_reporter.capture_exception("events_api.poll.error", exc, details=details)
+                        message = "The Events API is rate limiting requests. TipTune will retry."
                     else:
-                        rate_limit_step = 0
+                        reset_cursor = using_cursor and status in (400, 410)
+                        rejected_feed = not using_cursor and (
+                            status in EVENTS_API_REJECTED_STATUSES
+                            or isinstance(exc, (httpx.InvalidURL, httpx.UnsupportedProtocol))
+                        )
+                        if not reset_cursor or cursor_reset_used:
+                            delays = EVENTS_API_REJECTED_FEED_DELAYS if rejected_feed else EVENTS_API_FAILURE_DELAYS
+                            delay_step = min(failure_step, len(delays) - 1)
+                            wait_seconds = max(wait_seconds, delays[delay_step])
+                            failure_step = min(failure_step + 1, len(EVENTS_API_FAILURE_DELAYS) - 1)
+                        if reset_cursor:
+                            api.reset_cursor()
+                            cursor_reset_used = True
+                            message = "The Events API interrupted the feed. TipTune is reconnecting."
+                        else:
+                            suffix = f" (HTTP {status})" if status is not None else ""
+                            message = (
+                                f"Could not open the Events API feed{suffix}. "
+                                "Check the URL and access token in Settings → Events API."
+                                if rejected_feed else f"Could not read the Events API feed{suffix}. TipTune will retry."
+                            )
+                    self._set_events_api_status(message)
+                    # Report distinct failures once until polling succeeds. The
+                    # 429 path keeps the existing rate limit diagnostics.
+                    failure = (stage, status, type(exc))
+                    if status == 429 or failure not in reported_failures:
+                        reported_failures.add(failure)
+                        # Never log the exception text: it can include the secret URL.
+                        logger.warning("events_api.poll.error", message=message, data=details)
+                        error_reporter.capture_exception("events_api.poll.error", exc, details=details)
+                else:
+                    rate_limit_step = 0
+                    # A successful restart is provisional until its continuation works.
+                    if using_cursor or not cursor_reset_used or not api.using_cursor:
+                        failure_step = 0
+                        cursor_reset_used = False
+                        reported_failures.clear()
+                        self._set_events_api_status("Events API connected.")
+                    try:
                         for event in events:
-                            self.publish_events_api_event(event)
-                            await self._handle_event(event)
-                except asyncio.CancelledError:
-                    break
-                except Exception as exc:
-                    logger.exception("events_api.poll.error", exc=exc, message="Failed to poll Events API")
+                            if api.accept_event(event):
+                                self.publish_events_api_event(event)
+                                await self._handle_event(event)
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as exc:
+                        logger.exception("events_api.event.error", exc=exc, message="Failed to process an Events API event")
 
                 try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=wait_seconds)
+                    await asyncio.wait_for(wake.wait(), timeout=wait_seconds)
                 except asyncio.TimeoutError:
                     pass
 
@@ -3520,7 +3610,10 @@ class SongRequestService:
                             tip_message, diagnostics=extraction_debug)
                 except Exception as exc:
                     logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
-                    extraction_error = "song extraction failed"
+                    if isinstance(exc, AuthenticationError) or isinstance(exc.__cause__, AuthenticationError):
+                        extraction_error = "OpenAI could not authenticate. Check the API key in Settings → OpenAI."
+                    else:
+                        extraction_error = "song extraction failed"
                     song_extracts = []
                     details = getattr(exc, 'diagnostics', None)
                     if isinstance(details, dict):
@@ -3717,6 +3810,14 @@ class SongRequestService:
         if len(self._events_recent) > self._events_recent_max:
             self._events_recent = self._events_recent[-self._events_recent_max:]
 
+        self._broadcast_events_update(item)
+
+    def _set_events_api_status(self, message: str) -> None:
+        if self.events_api_status != message:
+            self.events_api_status = message
+            self._broadcast_events_update({"feed_status": message})
+
+    def _broadcast_events_update(self, item: dict) -> None:
         for q in list(self._events_subscribers):
             try:
                 q.put_nowait(item)
@@ -4798,13 +4899,13 @@ class SongRequestService:
             if not config.has_section(section):
                 continue
             cfg[section] = {}
-            for key, val in config.items(section):
+            for key in config[section]:
                 if section == 'General' and key == 'multi_request_tips':
                     continue
                 if _is_secret_field(section, key):
                     cfg[section][key] = ""
                 else:
-                    cfg[section][key] = val
+                    cfg[section][key] = config.get(section, key)
         general_cfg = cfg.setdefault("General", {})
         general_cfg['request_history_size'] = str(self._request_history_recent_max)
         general_cfg['show_history_debug'] = 'true' if _show_history_debug() else 'false'
@@ -4888,6 +4989,7 @@ class SongRequestService:
         if not updates:
             return (True, None)
 
+        old_events_url = _configured_events_api_url(config)
         try:
             _update_ini_file(config_path, updates)
         except Exception as exc:
@@ -4898,6 +5000,9 @@ class SongRequestService:
             config.remove_option('General', 'multi_request_tips')
         except Exception:
             pass
+
+        if _configured_events_api_url(config) != old_events_url:
+            self._events_api_wake.set()
 
         if 'send_error_reports' in updates.get('General', {}):
             error_reporter.configure()

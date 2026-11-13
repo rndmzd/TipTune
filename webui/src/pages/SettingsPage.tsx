@@ -62,7 +62,7 @@ function tooltip(section: string, key: string) {
   const k = `${section}.${key}`;
   const tips: Record<string, string> = {
     'Playback.device_id': 'Select which Spotify playback device TipTune will use when playing requests. Saved when you click Apply + Save.',
-    'Events API.url': 'Endpoint TipTune will call to send event notifications (e.g. request accepted/played). Leave blank to disable events publishing.',
+    'Events API.url': 'Private feed URL from your Chaturbate Events API settings. TipTune uses it to receive tips and other events.',
     'Events API.max_requests_per_minute': 'Rate limit for outbound Events API calls to avoid spamming the endpoint.',
     'OpenAI.api_key': 'OpenAI API key used to enable AI features (such as ChatDJ). Leave blank to keep the currently saved key.',
     'OpenAI.model': 'OpenAI model for song requests. Blank uses gpt-6-luna; gpt-6-sol and gpt-6-astra are also supported. Requires Responses Structured Outputs and API account access.',
