@@ -193,7 +193,7 @@ class YoutubeStreamLanguageTests(unittest.IsolatedAsyncioTestCase):
              patch('app.ClientSession') as upstream, patch('app.logger'):
             with self.assertRaises(web.HTTPBadRequest) as raised:
                 await service.stream_youtube_audio(VIDEO_URL, SimpleNamespace(headers={}))
-        self.assertIn('English audio is not available', raised.exception.text)
+        self.assertEqual(raised.exception.text, 'English audio is unavailable for this video')
         upstream.assert_not_called()
 
 
