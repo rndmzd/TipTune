@@ -10,6 +10,28 @@ import sys
 import time
 import urllib.request
 
+
+def build_lifecycle_harness():
+    repo = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ['cargo', 'test', '--locked', '--manifest-path', str(repo / 'src-tauri/Cargo.toml'),
+         '--test', 'windows_lifecycle', '--no-run', '--message-format=json-render-diagnostics'],
+        cwd=repo, stdout=subprocess.PIPE, encoding='utf-8', check=True,
+    )
+    # Cargo reports the executable even when the build is already cached.
+    for line in result.stdout.splitlines():
+        if not line.startswith('{'):
+            continue
+        artifact = json.loads(line)
+        if artifact.get('reason') != 'compiler-artifact':
+            continue
+        target = artifact['target']
+        executable = artifact.get('executable')
+        if target['name'] == 'windows_lifecycle' and 'test' in target['kind'] and executable:
+            return Path(executable).resolve(strict=True)
+    raise SystemExit('Cargo did not report an executable for the windows_lifecycle integration test.')
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--backend', type=Path, required=True)
 parser.add_argument('--output', type=Path, default=Path('output/overlay-qa/shutdown/packaged-check'))
@@ -18,8 +40,7 @@ if sys.platform != 'win32':
     parser.error('These lifecycle checks require Windows.')
 root = args.output.resolve()
 backend = args.backend.resolve(strict=True)
-repo = Path.cwd()
-harness = max((repo / 'src-tauri/target/debug/deps').glob('windows_lifecycle-*.exe'), key=lambda p: p.stat().st_mtime)
+harness = build_lifecycle_harness()
 with socket.socket() as check:
     check.bind(('127.0.0.1', 0))
     port = check.getsockname()[1]
