@@ -202,6 +202,8 @@ If you want to use YouTube as the music source:
 
 TipTune only streams from allowed YouTube hosts (for example `youtube.com`, `*.youtube.com`, and `youtu.be`).
 
+YouTube playback selects English audio before comparing file formats or quality. If audio tracks have language labels but none is English, the video will not play. Videos without language labels can still play; TipTune cannot verify their spoken language.
+
 ---
 
 ## OBS integration (optional)
