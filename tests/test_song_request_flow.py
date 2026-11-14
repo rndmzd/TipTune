@@ -11,6 +11,8 @@ import unittest
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import httpx
+import httpx2
+from openai import AuthenticationError
 
 from chatdj.song_requests import SearchIdentification, SongExtractor, SongRequest, SongExtractionError, SongResolutionError
 from utils.error_reporting import ErrorReporter
@@ -240,6 +242,27 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         self.actions.find_song_spotify.assert_not_called()
         self.assertIn("TipTune couldn't read", self.notice())
         self.assertIn('before tipping again', self.notice())
+
+    async def test_rejected_openai_key_has_a_streamer_action_in_history(self):
+        reporter = self.enable_reports()
+        provider_error = AuthenticationError('Rejected key sk-private-key', response=httpx2.Response(
+            401, request=httpx2.Request('POST', 'https://api.openai.com/v1/responses')), body=None)
+        error = SongExtractionError('Song extraction failed', {'stage': 'model_request'})
+        error.__cause__ = provider_error
+        self.actions.extract_song_titles.side_effect = error
+
+        await self.handle()
+
+        item, = self.history()
+        self.assertEqual(item['status'], 'failed')
+        self.assertEqual(item['error'], 'OpenAI could not authenticate. Check the API key in Settings → OpenAI.')
+        self.assertEqual(item['support']['error_code'], 'song.extract.failed')
+        self.assertIn('Ask the streamer', self.notice())
+        self.assertNotIn('API key', self.notice())
+        self.service.add_track_to_queue.assert_not_called()
+        stored = (reporter.pending_dir / (item['support']['report_id'] + '.json')).read_text()
+        self.assertEqual(json.loads(stored)['event']['contexts']['failure']['status_code'], 401)
+        self.assertNotIn('sk-private-key', stored + json.dumps(item))
 
     async def test_missing_message_explains_both_causes_and_how_to_recover(self):
         for tip in ({'tokens': 27}, {'tokens': 27, 'message': None},

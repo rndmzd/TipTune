@@ -347,13 +347,16 @@ def sanitize_report(event):
             failure['exit_code'] = details['exit_code']
         if type(details.get('elapsed_ms')) in (int, float) and 0 <= details['elapsed_ms'] <= 86_400_000:
             failure['elapsed_ms'] = details['elapsed_ms']
-        if event_type == 'events_api.poll.error' and failure.get('status_code') == 429:
-            local_attempts = details.get('local_attempts_last_minute')
-            if type(local_attempts) is int and local_attempts > 0:
-                failure['local_attempts_last_minute'] = local_attempts
-            retry_after = details.get('retry_after_seconds')
-            if type(retry_after) in (int, float) and 0 <= retry_after < math.inf:
-                failure['retry_after_seconds'] = retry_after
+        if event_type == 'events_api.poll.error':
+            if failure.get('stage') not in ('feed_poll', 'continuation_poll'):
+                failure.pop('stage', None)
+            if failure.get('status_code') == 429:
+                local_attempts = details.get('local_attempts_last_minute')
+                if type(local_attempts) is int and local_attempts > 0:
+                    failure['local_attempts_last_minute'] = local_attempts
+                retry_after = details.get('retry_after_seconds')
+                if type(retry_after) in (int, float) and 0 <= retry_after < math.inf:
+                    failure['retry_after_seconds'] = retry_after
         if event_type == 'spotify.playback.unconfirmed':
             confirmation = sanitize_playback_confirmation(details.get('playback_confirmation'))
             if confirmation:
@@ -758,9 +761,12 @@ class ErrorReporter:
                 if safe is None:
                     return None
                 transaction = safe.get('type') == 'transaction'
+                poll_failure = safe['contexts']['failure'] if not transaction else {}
                 signature = None if transaction else hashlib.sha256(json.dumps([
                     {key: value for key, value in safe['tags'].items() if key != 'support_id'},
                     safe['exception'], operation.support_id if operation is not None else None,
+                    (poll_failure.get('stage'), poll_failure.get('status_code'))
+                    if safe['tags']['event_type'] == 'events_api.poll.error' else None,
                 ], sort_keys=True).encode()).hexdigest()
                 now = time.time()
                 if signature and now - self._seen.get(signature, 0) < 60:
@@ -919,6 +925,10 @@ class ErrorReportingHandler(logging.Handler):
             return
         try:
             event_type = record.msg.get('event_type') if isinstance(record.msg, dict) else None
+            # Spotipy logs a plain error immediately before raising it. Keep
+            # this in local logs and report the caller's structured exception.
+            if record.name == 'spotipy.client' and not event_type and not record.exc_info:
+                return
             if event_type:
                 self.reporter.breadcrumb(event_type)
             if record.levelno >= logging.ERROR:

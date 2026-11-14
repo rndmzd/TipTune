@@ -146,6 +146,42 @@ class ErrorReportingTests(unittest.TestCase):
         event = envelope_event(self.post.call_args.kwargs['content'])
         self.assertEqual(event['tags']['event_type'], 'events_api.poll.error')
 
+    def test_spotipy_http_error_keeps_local_log_and_only_reports_the_callers_exception(self):
+        from spotipy import Spotify, SpotifyException
+        from requests import Response
+
+        self.consent(True)
+        reporter = self.reporter()
+        caller = logging.Logger('isolated', level=logging.INFO)
+        library = logging.getLogger('spotipy.client')
+        local_log = io.StringIO()
+        handler = ErrorReportingHandler(reporter)
+        console = logging.StreamHandler(local_log)
+        caller.addHandler(handler)
+        library.addHandler(handler)
+        library.addHandler(console)
+        self.addCleanup(library.removeHandler, handler)
+        self.addCleanup(library.removeHandler, console)
+        response = Response()
+        response.status_code = 404
+        response.url = 'https://api.spotify.com/v1/me/player'
+        response._content = b'{"error":{"message":"Private provider detail"}}'
+        client = Spotify(auth='synthetic-token')
+        with patch.object(client._session, 'request', return_value=response):
+            try:
+                client.transfer_playback(device_id='synthetic-device')
+            except SpotifyException as exc:
+                StructuredLogger(caller).exception('spotify.device.activation.error', exc=exc)
+            else:
+                self.fail('Spotipy did not raise for the rejected transfer')
+
+        self.assertIn('HTTP Error for PUT', local_log.getvalue())
+        path, = reporter.pending_dir.glob('*.json')
+        event = json.loads(path.read_text())['event']
+        self.assertEqual(event['tags']['event_type'], 'spotify.device.activation.error')
+        self.assertEqual(event['contexts']['failure']['status_code'], 404)
+        self.assertNotIn('Private provider detail', json.dumps(event))
+
     def test_obs_error_queued_by_an_older_release_is_discarded_on_replay(self):
         self.consent(True)
         reporter = self.reporter()

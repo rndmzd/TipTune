@@ -745,10 +745,10 @@ TipTune keeps the song queued when Spotify cannot start it. Check **Settings →
 ### Tips are not being processed
 
 1. Check **Settings → Events API**: the URL must be set and saved.
-2. Open [Events](/events) and verify that new tips arrive. If none arrive, check the tip-source URL and its access token.
+2. Open [Events](/events) to check the feed status and see if new tips arrive. If the Events API rejects the saved URL, copy the current URL from Chaturbate's Events API settings and save it in TipTune. If the feed connection drops, TipTune will retry automatically.
 3. Check the exact song price in **Settings → General**. A multiple of the song price does not request extra songs.
 4. Open [History](/history). A failed entry means the tip reached request processing; inspect its error or [saved diagnostics](#diagnose-a-failed-request).
-5. For ordinary text or Spotify-link requests, configure OpenAI. Confirm the selected model is available to your API account. Manual YouTube playback can work while text parsing is unconfigured.
+5. For ordinary text requests, configure OpenAI. If History says OpenAI could not authenticate, check the key in **Settings → OpenAI**. Confirm the selected model is available to your API account. Manual YouTube playback can work while text parsing is unconfigured.
 
 ### Requests failing with “blank tip message”
 
