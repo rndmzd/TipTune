@@ -2073,7 +2073,7 @@ class SongRequestService:
             raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
         except EnglishAudioUnavailableError as exc:
             logger.warning('youtube.audio.english_unavailable')
-            raise web.HTTPBadRequest(text=str(exc)) from exc
+            raise web.HTTPBadRequest(text='English audio is unavailable for this video') from exc
         except RuntimeError as e:
             logging.exception("Error extracting YouTube audio for URL %s", url)
             msg = str(e)
