@@ -47,6 +47,7 @@ from utils.spotify_errors import spotify_error_message
 from utils.song_extraction_debug import extraction_exception_debug, sanitize_extraction_debug
 from utils.error_reporting import ErrorReporter, install_reporter, reporting_enabled, MAX_REPORT_BYTES
 from utils.support_diagnostics import new_support_id, valid_support_id
+from utils.youtube_audio import EnglishAudioUnavailableError, select_english_audio_format
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -2019,127 +2020,41 @@ class SongRequestService:
     def _yt_fetch_best_audio_url(self, video_url: str) -> tuple[str, Optional[str], Dict[str, str]]:
         if not self._is_allowed_youtube_url(video_url):
             raise RuntimeError('Only YouTube URLs are supported')
-        format_sel = 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=mp3]/bestaudio'
+        # Keep extraction possible for unlabelled clips; the final picker also
+        # enforces English across all formats and the selected-URL fallback.
+        format_sel = 'bestaudio[language^=en]/bestaudio'
         items = _yt_dlp_dump_json(['--no-playlist', '-f', format_sel, video_url], timeout=30)
         info = items[0] if items else None
         if not isinstance(info, dict):
             raise RuntimeError('Failed to extract YouTube info')
 
-        best_url: Optional[str] = None
+        best = select_english_audio_format(info)
         content_type: Optional[str] = None
         request_headers: Dict[str, str] = {}
-
-        formats = info.get('formats')
-        if isinstance(formats, list) and formats:
-            def _pick_best_audio(
-                candidates: list[dict],
-                allow_streaming_protocols: bool,
-                preferred_exts: Optional[set[str]] = None,
-                preferred_mimes: Optional[set[str]] = None,
-            ) -> Optional[dict]:
-                if preferred_exts or preferred_mimes:
-                    filtered: list[dict] = []
-                    for f in candidates:
-                        if not isinstance(f, dict):
-                            continue
-                        ext = f.get('ext')
-                        mime = f.get('mime_type')
-                        ext_norm = str(ext or '').lower().strip()
-                        mime_norm = str(mime or '').lower().split(';', 1)[0].strip()
-                        if preferred_exts and ext_norm in preferred_exts:
-                            filtered.append(f)
-                            continue
-                        if preferred_mimes and mime_norm in preferred_mimes:
-                            filtered.append(f)
-                    if filtered:
-                        candidates = filtered
-
-                best: Optional[dict] = None
-                best_score = -1.0
-                for f in candidates:
-                    if not isinstance(f, dict):
-                        continue
-                    u = f.get('url')
-                    if not isinstance(u, str) or u.strip() == '':
-                        continue
-                    vcodec = f.get('vcodec')
-                    acodec = f.get('acodec')
-                    if vcodec not in (None, 'none'):
-                        continue
-                    if acodec in (None, 'none'):
-                        continue
-                    if not allow_streaming_protocols:
-                        protocol = str(f.get('protocol') or '').lower()
-                        if 'm3u8' in protocol or 'dash' in protocol:
-                            continue
-                        ext = f.get('ext')
-                        if isinstance(ext, str) and ext.lower().strip() in ('m3u8', 'mpd'):
-                            continue
-                    abr = f.get('abr')
-                    try:
-                        score = float(abr) if abr is not None else 0.0
-                    except Exception:
-                        score = 0.0
-                    if score > best_score:
-                        best_score = score
-                        best = f
-                return best
-
-            preferred_exts = {'m4a', 'mp4', 'mp3'}
-            preferred_mimes = {'audio/mp4', 'audio/mpeg'}
-            best = _pick_best_audio(
-                formats,
-                allow_streaming_protocols=False,
-                preferred_exts=preferred_exts,
-                preferred_mimes=preferred_mimes,
-            )
-            if best is None:
-                best = _pick_best_audio(formats, allow_streaming_protocols=False)
-            if best is None:
-                best = _pick_best_audio(formats, allow_streaming_protocols=True)
-            if best is None and isinstance(formats[0], dict):
-                best = formats[0]
-
-            if isinstance(best, dict):
-                u = best.get('url')
-                if isinstance(u, str) and u.strip() != '':
-                    best_url = u.strip()
-                hdrs = best.get('http_headers')
-                if isinstance(hdrs, dict):
-                    for k, v in hdrs.items():
-                        if isinstance(k, str) and isinstance(v, str) and v.strip() != '':
-                            request_headers[k] = v
-                mime = best.get('mime_type')
-                if isinstance(mime, str) and mime.strip() != '':
-                    content_type = mime.split(';', 1)[0].strip()
-                ext = best.get('ext')
-                if content_type is None and isinstance(ext, str):
-                    ext = ext.lower().strip()
-                    if ext == 'm4a':
-                        content_type = 'audio/mp4'
-                    elif ext == 'mp4':
-                        content_type = 'audio/mp4'
-                    elif ext == 'webm':
-                        content_type = 'audio/webm'
-                    elif ext == 'mp3':
-                        content_type = 'audio/mpeg'
-
-        if best_url is None:
-            u = info.get('url')
-            if isinstance(u, str) and u.strip() != '':
-                best_url = u.strip()
-
-        if not request_headers:
-            hdrs = info.get('http_headers') if isinstance(info, dict) else None
+        for source in (best, info):
+            hdrs = source.get('http_headers')
             if isinstance(hdrs, dict):
                 for k, v in hdrs.items():
                     if isinstance(k, str) and isinstance(v, str) and v.strip() != '':
                         request_headers[k] = v
+            if request_headers:
+                break
 
-        if best_url is None:
-            raise RuntimeError('No audio stream URL found')
+        mime = best.get('mime_type')
+        if isinstance(mime, str) and mime.strip():
+            content_type = mime.split(';', 1)[0].strip()
+        if content_type is None:
+            content_type = {
+                'm4a': 'audio/mp4', 'mp4': 'audio/mp4',
+                'webm': 'audio/webm', 'mp3': 'audio/mpeg',
+            }.get(str(best.get('ext') or '').lower().strip())
 
-        return (best_url, content_type, request_headers)
+        logger.info('youtube.audio.selected', data={
+            'format_id': best.get('format_id'),
+            'language': best.get('language'),
+            'format_note': best.get('format_note'),
+        })
+        return (best['url'].strip(), content_type, request_headers)
 
     async def stream_youtube_audio(self, video_url: str, request: web.Request) -> web.StreamResponse:
         url = str(video_url or '').strip()
@@ -2156,6 +2071,9 @@ class SongRequestService:
             )
         except asyncio.TimeoutError:
             raise web.HTTPGatewayTimeout(text='Timed out extracting YouTube audio')
+        except EnglishAudioUnavailableError as exc:
+            logger.warning('youtube.audio.english_unavailable')
+            raise web.HTTPBadRequest(text='English audio is unavailable for this video') from exc
         except RuntimeError as e:
             logging.exception("Error extracting YouTube audio for URL %s", url)
             msg = str(e)

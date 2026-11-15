@@ -765,6 +765,7 @@ The notice explains that the message may have been omitted or hidden by the site
 
 - Add a YouTube song manually from the Dashboard to distinguish a playback problem from a text-parsing problem.
 - Check that playback is not paused and that Windows or your browser has not muted TipTune. If a browser blocks autoplay, use the player's **Play** control.
+- TipTune selects English audio when YouTube provides language labels. A video with labelled audio but no English track will not play; try a version with English audio. Videos without language labels can still play, but their spoken language cannot be verified.
 - Packaged builds include yt-dlp, Deno, and ffmpeg. Check for a TipTune update before trying a video that still fails. Some videos may be unavailable or restricted; try another song.
 - For a source checkout, install the Python dependencies and run `node scripts/fetch-binaries.mjs` to fetch the playback tools. An unbundled setup needs current yt-dlp and Deno on PATH, or Node.js 22+ as the JavaScript-runtime fallback.
 
