@@ -4092,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "tiptune-tauri"
-version = "1.10.3"
+version = "1.10.4"
 dependencies = [
  "serde",
  "serde_json",
