@@ -67,6 +67,7 @@ class StartTrackTests(unittest.TestCase):
         self.dj.spotify.current_playback.side_effect = [playback(None, False), playback()]
         self.assertTrue(self.dj.start_track(URI))
         self.dj.spotify.start_playback.assert_called_once_with(device_id='desktop', uris=[URI])
+        self.dj.spotify.track.assert_not_called()
         self.dj.spotify.pause_playback.assert_not_called()
         self.assertEqual(self.dj.now_playing_track_uri, URI)
         self.assertGreater(self.dj._last_start_playback_ts, 0)
@@ -84,6 +85,7 @@ class StartTrackTests(unittest.TestCase):
         state['item']['linked_from'] = {'uri': URI}
         self.dj.spotify.current_playback.return_value = state
         self.assertTrue(self.dj.start_track(URI))
+        self.dj.spotify.track.assert_not_called()
 
     def test_equivalent_recording_without_linked_from_is_confirmed(self):
         state = playback('spotify:track:alternate-release')
@@ -93,7 +95,7 @@ class StartTrackTests(unittest.TestCase):
 
         self.assertTrue(self.dj.start_track(URI))
         self.assertEqual(self.dj.now_playing_track_uri, state['item']['uri'])
-        self.dj.spotify.track.assert_called_once_with(URI)
+        self.dj.spotify.track.assert_called_once_with(URI, market='from_token')
         self.dj.spotify.start_playback.assert_called_once()
 
     def test_different_recording_is_not_confirmed_despite_matching_title(self):
@@ -126,7 +128,7 @@ class StartTrackTests(unittest.TestCase):
 
         attempt = SpotifyStartAttempt()
         self.assertFalse(self.dj.start_track(URI, attempt=attempt))
-        self.dj.spotify.track.assert_called_once_with(URI)
+        self.dj.spotify.track.assert_called_once_with(URI, market='from_token')
         self.assertEqual(attempt.identity_checks, {'identity_unavailable': 11})
 
     def test_expired_web_player_id_is_replaced_before_starting(self):
@@ -280,12 +282,12 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.dj.spotify.start_playback.assert_called_once_with(device_id='desktop', uris=[URI])
         self.assertEqual(self.dj.spotify.current_playback.call_count, 11)
         self.dj.spotify.devices.assert_called_once()
-        self.dj.spotify.track.assert_called_once_with(URI)
+        self.dj.spotify.track.assert_called_once_with(URI, market='from_token')
         self.assertTrue(self.service._queue_paused)
         self.assertIsNone(self.service._queue_now_playing)
         self.assertEqual(self.service._queue_items, [request])
         record, other = self.service._request_history_recent
-        self.assertIn('did not start playback', record['playback_error'])
+        self.assertIn('could not confirm playback', record['playback_error'])
         self.assertNotIn('playback_error', other)
         events = [json.loads(path.read_text())['event'] for path in reporter.pending_dir.glob('*.json')]
         error = next(event for event in events if event.get('type') != 'transaction')
@@ -393,11 +395,47 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.service._queue_start_next_if_needed())
         self.assertIsNotNone(self.service._queue_started_ts)
 
+    async def test_pokemon_theme_market_relink_moves_to_now_playing_and_advances_queue(self):
+        requested_uri = 'spotify:track:6xG2ZGudUgtV235xvDlSEt'
+        playable_uri = 'spotify:track:3mNH9BXFcNElEFbgKqmq1J'
+        self.service._queue_items.clear()
+        self.dj.spotify.devices.return_value = {'devices': [
+            {'id': 'embedded', 'name': 'Web Player (Microsoft Edge)', 'is_active': True},
+        ]}
+        # The requested link and its playable replacement carry different recording codes.
+        self.dj.spotify.track.return_value = dict(
+            recording(playable_uri, isrc='USAOG0400111', duration=196826),
+            linked_from={'uri': requested_uri},
+        )
+        playing = playback(playable_uri, device='embedded', progress_ms=1400)
+        playing['item'] = recording(playable_uri, isrc='USKO10406205', duration=198186)
+        self.dj.spotify.current_playback.return_value = playing
+
+        await self.service.add_track_to_queue(requested_uri)
+        await self.service.add_track_to_queue(NEXT_URI)
+        self.service._enrich_mixed_queue_items = AsyncMock(side_effect=lambda items: items)
+        state = await self.service.get_queue_state()
+        self.assertEqual(state['now_playing_track'], playable_uri)
+        self.assertEqual(state['now_playing_item']['requested_uri'], requested_uri)
+        self.assertTrue(state['playback_is_playing'])
+        self.assertEqual(state['queued_tracks'], [NEXT_URI])
+        self.assertFalse(state['paused'])
+        self.assertIsNone(state['playback_error'])
+        self.dj.spotify.track.assert_called_once_with(requested_uri, market='from_token')
+        self.dj.spotify.start_playback.assert_called_once_with(device_id='embedded', uris=[requested_uri])
+
+        self.service._queue_started_ts -= 6
+        ended = playback(playable_uri, False, 'embedded', progress_ms=198186, duration_ms=198186)
+        await self._watchdog_polls([ended, ended, playback(NEXT_URI, device='embedded')], polls=2)
+        self.assertEqual(self.service._queue_now_playing['uri'], NEXT_URI)
+        self.assertEqual(self.service._queue_items, [])
+        self.assertEqual(self.dj.spotify.start_playback.call_count, 2)
+
     async def test_unconfirmed_start_stops_watchdog_retries(self):
         self.dj.spotify.current_playback.return_value = playback(None, False)
         self.assertFalse(await self.service._queue_start_next_if_needed())
         self.assertTrue(self.service._queue_paused)
-        self.assertIn('did not start playback', self.service._queue_error)
+        self.assertIn('could not confirm playback', self.service._queue_error)
         for _ in range(5):
             self.assertFalse(await self.service._queue_start_next_if_needed())
         self.dj.spotify.start_playback.assert_called_once()
@@ -460,6 +498,21 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue['playback_progress_ms'], 1200)
         self.dj.spotify.start_playback.assert_called_once()
 
+    async def test_resume_adopts_market_relink_without_playback_recording_metadata(self):
+        playable_uri = 'spotify:track:replacement'
+        self.dj.spotify.track.return_value = {'uri': playable_uri}
+        self.dj.spotify.current_playback.return_value = playback(OTHER_URI)
+        self.assertFalse(await self.service._queue_start_next_if_needed())
+
+        attempt = self.service._queue_spotify_attempt[2]
+        self.dj.spotify.current_playback.return_value = playback(
+            playable_uri, progress_ms=100, timestamp=attempt.sent_ms)
+        self.assertTrue(await self.service.resume_queue())
+        self.assertEqual(self.service._queue_now_playing['uri'], playable_uri)
+        self.assertEqual(self.service._queue_items, [])
+        self.dj.spotify.track.assert_called_once_with(URI, market='from_token')
+        self.dj.spotify.start_playback.assert_called_once()
+
     async def test_repeated_manual_failure_reports_failure_and_pauses_again(self):
         self.dj.spotify.current_playback.return_value = playback(None, False)
         await self.service._queue_start_next_if_needed()
@@ -475,7 +528,7 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         response = await web._api_resume(None)
         payload = json.loads(response.text)
         self.assertFalse(payload['ok'])
-        self.assertIn('did not start playback', payload['error'])
+        self.assertIn('could not confirm playback', payload['error'])
         self.assertIn('still queued', payload['error'])
 
     async def test_resume_api_explains_an_attempt_already_in_progress(self):

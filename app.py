@@ -1792,7 +1792,7 @@ class SongRequestService:
                 if not ok and not queue_changed:
                     error_code = 'spotify.playback.unconfirmed'
                     error = (
-                        "Spotify accepted the request but did not start playback on the selected device. "
+                        "Spotify accepted the request. TipTune could not confirm playback of the song on the selected device. "
                         "The song is still queued. Try opening Spotify Web Player and selecting it "
                         "as the playback device in Settings, then select Resume Queue."
                     )

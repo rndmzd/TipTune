@@ -756,21 +756,21 @@ class AutoDJ:
     def _recording_failure(self, track_uri: str, playback: SpotifyPlayback, attempt: SpotifyStartAttempt) -> str | None:
         if playback.matches(track_uri):
             return None
-        if playback.item_missing:
-            return 'missing_item'
-        external_ids = playback.item.get('external_ids')
-        if not isinstance(external_ids, dict) or not external_ids.get('isrc'):
-            return 'identity_unavailable'
-        # Spotify can play another release without returning linked_from.
+        if not playback.item:
+            return 'missing_item' if playback.item_missing else 'identity_unavailable'
         if attempt.recording is None:
             try:
-                metadata = self.spotify.track(track_uri)
+                # Spotify's market lookup identifies the playable URI even when
+                # the player omits linked_from and reports a different ISRC.
+                metadata = self.spotify.track(track_uri, market='from_token')
                 attempt.recording = metadata if isinstance(metadata, dict) else {}
             except Exception as exc:
                 attempt.recording = {}
                 logger.debug('spotify.playback.recording_lookup.error',
                              message='Could not verify the alternate Spotify recording',
                              data={'error_type': type(exc).__name__})
+        if playback.matches(attempt.recording.get('uri')):
+            return None
         matches = _compare_recordings(attempt.recording, playback.item)
         if matches is None:
             return 'identity_unavailable'
@@ -842,7 +842,7 @@ class AutoDJ:
         attempt.progress = attempt.summarize_progress(polls)
         logger.warning(
             "spotify.playback.unconfirmed",
-            message="Spotify accepted the request but did not start the track on the selected device; keeping the request queued.",
+            message="Could not confirm playback on the selected Spotify device. Keeping the request queued.",
             data={"track_uri": track_uri, "device_id": self.playback_device},
         )
         return False
