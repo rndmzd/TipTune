@@ -171,6 +171,28 @@ class RequestHistoryTests(unittest.IsolatedAsyncioTestCase):
         service._fetch_spotify_track_meta = AsyncMock()
         return service
 
+    async def test_export_downloads_all_retained_records_without_artwork_lookups(self):
+        service = self.service()
+        saved = [
+            {'song': 'Dégel 🎵', 'resolved_uri': 'spotify:track:' + 'A' * 22},
+            {'status': 'failed', 'extraction_debug': {'stage': 'model_request', 'id': 2**53 + 1}},
+        ]
+        async with TestClient(TestServer(self.app.WebUI(service)._app)) as client:
+            for records in ([], saved):
+                service._request_history_recent = records
+                response = await client.get('/api/history/export?limit=1')
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.content_type, 'application/json')
+                self.assertRegex(response.headers['Content-Disposition'],
+                                 r'^attachment; filename="tiptune-history-\d{8}-\d{6}\.json"$')
+                self.assertIn('Content-Disposition', response.headers['Access-Control-Expose-Headers'])
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                payload = await response.json()
+                self.assertEqual(set(payload), {'exported_at', 'history'})
+                self.assertRegex(payload['exported_at'], r'T\d{2}:\d{2}:\d{2}\.\d{3}Z$')
+                self.assertEqual(payload['history'], records)
+        service._enrich_history_items.assert_not_awaited()
+
     async def test_history_debug_setting_defaults_off_and_updates_without_restart(self):
         service = self.service()
         item = {'status': 'failed', 'error': 'song extraction failed',

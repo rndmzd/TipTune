@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
+from requests.exceptions import ConnectionError
 from spotipy import SpotifyException
 
 from app import SongRequestService
@@ -49,6 +50,8 @@ def make_dj():
     dj.spotify = Mock()
     dj.spotify.devices.return_value = {'devices': [{'id': 'desktop', 'name': 'Desktop'}]}
     dj.playback_device = 'desktop'
+    dj._not_found_device_id = None
+    dj._device_refresh_retry_at = 0.0
     dj._device_lock = threading.RLock()
     dj.now_playing_track_uri = None
     dj._last_start_playback_ts = 0
@@ -185,6 +188,30 @@ class StartTrackTests(unittest.TestCase):
         with self.assertRaises(SpotifyException):
             self.dj.start_track(URI)
         self.dj.spotify.start_playback.assert_called_once()
+
+    def test_stale_listed_web_player_can_be_replaced_only_for_automatic_selection(self):
+        name = 'Web Player (Microsoft Edge)'
+        devices = {'devices': [
+            {'id': 'old', 'name': name, 'is_active': False},
+            {'id': 'active', 'name': name, 'is_active': True},
+        ]}
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                dj = make_dj()
+                dj.playback_device = 'old'
+                dj.playback_device_name = name
+                dj.playback_device_explicit = explicit
+                dj.spotify.devices.return_value = devices
+                dj.spotify.start_playback.side_effect = [SpotifyException(404, -1, 'Device not found'), None]
+                dj.spotify.current_playback.return_value = playback(device='active')
+                if explicit:
+                    with self.assertRaises(SpotifyException):
+                        dj.start_track(URI)
+                    dj.spotify.start_playback.assert_called_once_with(device_id='old', uris=[URI])
+                else:
+                    self.assertTrue(dj.start_track(URI))
+                    self.assertEqual([c.kwargs['device_id'] for c in dj.spotify.start_playback.call_args_list],
+                                     ['old', 'active'])
 
     def test_clearing_idle_player_does_not_pause(self):
         self.dj.spotify.current_playback.return_value = playback(None, False)
@@ -375,6 +402,7 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_device_preserves_request_for_resume_after_spotify_opens(self):
         self.dj.spotify.devices.return_value = {'devices': []}
         self.assertFalse(await self.service._queue_start_next_if_needed())
+        self.assertIn('Open Spotify', self.service._queue_error)
         self.assertEqual([item['uri'] for item in self.service._queue_items], [URI])
         self.dj.spotify.start_playback.assert_not_called()
         self.dj.spotify.devices.return_value = {'devices': [{'id': 'new-web', 'name': 'Web Player'}]}
@@ -383,6 +411,20 @@ class QueuePlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.service.resume_queue())
         self.assertEqual(self.service._queue_items, [])
         self.assertEqual(self.service._queue_now_playing['uri'], URI)
+
+    async def test_failed_discovery_gives_connection_guidance_and_manual_resume_can_retry(self):
+        self.dj.spotify.devices.side_effect = [
+            ConnectionError('private network detail'), self.dj.spotify.devices.return_value,
+        ]
+        self.assertFalse(await self.service._queue_start_next_if_needed())
+        self.assertIn('Check your connection', self.service._queue_error)
+        self.assertNotIn('private network detail', self.service._queue_error)
+        self.assertEqual(self.dj.playback_device, 'desktop')
+        self.assertEqual([item['uri'] for item in self.service._queue_items], [URI])
+        self.dj.spotify.start_playback.assert_not_called()
+        self.dj.spotify.current_playback.return_value = playback()
+        self.assertTrue(await self.service.resume_queue())
+        self.dj.spotify.start_playback.assert_called_once_with(device_id='desktop', uris=[URI])
 
     async def test_start_is_not_timed_as_playing_until_confirmed(self):
         def confirm():

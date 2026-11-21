@@ -1,6 +1,6 @@
 [package]
 name = "tiptune-tauri"
-version = "1.10.5"
+version = "1.10.6"
 description = "TipTune Desktop"
 authors = ["TipTune"]
 edition = "2021"
@@ -32,3 +32,4 @@ tauri-plugin-single-instance = "2.5.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2.13.2"
+tempfile = "3"
