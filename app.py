@@ -34,9 +34,9 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 from aiohttp import web, ClientSession
-from openai import AuthenticationError
+from openai import APIStatusError, AuthenticationError, NotFoundError
 
-from chatdj.chatdj import AutoDJ, SongRequest, SpotifyPlayback, SpotifyStartAttempt
+from chatdj.chatdj import AutoDJ, SongRequest, SpotifyDeviceUnavailable, SpotifyPlayback, SpotifyStartAttempt
 from chatdj.song_requests import DEFAULT_MODEL
 from helpers.actions import Actions
 from helpers.checks import Checks
@@ -698,6 +698,7 @@ class WebUI:
             web.get('/api/events/recent', self._api_events_recent),
             web.get('/api/events/sse', self._api_events_sse),
             web.get('/api/history/recent', self._api_history_recent),
+            web.get('/api/history/export', self._api_history_export),
             web.get('/api/history/track', self._api_history_track),
             web.post('/api/history/clear', self._api_history_clear),
         ])
@@ -1154,6 +1155,19 @@ class WebUI:
         return web.json_response({"ok": True, "history": history, "history_size": history_size,
                                   "show_history_debug": _show_history_debug()})
 
+    async def _api_history_export(self, _request: web.Request) -> web.Response:
+        now = datetime.now(timezone.utc)
+        filename = f'tiptune-history-{now.astimezone():%Y%m%d-%H%M%S}.json'
+        # Export the retained records as saved, including diagnostics and any cached artwork.
+        payload = {'exported_at': now.isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+                   'history': self._service._request_history_recent}
+        return web.Response(text=json.dumps(payload, ensure_ascii=False, indent=2),
+                            content_type='application/json', headers={
+                                'Content-Disposition': f'attachment; filename="{filename}"',
+                                'Access-Control-Expose-Headers': 'Content-Disposition',
+                                'Cache-Control': 'no-store',
+                            })
+
     async def _api_history_track(self, request: web.Request) -> web.Response:
         track_id = self._service._parse_spotify_track_id(request.query.get('uri'))
         if not track_id:
@@ -1400,7 +1414,15 @@ class EventsAPIClient:
     async def poll(self, client: httpx.AsyncClient) -> list[dict]:
         token = _events_api_request_active.set(True)
         try:
-            resp = await client.get(self._next_url, timeout=30)
+            url = httpx.URL(self._next_url)
+            # Chaturbate can hold each poll for up to 90 seconds. The continuation
+            # URL carries its own timeout, which can differ from the saved feed.
+            try:
+                server_wait = min(90, int(url.params.get('timeout', '10')))
+            except ValueError:
+                server_wait = 10
+            timeout = httpx.Timeout(30, read=max(30, server_wait + 10))
+            resp = await client.get(url, timeout=timeout)
         finally:
             _events_api_request_active.reset(token)
         resp.raise_for_status()
@@ -1802,6 +1824,10 @@ class SongRequestService:
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
             interrupted = True
             raise
+        except SpotifyDeviceUnavailable as exc:
+            failure_exception = exc
+            error_code = 'spotify.playback.unavailable'
+            error = f"{exc} The song is still queued. Select Resume Queue to retry."
         except Exception as exc:
             failure_exception = exc
             error_code = 'spotify.playback.failed'
@@ -1837,8 +1863,9 @@ class SongRequestService:
                         'playback_device_was_active': attempt.device_was_active,
                         'playback_progress': attempt.progress,
                     }
+                stage = 'device_selection' if error_code == 'spotify.playback.unavailable' else 'playback_confirmation'
                 error_reporter.capture_failure(error_code or 'spotify.playback.failed', failure_exception,
-                                               source='spotify', stage='playback_confirmation', playback_backend=backend,
+                                               source='spotify', stage=stage, playback_backend=backend,
                                                details=details)
                 nxt['support'] = error_reporter.support_details()
             self._persist_queue_state_to_disk()
@@ -3278,6 +3305,18 @@ class SongRequestService:
             )
             return
 
+    async def _poll_events_until_feed_changes(self, api: EventsAPIClient, client: httpx.AsyncClient) -> list[dict] | None:
+        poll = asyncio.create_task(api.poll(client))
+        changed = asyncio.create_task(self._events_api_wake.wait())
+        try:
+            await asyncio.wait((poll, changed), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            poll.cancel()
+            changed.cancel()
+            await asyncio.gather(poll, changed, return_exceptions=True)
+        # A response from the old feed can arrive at the same time as the change.
+        return None if self._events_api_wake.is_set() else poll.result()
+
     async def _events_loop(self) -> None:
         api: Optional[EventsAPIClient] = None
         api_url: Optional[str] = None
@@ -3330,7 +3369,9 @@ class SongRequestService:
                 recent_attempts.append(attempted_at)
                 using_cursor = api.using_cursor
                 try:
-                    events = await api.poll(client)
+                    events = await self._poll_events_until_feed_changes(api, client)
+                    if events is None:
+                        continue
                 except asyncio.CancelledError:
                     break
                 except Exception as exc:
@@ -3528,8 +3569,12 @@ class SongRequestService:
                             tip_message, diagnostics=extraction_debug)
                 except Exception as exc:
                     logger.warning("song.extract.failed", data={"error_type": type(exc).__name__})
-                    if isinstance(exc, AuthenticationError) or isinstance(exc.__cause__, AuthenticationError):
+                    provider_error = exc if isinstance(exc, APIStatusError) else exc.__cause__
+                    if isinstance(provider_error, AuthenticationError):
                         extraction_error = "OpenAI could not authenticate. Check the API key in Settings → OpenAI."
+                    elif isinstance(provider_error, NotFoundError):
+                        extraction_error = ("OpenAI returned 404 for the song request. Check the model name "
+                                            "in Settings → OpenAI and confirm your API project has access to it.")
                     else:
                         extraction_error = "song extraction failed"
                     song_extracts = []

@@ -1,4 +1,5 @@
 import json
+import math
 import time
 import threading
 from collections import Counter
@@ -10,12 +11,28 @@ from spotipy import Spotify, SpotifyException
 
 from utils.structured_logging import get_structured_logger
 from utils.runtime_paths import ensure_dir, get_cache_dir
+from utils.spotify_errors import spotify_error_message
 from utils.support_diagnostics import SPOTIFY_CONFIRMATION_CHECKS
 
 from .song_requests import (SongRequest, SongExtractor, SongExtractionError, SongResolutionError,
                             account_market, collect_candidates, exact_candidate)
 
 logger = get_structured_logger('tiptune.chatdj.chatdj')
+
+
+class SpotifyDeviceUnavailable(ValueError):
+    """A device selection failure with a message suitable for the queue."""
+
+
+def _device_retry_delay(exc: Exception) -> float:
+    if not isinstance(exc, SpotifyException) or exc.http_status != 429:
+        return 30.0
+    # Spotipy can exhaust its own retries without retaining the response headers.
+    try:
+        seconds = float(exc.headers.get('Retry-After', 60))
+    except (ValueError, TypeError):
+        return 60.0
+    return max(30.0, seconds) if math.isfinite(seconds) and seconds >= 0 else 60.0
 
 
 @dataclass(frozen=True)
@@ -179,14 +196,16 @@ class AutoDJ:
         self.playback_device_name: Optional[str] = None
         self.playback_device_explicit = False
         self._device_lock = threading.RLock()
+        self._not_found_device_id: Optional[str] = None
         self._device_activation_retry_id: Optional[str] = None
         self._device_activation_retry_at = 0.0
+        self._device_refresh_retry_at = 0.0
         self._device_unavailable_logged = False
 
         # Spotify Web Player IDs change between sessions. Resolve the saved ID
         # here; the service activates it in the background after startup.
         self.playback_device = playback_device_id
-        self._refresh_playback_device()
+        device_available = self._refresh_playback_device()
 
         logger.debug("spotify.playback.init", message="Initializing playback state")
         self.playing_first_track = False
@@ -200,7 +219,7 @@ class AutoDJ:
 
         self.queued_tracks = []
         self.now_playing_track_uri = None
-        if self.playback_device:
+        if device_available:
             self.clear_playback_context(persist=False)
         try:
             self._restore_persisted_queue_state()
@@ -347,22 +366,25 @@ class AutoDJ:
             logger.exception("queue.delete.error", message="Failed to delete queued track", exc=exc)
             return False
 
+    def _fetch_devices(self) -> List[Dict[str, Any]]:
+        payload = self.spotify.devices()
+        devices = payload.get('devices') if isinstance(payload, dict) else None
+        if not isinstance(devices, list):
+            raise ValueError('Invalid Spotify device list')
+        return devices
+
     def get_available_devices(self) -> List[Dict[str, Any]]:
         try:
-            payload = self.spotify.devices()
-            devices = payload.get('devices', []) if isinstance(payload, dict) else []
-            if isinstance(devices, list):
-                return devices
-            return []
+            return self._fetch_devices()
         except Exception as exc:
             logger.exception("spotify.devices.error", message="Failed to list Spotify devices", exc=exc)
             return []
 
     def _auto_select_playback_device(
-        self, preferred_id: Optional[str] = None, preferred_name: Optional[str] = None
+        self, available: List[Dict[str, Any]], preferred_id: Optional[str], preferred_name: Optional[str]
     ) -> Optional[Dict[str, Any]]:
         devices = [
-            d for d in self.get_available_devices()
+            d for d in available
             if isinstance(d, dict) and isinstance(d.get('id'), str)
             and d['id'].strip() and not d.get('is_restricted')
         ]
@@ -381,16 +403,28 @@ class AutoDJ:
             if str(d.get('name', '')).strip().casefold() == 'web player (microsoft edge)'
         ]
         if embedded:
-            return next((d for d in embedded if d['id'] == preferred_id),
-                        next((d for d in embedded if d.get('is_active')), embedded[0]))
+            saved = next((d for d in embedded if d['id'] == preferred_id), None)
+            active = next((d for d in embedded if d.get('is_active')), None)
+            # Spotify can still list the old Web Player ID after rejecting a
+            # command for it. Prefer the active replacement in that case.
+            if saved and saved['id'] == self._not_found_device_id and not saved.get('is_active') and active:
+                return active
+            return saved or active or embedded[0]
         return preferred or next((d for d in devices if d.get('is_active')), devices[0])
 
     def _refresh_playback_device(self, activate: bool = False, *, attempt: SpotifyStartAttempt | None = None) -> bool:
         old_id = self.playback_device
         old_name = getattr(self, 'playback_device_name', None)
-        device = self._auto_select_playback_device(
-            old_id, old_name
-        )
+        try:
+            available = self._fetch_devices()
+        except Exception as exc:
+            retry_at = time.monotonic() + _device_retry_delay(exc)
+            self._device_refresh_retry_at = max(self._device_refresh_retry_at, retry_at)
+            if attempt is not None:
+                raise SpotifyDeviceUnavailable(spotify_error_message(exc)) from exc
+            logger.exception("spotify.devices.error", message="Failed to list Spotify devices", exc=exc)
+            return False
+        device = self._auto_select_playback_device(available, old_id, old_name)
         if attempt is not None:
             active = device.get('is_active') if device is not None else None
             attempt.device_was_active = active if type(active) is bool else None
@@ -407,6 +441,8 @@ class AutoDJ:
             return False
         self._device_unavailable_logged = False
         self.playback_device = device['id']
+        if old_id != self.playback_device or device.get('is_active'):
+            self._not_found_device_id = None
         if old_id != self.playback_device and old_name != device.get('name'):
             self.playback_device_explicit = False
         self.playback_device_name = device.get('name')
@@ -433,10 +469,16 @@ class AutoDJ:
         try:
             self.spotify.transfer_playback(device_id=self.playback_device, force_play=False)
         except Exception as exc:
+            if isinstance(exc, SpotifyException):
+                if exc.http_status == 404:
+                    self._not_found_device_id = self.playback_device
+                elif exc.http_status == 429:
+                    self._device_refresh_retry_at = time.monotonic() + _device_retry_delay(exc)
             logger.exception(
                 "spotify.device.activation.error", message="Failed to activate the selected Spotify device; will retry automatically", exc=exc,
             )
             return False
+        self._not_found_device_id = None
         logger.info(
             "spotify.device.activation.requested", message="Requested automatic activation of the selected Spotify device",
             data={"name": self.playback_device_name, "id": self.playback_device},
@@ -446,6 +488,8 @@ class AutoDJ:
     def ensure_playback_device_active(self) -> bool:
         """Select and activate the preferred device, preserving play/pause state."""
         with self._device_lock:
+            if self._device_refresh_retry_at and time.monotonic() < self._device_refresh_retry_at:
+                return False
             return self._refresh_playback_device(activate=True)
 
     def set_playback_device(self, device_id: str, force_play: bool = False, silent: bool = False) -> bool:
@@ -458,6 +502,7 @@ class AutoDJ:
                 return False
 
             self.spotify.transfer_playback(device_id=device_id, force_play=force_play)
+            self._not_found_device_id = None
             self.playback_device = device_id
             self.playback_device_explicit = True
 
@@ -751,6 +796,7 @@ class AutoDJ:
             self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri], position_ms=0)
         else:
             self.spotify.start_playback(device_id=self.playback_device, uris=[track_uri])
+        self._not_found_device_id = None
         attempt.sent_ms = sent_ms
 
     def _recording_failure(self, track_uri: str, playback: SpotifyPlayback, attempt: SpotifyStartAttempt) -> str | None:
@@ -797,7 +843,7 @@ class AutoDJ:
         if attempt is None:
             attempt = SpotifyStartAttempt()
         if not self._refresh_playback_device(attempt=attempt):
-            raise ValueError("No available Spotify playback device. Open Spotify and resume the queue.")
+            raise SpotifyDeviceUnavailable("No available Spotify playback device. Open Spotify on the device you want to use.")
         if queued:
             attempt.restart = attempt.restart or track_uri in (
                 getattr(self, '_last_queued_track_uri', None), self.now_playing_track_uri,
@@ -809,7 +855,10 @@ class AutoDJ:
                 raise
             # A Web Player can reconnect after the device list was fetched.
             old_id = self.playback_device
-            if not self._refresh_playback_device(attempt=attempt) or self.playback_device == old_id:
+            self._not_found_device_id = old_id
+            if not self._refresh_playback_device(attempt=attempt):
+                raise SpotifyDeviceUnavailable("The Spotify device disconnected. Open Spotify on the device you want to use.") from exc
+            if self.playback_device == old_id:
                 raise
             self._send_track_start(track_uri, attempt)
         if queued:

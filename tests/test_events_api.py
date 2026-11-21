@@ -174,6 +174,26 @@ class EventsAPIPollingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(waits, [1, 5, 1, 5])
         self.assertEqual(self.reporter.capture_exception.call_count, 2)
 
+    async def test_saved_feed_and_continuation_use_their_own_long_poll_timeout(self):
+        feed = FEED + '?timeout=60'
+        cursor = CURSOR + '&timeout=90'
+        requests = []
+
+        def respond(request):
+            requests.append(request)
+            return httpx.Response(200, json={'events': [], 'nextUrl': cursor})
+
+        api = app.EventsAPIClient(feed)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            await api.poll(client)
+            await api.poll(client)
+        self.assertEqual([str(r.url) for r in requests], [feed, cursor])
+        for request, server_wait in zip(requests, (60, 90)):
+            timeout = request.extensions['timeout']
+            self.assertGreater(timeout['read'], server_wait)
+            self.assertEqual(timeout['connect'], 30)
+        self.assertGreater(requests[1].extensions['timeout']['read'], requests[0].extensions['timeout']['read'])
+
     async def test_retry_after_seconds_and_date_and_rolling_local_attempt_count(self):
         now = datetime(2026, 11, 10, tzinfo=timezone.utc)
         with patch.object(app, 'datetime') as clock:
@@ -285,6 +305,52 @@ class EventsAPIPollingTests(unittest.IsolatedAsyncioTestCase):
                 self.service._stop_event.set()
                 self.service._events_api_wake.set()
                 await asyncio.wait_for(task, timeout=2)
+
+    async def test_replacing_a_feed_during_a_long_poll_discards_the_old_response(self):
+        config_path = Path(self.enterContext(tempfile.TemporaryDirectory())) / 'config.ini'
+        with config_path.open('w', encoding='utf-8') as f:
+            self.config.write(f)
+        polling = asyncio.Event()
+        replacement = FEED + '/replacement'
+        cursor = CURSOR + '&timeout=90'
+        old_tip = {'id': 'old', 'method': 'tip'}
+        new_tip = {'id': 'new', 'method': 'tip'}
+
+        async def send(request):
+            if str(request.url) == FEED:
+                return httpx.Response(200, json={'events': [], 'nextUrl': cursor})
+            if str(request.url) == cursor:
+                polling.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    # A response racing cancellation must also be discarded.
+                    return httpx.Response(200, json={'events': [old_tip]})
+            self.assertEqual(str(request.url), replacement)
+            return httpx.Response(200, json={'events': [new_tip]})
+
+        received = asyncio.Event()
+        self.service._handle_event.side_effect = lambda _: received.set()
+        client = httpx.AsyncClient(transport=httpx.MockTransport(send))
+        with (
+            patch.object(app.httpx, 'AsyncClient', return_value=client),
+            patch.object(app, 'config_path', config_path),
+            patch.object(app, '_setup_logging'),
+            patch('helpers.refresh_spotify_client'),
+        ):
+            task = asyncio.create_task(self.service._events_loop())
+            try:
+                await asyncio.wait_for(polling.wait(), timeout=3)
+                self.assertEqual(await self.service.update_config_from_ui({'Events API': {'url': replacement}}), (True, None))
+                await asyncio.wait_for(received.wait(), timeout=2)
+            finally:
+                self.service._stop_event.set()
+                self.service._events_api_wake.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.service._handle_event.assert_awaited_once_with(new_tip)
+        self.service.publish_events_api_event.assert_called_once_with(new_tip)
+        self.reporter.capture_exception.assert_not_called()
 
     async def test_feed_error_reports_and_logs_keep_urls_and_response_bodies_private(self):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))

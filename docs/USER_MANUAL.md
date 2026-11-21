@@ -464,7 +464,7 @@ This page shows recent processing results for song requests.
 
 You can **clear all history** using the clear button.
 
-Use **Export** before clearing if you want a JSON copy. Clearing removes saved request records and changes the data available to Stats; it does not remove songs from the queue.
+Use **Export** before clearing if you want a JSON copy. In the desktop app, choose where to save the file. In a browser, look in your downloads. Clearing removes saved request records and changes the data available to Stats; it does not remove songs from the queue.
 
 After changing **Limit**, select **Refresh** to load that many entries. **Export** always includes all retained entries, regardless of the displayed limit.
 

@@ -12,7 +12,7 @@ from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import httpx
 import httpx2
-from openai import AuthenticationError
+from openai import AuthenticationError, NotFoundError
 
 from chatdj.song_requests import SearchIdentification, SongExtractor, SongRequest, SongExtractionError, SongResolutionError
 from utils.error_reporting import ErrorReporter
@@ -263,6 +263,22 @@ class SongRequestFlowTests(unittest.IsolatedAsyncioTestCase):
         stored = (reporter.pending_dir / (item['support']['report_id'] + '.json')).read_text()
         self.assertEqual(json.loads(stored)['event']['contexts']['failure']['status_code'], 401)
         self.assertNotIn('sk-private-key', stored + json.dumps(item))
+
+    async def test_openai_model_request_404_points_the_streamer_to_model_settings(self):
+        provider_error = NotFoundError('private provider details', response=httpx2.Response(
+            404, request=httpx2.Request('POST', 'https://api.openai.com/v1/responses')), body=None)
+        error = SongExtractionError('Song extraction failed', {'stage': 'model_request'})
+        error.__cause__ = provider_error
+        self.actions.extract_song_titles.side_effect = error
+
+        await self.handle()
+
+        item, = self.history()
+        self.assertIn('model name in Settings → OpenAI', item['error'])
+        self.assertIn('API project has access', item['error'])
+        self.assertNotIn('private provider details', item['error'])
+        self.assertNotIn('OpenAI', self.notice())
+        self.service.add_track_to_queue.assert_not_called()
 
     async def test_missing_message_explains_both_causes_and_how_to_recover(self):
         for tip in ({'tokens': 27}, {'tokens': 27, 'message': None},

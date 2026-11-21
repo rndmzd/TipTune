@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
-import { apiJson } from '../api';
+import { apiJson, apiTextResponse, isTauriRuntime } from '../api';
 import { HeaderBar } from '../components/HeaderBar';
 import { SupportDetails } from '../components/SupportDetails';
 
@@ -203,24 +204,7 @@ function HistoryCard(props: { item: any; showDebug: boolean; onCopyStatus: (mess
 
 type HistoryRecentResp = { ok: true; history: any[]; history_size: number; show_history_debug?: boolean };
 
-function makeExportFilename(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  return `tiptune-history-${stamp}.json`;
-}
-
-function downloadJson(filename: string, payload: any) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+const historyExportUrl = '/api/history/export';
 
 export function HistoryPage() {
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
@@ -230,7 +214,7 @@ export function HistoryPage() {
   const [historySize, setHistorySize] = useState<number>(1000);
   const [showDebug, setShowDebug] = useState(false);
   const [exporting, setExporting] = useState<boolean>(false);
-  const [copyStatus, setCopyStatus] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
 
   async function refresh() {
     setStatus((prev) => (prev === 'ok' ? 'loading' : prev));
@@ -268,15 +252,27 @@ export function HistoryPage() {
   }
 
   async function exportHistory() {
-    setErr('');
+    if (!isTauriRuntime()) {
+      const link = document.createElement('a');
+      link.href = historyExportUrl;
+      link.download = '';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setActionMessage('Download requested. Check your browser’s downloads.');
+      return;
+    }
+
     setExporting(true);
+    setActionMessage('Preparing history export…');
     try {
-      const j = await apiJson<HistoryRecentResp>('/api/history/recent');
-      const hist = Array.isArray(j?.history) ? j.history : [];
-      downloadJson(makeExportFilename(), { exported_at: new Date().toISOString(), history: hist });
-    } catch (e: any) {
-      setErr(e?.message ? String(e.message) : String(e));
-      setStatus('error');
+      const { text, headers } = await apiTextResponse(historyExportUrl);
+      const filename = headers.get('Content-Disposition')?.match(/filename="([^"/\\]+\.json)"/i)?.[1];
+      if (!filename) throw new Error('TipTune did not return a history file.');
+      const path = await invoke<string | null>('save_history_export', { filename, contents: text });
+      setActionMessage(path ? `Saved history to ${path}` : 'Export canceled.');
+    } catch (error) {
+      setActionMessage(`Couldn’t export history. ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setExporting(false);
     }
@@ -300,8 +296,8 @@ export function HistoryPage() {
         <button type="button" onClick={() => exportHistory()} style={{ marginLeft: 8 }} disabled={exporting}>
           {exporting ? 'Exporting…' : 'Export'}
         </button>
-        <span className="muted" style={{ marginLeft: 10 }}>
-          Recent song request processing results.
+        <span className="muted" role="status" aria-atomic="true" style={{ marginLeft: 10, overflowWrap: 'anywhere' }}>
+          {actionMessage || 'Recent song request processing results.'}
         </span>
       </div>
 
@@ -320,9 +316,8 @@ export function HistoryPage() {
       </div>
 
       <div className="out">
-        <p role="status" aria-atomic="true">{copyStatus}</p>
         {items.map((item, idx) => (
-          <HistoryCard key={idx} item={item} showDebug={showDebug} onCopyStatus={setCopyStatus} />
+          <HistoryCard key={idx} item={item} showDebug={showDebug} onCopyStatus={setActionMessage} />
         ))}
       </div>
     </div>

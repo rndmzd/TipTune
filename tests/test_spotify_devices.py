@@ -11,7 +11,7 @@ from spotipy.exceptions import SpotifyOauthError
 
 import helpers
 from app import SongRequestService, WebUI
-from chatdj.chatdj import AutoDJ
+from chatdj.chatdj import AutoDJ, SpotifyDeviceUnavailable
 from utils.spotify_errors import spotify_error_message
 
 
@@ -40,7 +40,66 @@ class PlaybackDeviceStartupTests(unittest.TestCase):
     def test_failed_device_lookup_allows_startup(self):
         self.client.devices.side_effect = Timeout('Spotify is temporarily unreachable')
         self.assertIsNone(AutoDJ(self.client).playback_device)
+        dj = AutoDJ(self.client, playback_device_id='saved')
+        self.assertEqual(dj.playback_device, 'saved')
+        dj.clear_playback_context.assert_not_called()
         self.prompt.assert_not_called()
+
+    def test_failed_discovery_preserves_the_selected_id_and_retries_after_an_outage(self):
+        devices = {'devices': [
+            {'id': 'other', 'name': 'Speaker', 'is_active': True},
+            {'id': 'selected', 'name': 'Speaker', 'is_active': False},
+        ]}
+        self.client.devices.return_value = devices
+        dj = AutoDJ(self.client)
+        self.assertTrue(dj.set_playback_device('selected'))
+        self.client.devices.reset_mock()
+        self.client.transfer_playback.reset_mock()
+        self.client.devices.side_effect = [ConnectionError('offline'), devices]
+        with patch('chatdj.chatdj.time.monotonic', return_value=100) as clock:
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.assertEqual(dj.playback_device, 'selected')
+            self.assertTrue(dj.playback_device_explicit)
+            clock.return_value = 105
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.client.devices.assert_called_once()
+            clock.return_value = 130
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.client.transfer_playback.assert_called_once_with(device_id='selected', force_play=False)
+
+    def test_rate_limited_automatic_activation_waits_even_if_the_device_id_changes(self):
+        self.client.devices.return_value = {'devices': [{'id': 'old', 'name': 'Web Player'}]}
+        dj = AutoDJ(self.client)
+        self.client.transfer_playback.side_effect = [
+            SpotifyException(429, -1, 'Rate limited', headers={'Retry-After': '120'}), None,
+        ]
+        with patch('chatdj.chatdj.time.monotonic', return_value=100) as clock:
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.client.devices.return_value = {'devices': [{'id': 'new', 'name': 'Web Player'}]}
+            clock.return_value = 160
+            self.assertFalse(dj.ensure_playback_device_active())
+            self.client.transfer_playback.assert_called_once_with(device_id='old', force_play=False)
+            clock.return_value = 220
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(self.client.transfer_playback.call_args.kwargs['device_id'], 'new')
+
+    def test_manual_retry_during_an_outage_preserves_the_background_rate_limit(self):
+        devices = {'devices': [{'id': 'saved', 'name': 'Speaker', 'is_active': True}]}
+        self.client.devices.side_effect = [
+            devices, SpotifyException(429, -1, 'Max retries'), ConnectionError('offline'), devices,
+        ]
+        dj = AutoDJ(self.client)
+        with patch('chatdj.chatdj.time.monotonic', return_value=100) as clock:
+            self.assertFalse(dj.ensure_playback_device_active())
+            clock.return_value = 105
+            with self.assertRaises(SpotifyDeviceUnavailable):
+                dj.start_track('spotify:track:requested')
+            clock.return_value = 140
+            self.assertFalse(dj.ensure_playback_device_active())
+            clock.return_value = 160
+            self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(self.client.devices.call_count, 4)
+        self.client.start_playback.assert_not_called()
 
     def test_stale_saved_id_selects_current_active_device_without_transfer(self):
         self.client.devices.return_value = {'devices': [
@@ -204,6 +263,18 @@ class PlaybackDeviceStartupTests(unittest.TestCase):
             self.assertTrue(dj.ensure_playback_device_active())
         self.assertEqual([call.kwargs['device_id'] for call in self.client.transfer_playback.call_args_list],
                          ['old-web', 'new-web'])
+
+    def test_activation_uses_the_active_web_player_if_spotify_still_lists_a_rejected_id(self):
+        name = 'Web Player (Microsoft Edge)'
+        devices = [{'id': 'old-web', 'name': name, 'is_active': False}]
+        self.client.devices.return_value = {'devices': devices}
+        dj = AutoDJ(self.client)
+        self.client.transfer_playback.side_effect = SpotifyException(404, -1, 'Device not found')
+        self.assertFalse(dj.ensure_playback_device_active())
+        devices.append({'id': 'new-web', 'name': name, 'is_active': True})
+        self.assertTrue(dj.ensure_playback_device_active())
+        self.assertEqual(dj.playback_device, 'new-web')
+        self.client.transfer_playback.assert_called_once_with(device_id='old-web', force_play=False)
 
     def test_background_activation_waits_for_player_to_appear(self):
         self.client.devices.return_value = {'devices': []}

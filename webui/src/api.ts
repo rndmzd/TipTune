@@ -3,7 +3,7 @@ export type ApiErr = { ok: false; error?: string };
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
-function isTauriRuntime(): boolean {
+export function isTauriRuntime(): boolean {
   const w: any = window as any;
   return !!(w && (w.__TAURI_INTERNALS__ || w.__TAURI__));
 }
@@ -13,11 +13,19 @@ function getApiBase(): string {
   return '';
 }
 
-export async function apiJson<T>(
+function parseApiJson(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: false, error: text };
+  }
+}
+
+export async function apiTextResponse(
   path: string,
   opts?: RequestInit,
   timeoutMs?: number,
-): Promise<T> {
+): Promise<{ text: string; headers: Headers }> {
   const base = getApiBase();
   const ctrl = new AbortController();
   const ms = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
@@ -34,26 +42,21 @@ export async function apiJson<T>(
         : 'Unable to reach TipTune backend. Make sure the TipTune server is running.';
       throw new Error(isAbort ? `Request timed out. ${hint}` : `${e?.message ? e.message : 'Failed to fetch'}. ${hint}`);
     }
-    const t = await r.text();
-
-    let j: any;
-    try {
-      j = JSON.parse(t);
-    } catch {
-      j = { ok: false, error: t };
-    }
-
+    const text = await r.text();
     if (!r.ok) {
-      throw new Error(j?.error || `HTTP ${r.status}`);
+      throw new Error(parseApiJson(text)?.error || `HTTP ${r.status}`);
     }
-    if (j && j.ok === false) {
-      throw new Error(j?.error || 'Request failed');
-    }
-
-    return j as T;
+    return { text, headers: r.headers };
   } finally {
     window.clearTimeout(tmr);
   }
+}
+
+export async function apiJson<T>(path: string, opts?: RequestInit, timeoutMs?: number): Promise<T> {
+  const { text } = await apiTextResponse(path, opts, timeoutMs);
+  const j = parseApiJson(text);
+  if (j?.ok === false) throw new Error(j.error || 'Request failed');
+  return j as T;
 }
 
 export function sseUrl(path: string): string {

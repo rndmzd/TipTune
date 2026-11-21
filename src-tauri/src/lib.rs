@@ -23,6 +23,9 @@ mod audio_output;
 mod error_reporting;
 
 #[cfg(not(mobile))]
+mod history_export;
+
+#[cfg(not(mobile))]
 struct RunningSidecar {
     child: CommandChild,
     #[cfg(windows)]
@@ -81,6 +84,7 @@ pub fn run() {
         spotify_player::spotify_player_hide,
         spotify_player::spotify_player_reload,
         audio_output::audio_output_configure,
+        history_export::save_history_export,
     ]);
     let app = builder
         .plugin(tauri_plugin_dialog::init())
